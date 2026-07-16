@@ -112,6 +112,18 @@ def cmd_mode(mode: str) -> None:
     print(f"Mode: {mode} (all servers).")
 
 
+def cmd_bridges() -> None:
+    from gray_matter.bridges import all_bridges
+    bs = all_bridges()
+    if not bs:
+        print("No bridges yet.")
+        return
+    print(f"{len(bs)} cross-store bridge(s):")
+    for b in bs:
+        rat = f" — {b['rationale']}" if b.get("rationale") else ""
+        print(f"  {b['neuron']} <-> {b['neurag']}{rat}")
+
+
 def main() -> None:
     import json
     parser = argparse.ArgumentParser(description="Gray-Matter control")
@@ -130,6 +142,7 @@ def main() -> None:
     md.add_argument("mode", choices=["collaborate", "separate"])
 
     sub.add_parser("gui", help="Open the unified control center (Tkinter)")
+    sub.add_parser("bridges", help="List persisted cross-store bridges")
 
     args = parser.parse_args()
 
@@ -150,6 +163,8 @@ def main() -> None:
     elif args.command == "gui":
         from gray_matter.gui import main as gui_main
         gui_main()
+    elif args.command == "bridges":
+        cmd_bridges()
 
 
 if __name__ == "__main__":

@@ -183,6 +183,19 @@ async def list_tools() -> list[Tool]:
         description="Show Gray-Matter status: registered servers, cache, counters.",
         inputSchema={"type": "object", "properties": {}},
     ))
+    tools.append(Tool(
+        name="gray_matter_bridge",
+        description="Persist a cross-store bridge: a link between a Neuron concept and a NeuRAG knowledge node the orchestrator found to relate. Recalled in future pulses on either endpoint.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "neuron_concept": {"type": "string", "description": "Neuron concept/keyword"},
+                "neurag_node": {"type": "string", "description": "NeuRAG node/topic"},
+                "rationale": {"type": "string", "description": "Why they connect"},
+            },
+            "required": ["neuron_concept", "neurag_node"],
+        },
+    ))
 
     # Tools from registered servers
     for server in _registry.alive_servers():
@@ -244,6 +257,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         response = "\n---\n".join(context_parts) if context_parts else "No results."
 
+        # Cross-store bridges the orchestrator has persisted for this topic.
+        from gray_matter.bridges import bridges_for
+        rel = bridges_for(topic)
+        if rel:
+            response += "\n\n" + "\n".join(
+                f"🔗 {b['neuron']} ↔ {b['neurag']}" + (f" — {b['rationale']}" if b.get("rationale") else "")
+                for b in rel)
+
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
         flash_note = await _maybe_flash(topic)
         if flash_note:
@@ -262,6 +283,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             _registry.summary(),
         ]
         return [TextContent(type="text", text="\n".join(lines))]
+
+    if name == "gray_matter_bridge":
+        from gray_matter.bridges import add_bridge
+        created = add_bridge(arguments["neuron_concept"], arguments["neurag_node"],
+                             arguments.get("rationale", ""))
+        return [TextContent(type="text", text="Bridge saved." if created else "Bridge already exists.")]
 
     # --- Route to registered server (pass-through) ---
     server = _registry.find_server_by_tool(name)
