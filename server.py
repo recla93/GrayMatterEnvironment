@@ -231,16 +231,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if cached is not None:
             return [TextContent(type="text", text=cached)]
 
-        # Collect calls to registered servers
-        tasks = []
+        # Collect calls to registered servers (track which is which for v3b).
+        tasks, labels = [], []
 
         neuron = _registry.get_server("neuron")
         if neuron and neuron.is_alive() and neuron.collaborative:
-            tasks.append(_call_server_async("neuron", "get_context", {"topic": topic, "depth": 1}))
+            tasks.append(_call_server_async("neuron", "get_context", {"topic": topic, "depth": 1})); labels.append("neuron")
 
         neurag = _registry.get_server("neurag")
         if neurag and neurag.is_alive() and neurag.collaborative:
-            tasks.append(_call_server_async("neurag", "knowledge_query", {"query": topic, "top_n": top_n}))
+            tasks.append(_call_server_async("neurag", "knowledge_query", {"query": topic, "top_n": top_n})); labels.append("neurag")
 
         if not tasks:
             return [TextContent(type="text", text="No servers available for pulse.")]
@@ -249,11 +249,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         context_parts = []
-        for r in results:
+        neurag_hit = False
+        for lbl, r in zip(labels, results):
             if isinstance(r, Exception):
                 context_parts.append(f"[error: {r}]")
             elif r:
                 context_parts.append(r)
+                if lbl == "neurag" and "No results" not in str(r):
+                    neurag_hit = True
 
         response = "\n---\n".join(context_parts) if context_parts else "No results."
 
@@ -266,9 +269,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 for b in rel)
 
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
-        flash_note = await _maybe_flash(topic)
+        flash_note, concept = await _maybe_flash(topic)
         if flash_note:
             response += "\n\n" + flash_note
+            # v3b auto-discovery: a mid-band dormant Neuron concept surfaced on a
+            # topic where NeuRAG has real knowledge → that co-occurrence is a bridge
+            # worth keeping. Persist it (idempotent, gated by the flash rate-limit).
+            if concept and neurag_hit:
+                from gray_matter.bridges import add_bridge
+                add_bridge(concept, topic, f"co-surfaced on '{topic}'")
 
         # Cache
         cache.set(topic, response)
@@ -365,31 +374,41 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
-async def _maybe_flash(topic: str) -> str:
-    """Flash v1 — serendipitous recall. Fires at a *topic shift* (not a blind
-    counter), surfaces a dormant concept *without* a topic-match filter (a flashback
-    is meant to be non-obvious), rate-limited by a min gap + a per-session
-    per-concept cooldown. Read-only; the cross-store bridge (v3) is where GM writes.
-    """
+def _first_concept(text: str) -> str:
+    # ponytail: parse the top keyword out of forgotten's text output (fragile; a
+    # structured return would be cleaner — deferred to the persistence refactor).
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.endswith(":") or s.startswith(("Total:", "No ")):
+            continue
+        return s.split()[0]
+    return ""
+
+
+async def _maybe_flash(topic: str):
+    """Flash v1/v2 — returns (note, concept). `concept` is the dormant keyword
+    surfaced (or ""), which pulse uses to auto-persist a cross-store bridge (v3b).
+    Fires at a topic shift, mid-band `near` selection, rate-limited by a min gap +
+    a per-session per-concept cooldown."""
     global _last_topic, _calls_since_flash
     _calls_since_flash += 1
     shifted = _norm(topic) != _norm(_last_topic)
     _last_topic = topic
     if not shifted or _calls_since_flash < FLASH_MIN_GAP:
-        return ""
+        return "", ""
 
     neuron = _registry.get_server("neuron")
     if not neuron or not neuron.is_alive():
-        return ""
+        return "", ""
     forgotten = (await _call_server_async("neuron", "forgotten", {"threshold": 5, "near": topic, "top_n": 1})).strip()
     if not forgotten or forgotten.startswith("["):   # skip empties / "[neuron] error: ..."
-        return ""
+        return "", ""
     key = forgotten[:80]
     if key in _flashed:                              # per-concept cooldown
-        return ""
+        return "", ""
     _flashed.add(key)
     _calls_since_flash = 0
-    return f"⚡ Flashback: {forgotten}"
+    return f"⚡ Flashback: {forgotten}", _first_concept(forgotten)
 
 
 # ---------------------------------------------------------------------------

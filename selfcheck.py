@@ -27,6 +27,21 @@ def check_bridges() -> None:
     print("OK bridges: add (idempotent) + recall on either endpoint")
 
 
+def check_first_concept() -> None:
+    try:
+        from gray_matter.server import _first_concept   # needs mcp installed
+    except Exception:
+        print("SKIP _first_concept: mcp not installed")
+        return
+    text = ("Dormant & mid-band related to 'jvm':\n"
+            "  JVM_bytecode         last_turn=3  (7 turns ago)  salience=4\n"
+            "Total: 1 concepts")
+    assert _first_concept(text) == "JVM_bytecode", _first_concept(text)
+    assert _first_concept("No forgotten concepts in 5 turns.") == ""
+    print("OK _first_concept: parses top keyword, ignores header/total")
+
+
 if __name__ == "__main__":
     check_bridges()
+    check_first_concept()
     print("ALL OK")
