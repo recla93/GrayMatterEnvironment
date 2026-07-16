@@ -129,6 +129,8 @@ def main() -> None:
     md = sub.add_parser("mode", help="Set ALL servers to collaborate or separate")
     md.add_argument("mode", choices=["collaborate", "separate"])
 
+    sub.add_parser("gui", help="Open the unified control center (Tkinter)")
+
     args = parser.parse_args()
 
     if args.command == "status":
@@ -145,6 +147,9 @@ def main() -> None:
         cmd_collaborate(args.name)
     elif args.command == "mode":
         cmd_mode(args.mode)
+    elif args.command == "gui":
+        from gray_matter.gui import main as gui_main
+        gui_main()
 
 
 if __name__ == "__main__":

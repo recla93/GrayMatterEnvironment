@@ -18,6 +18,9 @@ dev = ["pytest>=8.0"]
 gray-matter = "gray_matter.cli:main"
 gray-matter-mcp = "gray_matter.server:main"
 
+[project.gui-scripts]
+gray-matter-gui = "gray_matter.gui:main"
+
 # Flat layout: the package IS this folder.
 [tool.setuptools]
 packages = ["gray_matter"]
