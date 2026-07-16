@@ -16,6 +16,7 @@ class ServerEntry:
     pid: int
     last_heartbeat: float = field(default_factory=time.time)
     status: str = "alive"
+    collaborative: bool = True   # in the combined pulse fan-out; isolate = standalone-in-GM
 
     def is_alive(self, timeout: float = 15.0) -> bool:
         return self.status == "alive" and (time.time() - self.last_heartbeat) < timeout
@@ -35,7 +36,10 @@ class Registry:
         return cls._instance
 
     def register(self, name: str, tool_names: list[str], socket_path: str, pid: int) -> None:
+        prev = self._servers.get(name)
         entry = ServerEntry(name=name, tool_names=tool_names, socket_path=socket_path, pid=pid)
+        if prev is not None:
+            entry.collaborative = prev.collaborative   # preserve isolate across re-register
         self._servers[name] = entry
         for tool in tool_names:
             self._tool_index[tool] = name
@@ -59,6 +63,17 @@ class Registry:
     def alive_servers(self) -> list[ServerEntry]:
         return [s for s in self._servers.values() if s.is_alive()]
 
+    def collaborators(self) -> list[ServerEntry]:
+        """Alive servers that are IN the combined pulse (not isolated)."""
+        return [s for s in self._servers.values() if s.is_alive() and s.collaborative]
+
+    def set_collaborative(self, name: str, value: bool) -> bool:
+        e = self._servers.get(name)
+        if e is None:
+            return False
+        e.collaborative = value
+        return True
+
     def heartbeat(self, name: str) -> bool:
         entry = self._servers.get(name)
         if not entry:
@@ -73,7 +88,7 @@ class Registry:
             entry.status = "dead"
 
     def to_dict(self) -> dict:
-        return {name: {"tool_names": e.tool_names, "socket_path": e.socket_path, "pid": e.pid, "status": e.status, "last_heartbeat": e.last_heartbeat} for name, e in self._servers.items()}
+        return {name: {"tool_names": e.tool_names, "socket_path": e.socket_path, "pid": e.pid, "status": e.status, "last_heartbeat": e.last_heartbeat, "collaborative": e.collaborative} for name, e in self._servers.items()}
 
     def summary(self) -> str:
         if not self._servers:

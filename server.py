@@ -221,11 +221,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         tasks = []
 
         neuron = _registry.get_server("neuron")
-        if neuron and neuron.is_alive():
+        if neuron and neuron.is_alive() and neuron.collaborative:
             tasks.append(_call_server_async("neuron", "get_context", {"topic": topic, "depth": 1}))
 
         neurag = _registry.get_server("neurag")
-        if neurag and neurag.is_alive():
+        if neurag and neurag.is_alive() and neurag.collaborative:
             tasks.append(_call_server_async("neurag", "knowledge_query", {"query": topic, "top_n": top_n}))
 
         if not tasks:
@@ -402,6 +402,17 @@ async def _ipc_listener():
                         response = {"status": "ok" if ok else "unknown"}
                     elif action == "unregister":
                         _registry.unregister(msg["name"])
+                        response = {"status": "ok"}
+                    elif action == "isolate":
+                        ok = _registry.set_collaborative(msg["name"], False)
+                        response = {"status": "ok" if ok else "unknown"}
+                    elif action == "collaborate":
+                        ok = _registry.set_collaborative(msg["name"], True)
+                        response = {"status": "ok" if ok else "unknown"}
+                    elif action == "mode":
+                        want = msg.get("mode") == "collaborate"
+                        for s in _registry.all_servers():
+                            s.collaborative = want
                         response = {"status": "ok"}
                     elif action == "status":
                         response = _registry.to_dict()

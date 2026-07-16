@@ -45,7 +45,8 @@ def cmd_status() -> None:
         status = info.get("status", "unknown")
         tools = ", ".join(info.get("tool_names", []))
         pid = info.get("pid", "?")
-        print(f"  {name} ({status}) pid={pid} tools=[{tools}]")
+        collab = "collab" if info.get("collaborative", True) else "ISOLATED"
+        print(f"  {name} ({status}, {collab}) pid={pid} tools=[{tools}]")
 
 
 def cmd_stop() -> None:
@@ -80,6 +81,36 @@ def cmd_ping() -> None:
         sys.exit(1)
 
 
+def _not_running(r: dict) -> bool:
+    if "error" in r:
+        print(f"Gray-Matter not running ({r['error']}).")
+        return True
+    return False
+
+
+def cmd_isolate(name: str) -> None:
+    r = _send_ipc({"action": "isolate", "name": name})
+    if _not_running(r):
+        return
+    print(f"Isolated '{name}': out of the combined pulse, still callable directly."
+          if r.get("status") == "ok" else f"No such server: {name}.")
+
+
+def cmd_collaborate(name: str) -> None:
+    r = _send_ipc({"action": "collaborate", "name": name})
+    if _not_running(r):
+        return
+    print(f"'{name}' back in the combined pulse."
+          if r.get("status") == "ok" else f"No such server: {name}.")
+
+
+def cmd_mode(mode: str) -> None:
+    r = _send_ipc({"action": "mode", "mode": mode})
+    if _not_running(r):
+        return
+    print(f"Mode: {mode} (all servers).")
+
+
 def main() -> None:
     import json
     parser = argparse.ArgumentParser(description="Gray-Matter control")
@@ -89,6 +120,13 @@ def main() -> None:
     sub.add_parser("start", help="Start Gray-Matter daemon")
     sub.add_parser("stop", help="Stop Gray-Matter daemon")
     sub.add_parser("ping", help="Check if Gray-Matter is running")
+
+    iso = sub.add_parser("isolate", help="Exclude a server from the combined pulse (still callable directly)")
+    iso.add_argument("name", help="Server name (neuron|neurag)")
+    col = sub.add_parser("collaborate", help="Put a server back into the combined pulse")
+    col.add_argument("name", help="Server name (neuron|neurag)")
+    md = sub.add_parser("mode", help="Set ALL servers to collaborate or separate")
+    md.add_argument("mode", choices=["collaborate", "separate"])
 
     args = parser.parse_args()
 
@@ -100,6 +138,12 @@ def main() -> None:
         cmd_stop()
     elif args.command == "ping":
         cmd_ping()
+    elif args.command == "isolate":
+        cmd_isolate(args.name)
+    elif args.command == "collaborate":
+        cmd_collaborate(args.name)
+    elif args.command == "mode":
+        cmd_mode(args.mode)
 
 
 if __name__ == "__main__":
