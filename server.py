@@ -381,7 +381,7 @@ async def _maybe_flash(topic: str) -> str:
     neuron = _registry.get_server("neuron")
     if not neuron or not neuron.is_alive():
         return ""
-    forgotten = (await _call_server_async("neuron", "forgotten", {"threshold": 5})).strip()
+    forgotten = (await _call_server_async("neuron", "forgotten", {"threshold": 5, "near": topic, "top_n": 1})).strip()
     if not forgotten or forgotten.startswith("["):   # skip empties / "[neuron] error: ..."
         return ""
     key = forgotten[:80]
