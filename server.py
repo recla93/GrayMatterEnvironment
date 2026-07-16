@@ -140,7 +140,11 @@ _last_call_time: float = time.time()
 _flash_counter: int = 0
 _cache: dict[str, tuple[float, str]] = {}  # topic -> (timestamp, response_text)
 CACHE_TTL = 60.0  # seconds
-FLASH_INTERVAL = 5  # trigger flash every N calls
+# Flash v1: fire on a topic shift (serendipity at transitions), rate-limited.
+_last_topic: str = ""
+_flashed: set = set()          # concepts already flashed this session (cooldown)
+_calls_since_flash: int = 0
+FLASH_MIN_GAP = 3              # min pulses between flashes (anti-spam)
 
 
 _is_sleeping: bool = False
@@ -177,17 +181,6 @@ async def list_tools() -> list[Tool]:
         name="gray_matter_status",
         description="Show Gray-Matter status: registered servers, cache, counters.",
         inputSchema={"type": "object", "properties": {}},
-    ))
-    tools.append(Tool(
-        name="gray_matter_store",
-        description="Salva turno su Neuron e precarica cache in background.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic del turno"},
-            },
-            "required": ["topic"],
-        },
     ))
 
     # Tools from registered servers
@@ -229,7 +222,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         neuron = _registry.get_server("neuron")
         if neuron and neuron.is_alive():
-            tasks.append(_call_server_async("neuron", "neuron_get_context", {"topic": topic, "depth": 1}))
+            tasks.append(_call_server_async("neuron", "get_context", {"topic": topic, "depth": 1}))
 
         neurag = _registry.get_server("neurag")
         if neurag and neurag.is_alive():
@@ -250,28 +243,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         response = "\n---\n".join(context_parts) if context_parts else "No results."
 
-        # Flash check (every N calls)
-        if _flash_counter % FLASH_INTERVAL == 0:
-            flash_note = _check_flash(topic)
-            if flash_note:
-                response += "\n\n" + flash_note
+        # Flash: serendipitous dormant-concept recall, fired at a topic shift.
+        flash_note = await _maybe_flash(topic)
+        if flash_note:
+            response += "\n\n" + flash_note
 
         # Cache
         cache.set(topic, response)
 
         return [TextContent(type="text", text=response)]
-
-    if name == "gray_matter_store":
-        topic = arguments["topic"]
-        neuron = _registry.get_server("neuron")
-        result = "stored"
-        if neuron and neuron.is_alive():
-            result = await _call_server_async("neuron", "neuron_store_turn", arguments)
-
-        # Precarica cache in background
-        asyncio.ensure_future(_prewarm(topic))
-
-        return [TextContent(type="text", text=result)]
 
     if name == "gray_matter_status":
         lines = [
@@ -353,55 +333,35 @@ async def _restart_dead_servers():
             _restart_attempts[name] = attempts + 1
 
 
-async def _prewarm(topic: str) -> None:
-    """Precarica cache per topic corrente e topic affini."""
-    from gray_matter.cache import ContextCache
-    cache = ContextCache()
-    for t in [topic, topic + " overview", topic + " fundamentals"]:
-        if not cache.get(t):
-            tasks = []
-            n = _registry.get_server("neuron")
-            if n and n.is_alive():
-                tasks.append(_call_server_async("neuron", "neuron_get_context", {"topic": t, "depth": 1}))
-            nr = _registry.get_server("neurag")
-            if nr and nr.is_alive():
-                tasks.append(_call_server_async("neurag", "knowledge_query", {"query": t, "top_n": 3}))
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                parts = [str(r) for r in results if not isinstance(r, Exception)]
-                if parts:
-                    cache.set(t, "\n---\n".join(parts))
+def _norm(s: str) -> str:
+    return " ".join(s.lower().split())
 
 
-def _check_flash(topic: str) -> str:
-    """Check for flash-worthy forgotten nodes related to this topic."""
-    import subprocess, json, sys
+async def _maybe_flash(topic: str) -> str:
+    """Flash v1 — serendipitous recall. Fires at a *topic shift* (not a blind
+    counter), surfaces a dormant concept *without* a topic-match filter (a flashback
+    is meant to be non-obvious), rate-limited by a min gap + a per-session
+    per-concept cooldown. Read-only; the cross-store bridge (v3) is where GM writes.
+    """
+    global _last_topic, _calls_since_flash
+    _calls_since_flash += 1
+    shifted = _norm(topic) != _norm(_last_topic)
+    _last_topic = topic
+    if not shifted or _calls_since_flash < FLASH_MIN_GAP:
+        return ""
 
     neuron = _registry.get_server("neuron")
     if not neuron or not neuron.is_alive():
         return ""
-
-    code = (
-        f"import sys, json, asyncio; "
-        f"from neuron.server import app; "
-        f"async def _run(): "
-        f"  r = await app.call_tool('neuron_forgotten', {{'threshold': 5}}); "
-        f"  print(r[0].text); "
-        f"asyncio.run(_run())"
-    )
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True, text=True, timeout=10
-        )
-        if r.returncode != 0 or not r.stdout.strip():
-            return ""
-        forgotten = r.stdout.strip()
-        if topic.lower() in forgotten.lower():
-            return f"⚡ Flashback: {forgotten}"
+    forgotten = (await _call_server_async("neuron", "forgotten", {"threshold": 5})).strip()
+    if not forgotten or forgotten.startswith("["):   # skip empties / "[neuron] error: ..."
         return ""
-    except Exception:
+    key = forgotten[:80]
+    if key in _flashed:                              # per-concept cooldown
         return ""
+    _flashed.add(key)
+    _calls_since_flash = 0
+    return f"⚡ Flashback: {forgotten}"
 
 
 # ---------------------------------------------------------------------------
