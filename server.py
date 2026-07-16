@@ -118,7 +118,7 @@ def _spawn_gray_matter() -> None:
     # Use python -m gray_matter.server to run the server module
     # Detach from parent process so it survives parent death
     import sys
-    cmd = [sys.executable, "-m", "gray_matter.server"]
+    cmd = [sys.executable, "-m", "gray_matter.server", "--daemon"]
     creationflags = 0
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
@@ -126,6 +126,7 @@ def _spawn_gray_matter() -> None:
     subprocess.Popen(
         cmd,
         creationflags=creationflags,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -501,5 +502,24 @@ def auto_register_and_run(name: str, tool_names: list[str]) -> None:
     t.start()
 
 
+def run_daemon() -> None:
+    """Registry/orchestrator only: IPC listener (:9876) + monitors, NO stdio MCP.
+    This is how Gray-Matter runs when started as a background daemon (autoregister
+    or `gray-matter start`) — there's no MCP client to attach stdio to, so main()'s
+    stdio_server() would just exit on a detached process."""
+    async def _run():
+        await asyncio.gather(
+            _ipc_listener(),
+            _heartbeat_monitor(),
+            _sleep_monitor(),
+            _restart_dead_servers(),
+        )
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--daemon" in sys.argv:
+        run_daemon()
+    else:
+        main()

@@ -64,12 +64,13 @@ def cmd_start() -> None:
         print("Gray-Matter already running.")
         return
     _spawn_gray_matter()
-    time.sleep(0.5)
-    if _is_gray_matter_running():
-        print("Gray-Matter started.")
-    else:
-        print("Failed to start Gray-Matter.")
-        sys.exit(1)
+    for _ in range(30):          # up to ~3s for the daemon to bind :9876 (cold Python start)
+        time.sleep(0.1)
+        if _is_gray_matter_running():
+            print("Gray-Matter started.")
+            return
+    print("Failed to start Gray-Matter.")
+    sys.exit(1)
 
 
 def cmd_ping() -> None:
