@@ -1,0 +1,30 @@
+[project]
+name = "gray-matter"
+version = "0.1.0"
+description = "Gray-Matter: MCP orchestrator/proxy that fronts Neuron + NeuRAG"
+requires-python = ">=3.10"
+license = { text = "PolyForm Noncommercial License 1.0.0" }
+authors = [{ name = "Claudio C." }]
+keywords = ["mcp", "orchestrator", "proxy"]
+
+dependencies = [
+    "mcp>=1.28.0,<2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+gray-matter = "gray_matter.cli:main"
+gray-matter-mcp = "gray_matter.server:main"
+
+# Flat layout: the package IS this folder.
+[tool.setuptools]
+packages = ["gray_matter"]
+
+[tool.setuptools.package-dir]
+gray_matter = "."
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
