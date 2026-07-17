@@ -38,6 +38,8 @@ def main() -> None:
     imp = sub.add_parser("import", help="Bulk-import a folder tree from a YAML mapping")
     imp.add_argument("mapping", help="Path to the YAML mapping file")
 
+    sub.add_parser("health", help="Structural audit of the vault (integrity check)")
+
     args = parser.parse_args()
     db = KnowledgeGraph()
 
@@ -130,6 +132,17 @@ def main() -> None:
         print(f"Imported: {report['nodes']} nodes, {report['chunks']} chunks.")
         for s in report["skipped"]:
             print(f"  skipped: {s}")
+
+    elif args.command == "health":
+        h = db.health()
+        print("Vault health:", "OK" if h["ok"] else f"{h['serious_count']} serious issue(s)")
+        for k, v in h["issues"].items():
+            if v:
+                print(f"  [issue] {k}: {len(v)}")
+        for k, v in h["warnings"].items():
+            n = v if isinstance(v, int) else len(v)
+            if n:
+                print(f"  [warn]  {k}: {n}")
 
 
 if __name__ == "__main__":

@@ -92,9 +92,33 @@ def check_yaml_import() -> None:
     print("OK yaml import: nodes + chunks from mapping")
 
 
+def check_health() -> None:
+    tmp = Path(tempfile.mkdtemp())
+    kg = KnowledgeGraph(tmp / "kg.db")
+    god = kg.add_node("Java", "godnode")
+    n = kg.add_node("Concurrency", "fundamental", parent_id=god, triggers=["thread"])
+    kg.add_chunk(n, "Threads and locks manage concurrent access.", source="notes/threads.md", chunk_index=0)
+    kg.add_node("Empty", "fundamental", parent_id=god)          # orphan: no chunks, no children
+    kg.add_chunk(n, "   ", source="x", chunk_index=1)            # tiny/empty chunk
+    h = kg.health()
+    assert h["serious_count"] >= 1, h
+    assert h["issues"]["tiny_or_empty_chunks"], "tiny chunk not detected"
+    assert h["warnings"]["orphan_nodes"], "orphan not detected"
+    kg.close()
+
+    clean = KnowledgeGraph(tmp / "clean.db")
+    g = clean.add_node("X", "godnode")
+    m = clean.add_node("Y", "fundamental", parent_id=g, triggers=["y"])
+    clean.add_chunk(m, "A real chunk with actual content.", source="s.md", chunk_index=0)
+    assert clean.health()["ok"], clean.health()
+    clean.close()
+    print("OK health: detects tiny chunks + orphans; clean vault is ok")
+
+
 if __name__ == "__main__":
     check_embedder()
     check_lexical_search()
     check_docx_chunker()
     check_yaml_import()
+    check_health()
     print("ALL OK")

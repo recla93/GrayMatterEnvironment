@@ -132,6 +132,28 @@ class KnowledgeGraph:
         self._conn.commit()
         return cur.lastrowid
 
+    def add_triggers(self, node_id: int, triggers: list[str]) -> None:
+        """Merge extra triggers into a node (dedup, capped at 40).
+
+        Auto-enriches a node from the symbol tags of the code chunked into it,
+        so the Neuron→NeuRAG bridge can reach the node by concept without anyone
+        hand-tagging it."""
+        clean = [t for t in (triggers or []) if t]
+        if not clean:
+            return
+        row = self._conn.execute(
+            "SELECT triggers FROM nodes WHERE id = ?", (node_id,)).fetchone()
+        if not row:
+            return
+        try:
+            current = json.loads(row["triggers"] or "[]")
+        except (TypeError, ValueError):
+            current = []
+        merged = list(dict.fromkeys([*current, *clean]))[:40]
+        self._conn.execute("UPDATE nodes SET triggers = ? WHERE id = ?",
+                           (json.dumps(merged), node_id))
+        self._conn.commit()
+
     def get_node(self, node_id: int) -> Optional[dict]:
         row = self._conn.execute(
             "SELECT * FROM nodes WHERE id = ?", (node_id,)
@@ -223,9 +245,11 @@ class KnowledgeGraph:
         return [dict(r) for r in rows]
 
     def index_into_node(self, filepath: Path, node_id: int) -> int:
-        """Chunk a file and add all chunks to a specific node."""
+        """Chunk a file, add the chunks to a node, and enrich the node's triggers
+        with the symbols found (the tags each code chunk carries)."""
         chunks = chunk_file(filepath)
         count = 0
+        tag_pool: list[str] = []
         for c in chunks:
             self.add_chunk(
                 node_id=node_id,
@@ -234,7 +258,9 @@ class KnowledgeGraph:
                 section=c.section,
                 chunk_index=c.chunk_index,
             )
+            tag_pool += getattr(c, "tags", None) or []
             count += 1
+        self.add_triggers(node_id, list(dict.fromkeys(tag_pool)))
         return count
 
     def index_directory_into_node(self, root: Path, node_id: int) -> int:
@@ -315,4 +341,51 @@ class KnowledgeGraph:
             "chunks": chunk_count,
             "embedded": embedded,
             "embedding_dim": 384,
+        }
+
+    # -- health: structural integrity (L1, deterministic) -------------------
+
+    def health(self) -> dict:
+        """Structural audit of the vault (no LLM, no embeddings). Flags problems;
+        it never deletes — NeuRAG is a curated source of truth. `ok` is False only
+        for the serious issues (broken hierarchy, tiny chunks, duplicate names)."""
+        c = self._conn
+        rows = lambda sql: [dict(r) for r in c.execute(sql).fetchall()]
+        count = lambda sql: c.execute(sql).fetchone()[0]
+
+        # Serious issues
+        broken_hierarchy = rows(
+            "SELECT n.id, n.name, n.parent_id FROM nodes n "
+            "WHERE n.parent_id IS NOT NULL "
+            "  AND NOT EXISTS (SELECT 1 FROM nodes p WHERE p.id = n.parent_id)")
+        tiny_chunks = rows(
+            "SELECT id, node_id, source FROM chunks WHERE length(trim(text)) < 20")
+        duplicate_node_names = rows(
+            "SELECT name, COUNT(*) AS n FROM nodes WHERE id != 0 "
+            "GROUP BY name HAVING n > 1")
+
+        # Warnings (smells, not necessarily errors)
+        orphan_nodes = rows(
+            "SELECT n.id, n.name, n.path FROM nodes n WHERE n.id != 0 "
+            "  AND NOT EXISTS (SELECT 1 FROM chunks ch WHERE ch.node_id = n.id) "
+            "  AND NOT EXISTS (SELECT 1 FROM nodes k WHERE k.parent_id = n.id)")
+        chunks_without_source = count(
+            "SELECT COUNT(*) FROM chunks WHERE source IS NULL OR source = ''")
+        nodes_without_triggers = count(
+            "SELECT COUNT(*) FROM nodes WHERE id != 0 AND (triggers IS NULL OR triggers = '[]')")
+
+        serious = len(broken_hierarchy) + len(tiny_chunks) + len(duplicate_node_names)
+        return {
+            "ok": serious == 0,
+            "serious_count": serious,
+            "issues": {
+                "broken_hierarchy": broken_hierarchy,
+                "tiny_or_empty_chunks": tiny_chunks,
+                "duplicate_node_names": duplicate_node_names,
+            },
+            "warnings": {
+                "orphan_nodes": orphan_nodes,
+                "chunks_without_source": chunks_without_source,
+                "nodes_without_triggers": nodes_without_triggers,
+            },
         }

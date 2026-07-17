@@ -125,6 +125,11 @@ async def list_tools() -> list[Tool]:
             description="Show the hierarchical node tree.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="knowledge_health",
+            description="Structural audit of the vault: broken hierarchy, tiny/empty chunks, duplicate names (serious) + orphan nodes, chunks without source, nodes without triggers (warnings). Read-only — flags, never deletes.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -221,6 +226,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "knowledge_tree":
         return [TextContent(type="text", text=db.node_tree() or "(empty)")]
 
+    if name == "knowledge_health":
+        return [TextContent(type="text", text=json.dumps(db.health(), indent=2))]
+
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -233,6 +241,7 @@ def main() -> None:
         "knowledge_query",
         "knowledge_status",
         "knowledge_tree",
+        "knowledge_health",
     ]
 
     # Gray-Matter auto-registration (non-blocking)
