@@ -227,8 +227,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "gray_matter_pulse":
         global _is_sleeping
         _is_sleeping = False
-        topic = arguments["topic"]
-        top_n = min(int(arguments.get("top_n", 5)), 10)
+        # Validate the topic (mirror of the bridge ingest guard): coerce, strip,
+        # collapse whitespace, cap. Empty/whitespace-only -> nothing to search.
+        topic = " ".join(str(arguments.get("topic", "")).split())[:200]
+        if not topic:
+            return [TextContent(type="text", text="pulse: empty topic.")]
+        top_n = min(max(int(arguments.get("top_n", 5)), 1), 10)
         _t0 = time.monotonic()
         _stats["pulses"] += 1
 
@@ -308,6 +312,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         created = add_bridge(arguments["neuron_concept"], arguments["neurag_node"],
                              arguments.get("rationale", ""))
         return [TextContent(type="text", text="Bridge saved." if created else "Bridge already exists.")]
+
+    # A write to episodic memory can make a cached pulse stale: drop the entries
+    # for the just-written topic so the next pulse rebuilds fresh (targeted, not a
+    # full flush — other topics keep their cache).
+    if name == "store_turn":
+        _ctx_cache.invalidate_related(str(arguments.get("topic", "")))
 
     # --- Route to registered server (pass-through) ---
     server = _registry.find_server_by_tool(name)
