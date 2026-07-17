@@ -308,29 +308,58 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=result or "(empty)")]
 
 
-async def _call_server_async(server_name: str, tool_name: str, arguments: dict) -> str:
-    """Call a registered server's tool asynchronously via subprocess."""
+# Persistent workers: one long-lived subprocess per server (imported once, model
+# kept warm) instead of a cold-import subprocess per call. See gray_matter/_worker.py.
+_workers: dict = {}          # server_name -> Popen
+_worker_locks: dict = {}     # server_name -> asyncio.Lock (serialize the shared pipe)
+
+
+def _worker_for(server_name: str):
     pkg = {"neurag": "neurag.server", "neuron": "neuron.server"}.get(server_name, server_name + ".server")
-    code = (
-        f"import sys, json, asyncio; "
-        f"from {pkg} import app; "
-        f"async def _run(): "
-        f"  result = await app.call_tool('{tool_name}', {json.dumps(arguments)}); "
-        f"  print(result[0].text); "
-        f"asyncio.run(_run())"
-    )
-    loop = asyncio.get_event_loop()
-    r = await loop.run_in_executor(
-        None,
-        lambda: subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True, text=True, timeout=30
+    p = _workers.get(server_name)
+    if p is None or p.poll() is not None:        # not started, or died -> (re)spawn
+        p = subprocess.Popen(
+            [sys.executable, "-m", "gray_matter._worker", pkg],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
         )
-    )
-    if r.returncode != 0:
+        _workers[server_name] = p
+    return p
+
+
+async def _call_server_async(server_name: str, tool_name: str, arguments: dict) -> str:
+    """Call a server tool via its persistent worker (imported once, model kept warm)."""
+    lock = _worker_locks.setdefault(server_name, asyncio.Lock())
+    async with lock:                              # one request at a time per pipe
+        p = _worker_for(server_name)
+        loop = asyncio.get_event_loop()
+
+        def _io() -> str:
+            p.stdin.write(json.dumps({"tool": tool_name, "args": arguments}) + "\n")
+            p.stdin.flush()
+            return p.stdout.readline()
+
+        try:
+            # First Neuron call loads fastembed -> allow headroom.
+            resp_line = await asyncio.wait_for(loop.run_in_executor(None, _io), timeout=60)
+        except Exception as e:  # noqa: BLE001 — timeout or pipe error: drop the worker
+            try:
+                p.kill()
+            except Exception:
+                pass
+            _workers.pop(server_name, None)
+            _registry.mark_dead(server_name)
+            return f"[{server_name}] error: {e}"
+
+    if not resp_line:
         _registry.mark_dead(server_name)
-        return f"[{server_name}] error: {r.stderr.strip()}"
-    return r.stdout.strip()
+        return f"[{server_name}] error: worker gave no response"
+    try:
+        resp = json.loads(resp_line)
+    except Exception:
+        return f"[{server_name}] error: bad worker response"
+    if not resp.get("ok"):
+        return f"[{server_name}] error: {resp.get('error')}"
+    return resp["text"]
 
 
 async def _sleep_monitor():
