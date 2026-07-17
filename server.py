@@ -24,6 +24,7 @@ from mcp.server.models import InitializationOptions
 from mcp.types import Tool, TextContent
 
 from gray_matter import __version__
+from gray_matter.cache import ContextCache
 from gray_matter.registry import Registry
 
 # ---------------------------------------------------------------------------
@@ -137,8 +138,16 @@ def _spawn_gray_matter() -> None:
 _registry = Registry.instance()
 _last_call_time: float = time.time()
 _flash_counter: int = 0
-_cache: dict[str, tuple[float, str]] = {}  # topic -> (timestamp, response_text)
-CACHE_TTL = 60.0  # seconds
+
+# ONE shared context cache. It used to be re-created inside every pulse, so it
+# never hit — a silent "cache that never caches" bug. A single instance persists
+# across calls and makes `gray-matter stats` hit-rate meaningful.
+_ctx_cache = ContextCache()
+
+# Lightweight observability counters, surfaced by `gray-matter stats` / `doctor`.
+_stats: dict[str, float] = {"pulses": 0, "cache_hits": 0, "cache_misses": 0,
+                            "flashes": 0, "bridges_added": 0, "pulse_ms_total": 0.0}
+
 # Flash v1: fire on a topic shift (serendipity at transitions), rate-limited.
 _last_topic: str = ""
 _flashed: set = set()          # concepts already flashed this session (cooldown)
@@ -220,13 +229,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _is_sleeping = False
         topic = arguments["topic"]
         top_n = min(int(arguments.get("top_n", 5)), 10)
+        _t0 = time.monotonic()
+        _stats["pulses"] += 1
 
-        # Cache hit?
-        from gray_matter.cache import ContextCache
-        cache = ContextCache()
-        cached = cache.get(topic)
+        # Cache hit? (one shared cache — see _ctx_cache)
+        cached = _ctx_cache.get(topic)
         if cached is not None:
+            _stats["cache_hits"] += 1
             return [TextContent(type="text", text=cached)]
+        _stats["cache_misses"] += 1
 
         # Collect calls to registered servers (track which is which for v3b).
         tasks, labels = [], []
@@ -274,10 +285,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             # worth keeping. Persist it (idempotent, gated by the flash rate-limit).
             if concept and neurag_hit:
                 from gray_matter.bridges import add_bridge
-                add_bridge(concept, topic, f"co-surfaced on '{topic}'")
+                if add_bridge(concept, topic, f"co-surfaced on '{topic}'"):
+                    _stats["bridges_added"] += 1
 
-        # Cache
-        cache.set(topic, response)
+        # Cache + record the real-work latency (this was a miss).
+        _ctx_cache.set(topic, response)
+        _stats["pulse_ms_total"] += (time.monotonic() - _t0) * 1000
 
         return [TextContent(type="text", text=response)]
 
@@ -309,6 +322,40 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 # kept warm) instead of a cold-import subprocess per call. See gray_matter/_worker.py.
 _workers: dict = {}          # server_name -> Popen
 _worker_locks: dict = {}     # server_name -> asyncio.Lock (serialize the shared pipe)
+_prewarmed: set = set()      # servers already warmed (D2), so we warm each once
+
+# Cheap read fired to warm a worker: spawns the subprocess (pays the import) and
+# loads the model (Neuron's fastembed) BEFORE the first real pulse, so that pulse
+# isn't the one paying the ~cold-start tax. Unknown servers get import-warm only.
+_WARM_TOOL = {
+    "neuron": ("status", {}),
+    "neurag": ("knowledge_query", {"query": "warmup", "top_n": 1}),
+}
+
+
+async def _prewarm_workers():
+    """D2: pre-warm persistent workers so the FIRST pulse is fast, not cold.
+
+    Waits for servers to register (the registry starts empty), then spawns each
+    collaborative server's worker and fires one cheap read to load its model.
+    Best-effort: on any failure the server is left un-warmed and the lazy path in
+    `_worker_for` still handles it on demand. Disable with GM_PREWARM=0."""
+    if os.environ.get("GM_PREWARM", "1") == "0":
+        return
+    while True:
+        for s in _registry.alive_servers():
+            if s.name in _prewarmed or not s.collaborative:
+                continue
+            _prewarmed.add(s.name)                     # mark first: don't hammer on repeated failure
+            tool, args = _WARM_TOOL.get(s.name, (None, None))
+            try:
+                if tool is None:
+                    _worker_for(s.name)                # unknown server: at least pay the import now
+                else:
+                    await _call_server_async(s.name, tool, args)
+            except Exception:  # noqa: BLE001
+                _prewarmed.discard(s.name)             # let a later sweep (or lazy path) retry
+        await asyncio.sleep(2)
 
 
 def _worker_for(server_name: str):
@@ -403,6 +450,42 @@ async def _reap_dead_workers():
                     pass
 
 
+def _build_stats() -> dict:
+    """Live observability counters — the orchestrator's tachometer."""
+    from gray_matter.bridges import all_bridges
+    hits, misses = _stats["cache_hits"], _stats["cache_misses"]
+    total = hits + misses
+    return {
+        "pulses": int(_stats["pulses"]),
+        "cache_hits": int(hits),
+        "cache_misses": int(misses),
+        "cache_hit_rate": round(hits / total, 3) if total else 0.0,
+        "cache_size": _ctx_cache.size(),
+        "flashes": int(_stats["flashes"]),
+        "bridges_added_session": int(_stats["bridges_added"]),
+        "bridges_total": len(all_bridges()),
+        "avg_miss_ms": round(_stats["pulse_ms_total"] / misses, 1) if misses else 0.0,
+        "workers_alive": [n for n, p in _workers.items() if p.poll() is None],
+    }
+
+
+def _build_doctor() -> dict:
+    """Health snapshot: servers, workers, cache, bridges."""
+    from gray_matter.bridges import all_bridges
+    servers = [{
+        "name": s.name, "status": s.status, "alive": s.is_alive(),
+        "collaborative": s.collaborative,
+        "worker": s.name in _workers and _workers[s.name].poll() is None,
+    } for s in _registry.all_servers()]
+    return {
+        "version": __version__,
+        "sleeping": _is_sleeping,
+        "servers": servers,
+        "cache_size": _ctx_cache.size(),
+        "bridges_total": len(all_bridges()),
+    }
+
+
 def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
@@ -441,6 +524,7 @@ async def _maybe_flash(topic: str):
         return "", ""
     _flashed.add(key)
     _calls_since_flash = 0
+    _stats["flashes"] += 1
     return f"⚡ Flashback: {forgotten}", _first_concept(forgotten)
 
 
@@ -524,6 +608,10 @@ async def _ipc_listener():
                         response = {"status": "ok"}
                     elif action == "status":
                         response = _registry.to_dict()
+                    elif action == "stats":
+                        response = _build_stats()
+                    elif action == "doctor":
+                        response = _build_doctor()
                     elif action == "shutdown":
                         response = {"status": "ok"}
                         # Graceful shutdown
@@ -568,6 +656,7 @@ def main() -> None:
         hb_task = asyncio.create_task(_heartbeat_monitor())
         sleep_task = asyncio.create_task(_sleep_monitor())
         reap_task = asyncio.create_task(_reap_dead_workers())
+        prewarm_task = asyncio.create_task(_prewarm_workers())
 
         # Start stdio MCP server
         from mcp.server.stdio import stdio_server
@@ -586,6 +675,7 @@ def main() -> None:
         hb_task.cancel()
         sleep_task.cancel()
         reap_task.cancel()
+        prewarm_task.cancel()
 
     asyncio.run(_run())
 

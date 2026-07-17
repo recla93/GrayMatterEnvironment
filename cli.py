@@ -49,6 +49,37 @@ def cmd_status() -> None:
         print(f"  {name} ({status}, {collab}) pid={pid} tools=[{tools}]")
 
 
+def cmd_stats() -> None:
+    r = _send_ipc({"action": "stats"})
+    if "error" in r:
+        print(f"Gray-Matter not running ({r['error']}).")
+        sys.exit(1)
+    print("Gray-Matter stats:")
+    order = ["pulses", "cache_hits", "cache_misses", "cache_hit_rate", "cache_size",
+             "flashes", "bridges_added_session", "bridges_total", "avg_miss_ms",
+             "workers_alive"]
+    for k in order:
+        if k in r:
+            print(f"  {k:22} {r[k]}")
+
+
+def cmd_doctor() -> None:
+    r = _send_ipc({"action": "doctor"})
+    if "error" in r:
+        print(f"Gray-Matter not running ({r['error']}).")
+        sys.exit(1)
+    print(f"Gray-Matter v{r.get('version')} — {'sleeping' if r.get('sleeping') else 'awake'}")
+    print(f"  cache: {r.get('cache_size')} entries | bridges: {r.get('bridges_total')}")
+    servers = r.get("servers", [])
+    if not servers:
+        print("  (no servers registered)")
+    for s in servers:
+        mark = "ok" if s.get("alive") else "DEAD"
+        collab = "collab" if s.get("collaborative") else "ISOLATED"
+        worker = "worker+" if s.get("worker") else "worker-"
+        print(f"  [{mark}] {s['name']} ({s.get('status')}, {collab}) {worker}")
+
+
 def cmd_stop() -> None:
     import json
     result = _send_ipc({"action": "shutdown"})
@@ -167,6 +198,8 @@ def main() -> None:
                        help="Use the legacy Tkinter control center instead")
     sub.add_parser("register", help="Register installed trio servers in your MCP clients")
     sub.add_parser("bridges", help="List persisted cross-store bridges")
+    sub.add_parser("stats", help="Orchestrator counters: cache hit rate, flashes, bridges, latency")
+    sub.add_parser("doctor", help="Health snapshot: servers, workers, cache, bridges")
 
     args = parser.parse_args()
 
@@ -194,6 +227,10 @@ def main() -> None:
         cmd_register()
     elif args.command == "bridges":
         cmd_bridges()
+    elif args.command == "stats":
+        cmd_stats()
+    elif args.command == "doctor":
+        cmd_doctor()
 
 
 if __name__ == "__main__":

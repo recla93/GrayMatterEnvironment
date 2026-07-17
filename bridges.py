@@ -21,6 +21,21 @@ import time
 from pathlib import Path
 
 _WEIGHT_CAP = 1000          # weights are relative; cap keeps them bounded
+_MAX_LEN = 200              # ingest guard: longer endpoints are pasted blobs, not concepts
+_MIN_LEN = 2                # a 1-char endpoint substring-matches almost every topic -> noise
+
+
+def _clean(s, cap: int = _MAX_LEN) -> str:
+    """Normalize a string entering the store: coerce to str, strip, collapse inner
+    whitespace, cap length. The single choke-point for anything ingested (F4)."""
+    if not isinstance(s, str):
+        s = str(s or "")
+    return " ".join(s.split())[:cap]
+
+
+def _valid_endpoint(s: str) -> bool:
+    """A usable bridge endpoint: non-trivial, not an oversized blob."""
+    return _MIN_LEN <= len(s) <= _MAX_LEN
 
 
 def _store() -> Path:
@@ -49,7 +64,18 @@ def _bump(b: dict) -> None:
 def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "") -> bool:
     """Record a bridge. Idempotent on (neuron_concept, neurag_node). If it already
     exists, its weight is reinforced (+1) and False is returned; a brand-new bridge
-    returns True."""
+    returns True.
+
+    Ingest validation (F4): endpoints are cleaned and must be non-trivial; junk
+    (empty, 1-char, oversized blobs) and self-bridges are rejected -> False, no
+    write. This is the only write path, so validating here covers both the manual
+    `gray_matter_bridge` tool and the v3b auto-discovery in pulse."""
+    neuron_concept, neurag_node = _clean(neuron_concept), _clean(neurag_node)
+    rationale = _clean(rationale, cap=500)
+    if not (_valid_endpoint(neuron_concept) and _valid_endpoint(neurag_node)):
+        return False
+    if neuron_concept.lower() == neurag_node.lower():
+        return False                                   # self-bridge carries no cross-store info
     bridges = _load()
     key = (neuron_concept.strip().lower(), neurag_node.strip().lower())
     for b in bridges:
