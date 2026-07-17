@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 import socket
 import struct
 import subprocess
@@ -36,7 +35,6 @@ GRAY_MATTER_HOST = "127.0.0.1"
 HEARTBEAT_INTERVAL = 5.0  # seconds
 HEARTBEAT_TIMEOUT = 15.0  # seconds — after 3 missed beats, mark dead
 IDLE_SLEEP_TIMEOUT = 600.0  # 10 minutes — sleep after this long idle
-MAX_RESTART_ATTEMPTS = 3
 
 # ---------------------------------------------------------------------------
 # IPC helpers (tiny TCP-based protocol for server <-> Gray-Matter)
@@ -149,7 +147,6 @@ FLASH_MIN_GAP = 3              # min pulses between flashes (anti-spam)
 
 
 _is_sleeping: bool = False
-_restart_attempts: dict[str, int] = {}
 
 app = Server("gray-matter")
 
@@ -381,22 +378,23 @@ async def _sleep_monitor():
             _is_sleeping = False
 
 
-async def _restart_dead_servers():
-    """Background: attempt to restart dead servers (up to 3 tries)."""
+async def _reap_dead_workers():
+    """A server marked dead means its CLIENT stopped heart-beating. We must NOT
+    kill that pid — in the additive model it's the client's own process, not
+    ours (the old code SIGTERM'd it, a real bug). What Gray-Matter actually owns
+    is the persistent worker subprocess; drop it so the next call to that server
+    respawns a fresh worker via `_worker_for`."""
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL * 2)
         for server in _registry.all_servers():
             if server.status != "dead":
                 continue
-            name = server.name
-            attempts = _restart_attempts.get(name, 0)
-            if attempts >= MAX_RESTART_ATTEMPTS:
-                continue
-            try:
-                os.kill(server.pid, signal.SIGTERM)
-            except (OSError, ProcessLookupError):
-                pass
-            _restart_attempts[name] = attempts + 1
+            p = _workers.pop(server.name, None)
+            if p is not None:
+                try:
+                    p.kill()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def _norm(s: str) -> str:
@@ -444,6 +442,35 @@ async def _maybe_flash(topic: str):
 # IPC listener (background) — receives registrations, heartbeats
 # ---------------------------------------------------------------------------
 
+async def _recv_exact(loop, conn, n: int) -> "bytes | None":
+    """Read exactly n bytes from a non-blocking socket, or None on short read."""
+    buf = b""
+    while len(buf) < n:
+        try:
+            chunk = await loop.sock_recv(conn, n - len(buf))
+        except OSError:
+            return None
+        if not chunk:
+            return None
+        buf += chunk
+    return buf
+
+
+async def _recv_message(loop, conn) -> bytes:
+    """One length-prefixed message: 4-byte big-endian length, then exactly that
+    many bytes. Returns the payload (b'' on short read / bad frame). This is the
+    fix for the old `data[4:]` single-recv assumption that broke on any message
+    split across TCP segments."""
+    header = await _recv_exact(loop, conn, 4)
+    if header is None:
+        return b""
+    (length,) = struct.unpack("!I", header)
+    if length <= 0 or length > 1_000_000:      # sanity guard vs junk/oversize
+        return b""
+    payload = await _recv_exact(loop, conn, length)
+    return payload or b""
+
+
 async def _ipc_listener():
     """Background task: listens for incoming IPC connections (registrations, heartbeats)."""
     loop = asyncio.get_event_loop()
@@ -456,12 +483,11 @@ async def _ipc_listener():
     while True:
         try:
             conn, addr = await loop.sock_accept(server_sock)
-            conn.settimeout(3.0)
-            data = await loop.sock_recv(conn, 4096)
+            conn.setblocking(False)
+            data = await _recv_message(loop, conn)
             if data:
                 try:
-                    # Parse length-prefixed JSON
-                    msg = json.loads(data[4:].decode("utf-8"))  # skip 4-byte length
+                    msg = json.loads(data.decode("utf-8"))
                     action = msg.get("action")
                     response = {}
 
@@ -535,7 +561,7 @@ def main() -> None:
         ipc_task = asyncio.create_task(_ipc_listener())
         hb_task = asyncio.create_task(_heartbeat_monitor())
         sleep_task = asyncio.create_task(_sleep_monitor())
-        restart_task = asyncio.create_task(_restart_dead_servers())
+        reap_task = asyncio.create_task(_reap_dead_workers())
 
         # Start stdio MCP server
         from mcp.server.stdio import stdio_server
@@ -553,7 +579,7 @@ def main() -> None:
         ipc_task.cancel()
         hb_task.cancel()
         sleep_task.cancel()
-        restart_task.cancel()
+        reap_task.cancel()
 
     asyncio.run(_run())
 
@@ -587,7 +613,7 @@ def run_daemon() -> None:
             _ipc_listener(),
             _heartbeat_monitor(),
             _sleep_monitor(),
-            _restart_dead_servers(),
+            _reap_dead_workers(),
         )
     asyncio.run(_run())
 

@@ -112,6 +112,27 @@ def cmd_mode(mode: str) -> None:
     print(f"Mode: {mode} (all servers).")
 
 
+def cmd_register() -> None:
+    """Register every installed trio server in the detected MCP clients."""
+    from gray_matter import clients
+    servers = clients.installed_servers()
+    if not servers:
+        print("No installed servers to register (install one first).")
+        return
+    print(f"Registering {', '.join(servers)} in detected MCP clients...")
+    for r in clients.register(servers):
+        mark = "OK" if r.get("ok") else ("--" if r.get("action") == "skipped" else "!!")
+        line = f"  [{mark}] {r['client']}: {r['action']}"
+        if r.get("detail"):
+            line += f" — {r['detail']}"
+        print(line)
+        if r.get("snippet"):
+            print("       add by hand:")
+            for ln in r["snippet"].splitlines():
+                print("         " + ln)
+    print("Done. Restart your AI apps to load the servers.")
+
+
 def cmd_bridges() -> None:
     from gray_matter.bridges import all_bridges
     bs = all_bridges()
@@ -141,7 +162,10 @@ def main() -> None:
     md = sub.add_parser("mode", help="Set ALL servers to collaborate or separate")
     md.add_argument("mode", choices=["collaborate", "separate"])
 
-    sub.add_parser("gui", help="Open the unified control center (Tkinter)")
+    gui_p = sub.add_parser("gui", help="Open the unified web control center")
+    gui_p.add_argument("--classic", action="store_true",
+                       help="Use the legacy Tkinter control center instead")
+    sub.add_parser("register", help="Register installed trio servers in your MCP clients")
     sub.add_parser("bridges", help="List persisted cross-store bridges")
 
     args = parser.parse_args()
@@ -161,8 +185,13 @@ def main() -> None:
     elif args.command == "mode":
         cmd_mode(args.mode)
     elif args.command == "gui":
-        from gray_matter.gui import main as gui_main
+        if getattr(args, "classic", False):
+            from gray_matter.gui import main as gui_main
+        else:
+            from gray_matter.webgui import main as gui_main
         gui_main()
+    elif args.command == "register":
+        cmd_register()
     elif args.command == "bridges":
         cmd_bridges()
 

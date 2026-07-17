@@ -13,17 +13,22 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+gui = ["pywebview>=5.0"]
 
 [project.scripts]
 gray-matter = "gray_matter.cli:main"
 gray-matter-mcp = "gray_matter.server:main"
 
 [project.gui-scripts]
-gray-matter-gui = "gray_matter.gui:main"
+gray-matter-gui = "gray_matter.webgui:main"
 
 # Flat layout: the package IS this folder.
 [tool.setuptools]
 packages = ["gray_matter"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+gray_matter = ["webgui.html"]
 
 [tool.setuptools.package-dir]
 gray_matter = "."

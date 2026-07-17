@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gray Matter — Control Center</title>
+<style>
+  :root{
+    --bg:#1a1b26; --surface:#24283b; --hover:#414868; --accent:#7aa2f7;
+    --fg:#c0caf5; --dim:#565f89; --out:#16161e; --green:#9ece6a;
+    --red:#f7768e; --yellow:#e0af68; --card:#20243a; --edge:#303653;
+    --mono:"Cascadia Code","Consolas",ui-monospace,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+       font-size:14px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:center;justify-content:space-between;
+         padding:12px 18px;background:var(--card);border-bottom:1px solid var(--edge)}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:34px;height:34px;border-radius:9px;background:var(--surface);
+        display:flex;align-items:center;justify-content:center;color:var(--accent);
+        font-size:18px;font-weight:700}
+  .brand h1{font-size:16px;font-weight:600;margin:0}
+  .brand p{font-size:12px;color:var(--dim);margin:0}
+  .pill{display:flex;align-items:center;gap:7px;font-size:13px;padding:5px 12px;
+        border-radius:20px;background:var(--surface)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.ok{background:var(--green)} .dot.warn{background:var(--yellow)} .dot.err{background:var(--red)}
+  main{flex:1;display:flex;flex-direction:column;gap:14px;padding:16px 18px;min-height:0}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px}
+  .card .ct{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+  .card .cs{font-size:12px;color:var(--dim);margin:2px 0 10px}
+  .card .st{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:10px;min-height:18px}
+  .row{display:flex;gap:6px;flex-wrap:wrap}
+  button{font-family:var(--sans);font-size:12px;color:var(--fg);background:var(--surface);
+         border:1px solid var(--edge);border-radius:7px;padding:6px 10px;cursor:pointer;
+         transition:background .12s}
+  button:hover{background:var(--hover)}
+  button.accent{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+  button.danger{background:var(--red);color:var(--bg);border-color:var(--red);font-weight:600}
+  button:disabled{opacity:.45;cursor:default}
+  .body{flex:1;display:grid;grid-template-columns:160px 1fr;gap:12px;min-height:0}
+  .side{background:var(--card);border:1px solid var(--edge);border-radius:12px;
+        padding:8px;display:flex;flex-direction:column;gap:3px;overflow:auto}
+  .side .lbl{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;padding:6px 8px 2px}
+  .side .item{font-size:13px;padding:7px 9px;border-radius:7px;cursor:pointer;color:var(--fg)}
+  .side .item:hover{background:var(--hover)}
+  .side .item.on{background:var(--surface);color:var(--accent)}
+  .ecorow{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 8px;font-size:12.5px}
+  .ecorow .eco-ok{font-size:11px;color:var(--green)}
+  .ecorow button{font-size:11px;padding:3px 7px}
+  .console{background:var(--out);border-radius:12px;display:flex;flex-direction:column;min-height:0}
+  .log{flex:1;overflow:auto;padding:12px 14px;font-family:var(--mono);font-size:12.5px;
+       line-height:1.65;white-space:pre-wrap;word-break:break-word;
+       user-select:text;-webkit-user-select:text;cursor:text}
+  .log .cmd{color:var(--accent)} .log .ok{color:var(--green)} .log .err{color:var(--red)}
+  .log .dim{color:var(--dim)}
+  .inbar{display:flex;gap:6px;padding:8px;border-top:1px solid var(--edge)}
+  .inbar input{flex:1;background:var(--surface);border:1px solid var(--edge);border-radius:7px;
+        color:var(--fg);font-family:var(--mono);font-size:12.5px;padding:6px 9px}
+  .inbar input:focus{outline:none;border-color:var(--accent)}
+  .inbar .tag{font-family:var(--mono);color:var(--accent);align-self:center;font-size:12px}
+  .turso{padding:12px 14px;border-bottom:1px solid var(--edge);background:var(--card)}
+  .trow{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .trow label{width:110px;font-size:12px;color:var(--dim)}
+  .trow input{flex:1;background:var(--surface);border:1px solid var(--edge);border-radius:7px;
+       color:var(--fg);font-family:var(--mono);font-size:12.5px;padding:6px 9px}
+  .trow input:focus{outline:none;border-color:var(--accent)}
+  .trow:last-child{justify-content:space-between;margin-bottom:0}
+  .tstatus{font-size:12px;color:var(--dim)}
+  .trow button{font-size:12px;margin-left:6px}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">◑</div>
+      <div><h1>Gray Matter</h1><p>Control center · unified</p></div>
+    </div>
+    <div class="pill"><span class="dot" id="hdrDot"></span><span id="hdrTxt">connecting…</span></div>
+  </header>
+
+  <main>
+    <div class="cards">
+      <div class="card">
+        <div class="ct">◆ Orchestrator</div>
+        <div class="cs">gray-matter</div>
+        <div class="st"><span class="dot" id="gmDot"></span><span id="gmTxt">—</span></div>
+        <div class="row">
+          <button onclick="call('gm_start').then(refresh)">Start</button>
+          <button class="danger" onclick="call('gm_stop').then(refresh)">Stop</button>
+          <button onclick="call('gm_status').then(showStatus)">Status</button>
+          <button onclick="call('gm_mode',{mode:'collaborate'})">Collab all</button>
+          <button onclick="call('gm_mode',{mode:'separate'})">Separate</button>
+          <button onclick="call('gm_bridges')">Bridges</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="ct">▤ Vault</div>
+        <div class="cs">neurag</div>
+        <div class="st"><span class="dot" id="ragDot"></span><span id="ragTxt">semantic store</span></div>
+        <div class="row">
+          <button onclick="call('rag_status')">Status</button>
+          <button onclick="call('rag_tree')">Tree</button>
+          <button onclick="ask('rag_query','text','Query:')">Query…</button>
+          <button onclick="ask('rag_import','path','YAML/file path:')">Import…</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="ct">◈ Memory</div>
+        <div class="cs">neuron</div>
+        <div class="st"><span class="dot" id="nrDot"></span><span id="nrTxt">—</span></div>
+        <div class="row">
+          <button onclick="call('nr_overview')">Overview</button>
+          <button onclick="call('nr_doctor')">Doctor</button>
+          <button id="netBtn" class="accent" onclick="toggleNet()">Start network</button>
+          <button onclick="call('nr_visualize')">Graph</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="body">
+      <div class="side">
+        <div class="lbl">Ecosystem</div>
+        <div id="ecoBox"></div>
+        <div class="lbl">Memory</div>
+        <div class="item" onclick="call('nr_overview')">Overview</div>
+        <div class="item" onclick="call('nr_consolidate')">Consolidate</div>
+        <div class="item" onclick="call('nr_visualize')">Visualize</div>
+        <div class="item" onclick="call('nr_register')">Register clients</div>
+        <div class="item" onclick="call('nr_console')">Console (terminal)</div>
+        <div class="lbl">Setup</div>
+        <div class="item" onclick="wizRegister()">Register in clients</div>
+        <div class="item" onclick="toggleTurso()">Turso setup…</div>
+        <div class="lbl">Session</div>
+        <div class="item" onclick="copyLog()">Copy log</div>
+        <div class="item" onclick="call('clear_log').then(()=>logEl.textContent='')">Clear log</div>
+        <div class="item" style="color:var(--red)" onclick="call('stop_all').then(refresh)">Stop everything</div>
+      </div>
+
+      <div class="console">
+        <div class="turso" id="tursoForm" style="display:none">
+          <div class="trow"><label>Database URL</label>
+            <input id="tUrl" autocomplete="off" spellcheck="false" placeholder="libsql://…"></div>
+          <div class="trow"><label>Auth token</label>
+            <input id="tTok" type="password" autocomplete="off" placeholder="paste your Turso token"></div>
+          <div class="trow">
+            <span id="tStatus" class="tstatus">Enter both, then Test.</span>
+            <span>
+              <button onclick="tursoTest()">Test</button>
+              <button id="tSave" class="accent" disabled onclick="tursoSave()">Save</button>
+              <button onclick="toggleTurso()">Close</button>
+            </span>
+          </div>
+        </div>
+        <div class="log" id="log"></div>
+        <div class="inbar" id="inbar" style="display:none">
+          <span class="tag" id="inTag">▸</span>
+          <input id="inField" autocomplete="off" spellcheck="false"
+                 onkeydown="if(event.key==='Enter')submitAsk();if(event.key==='Escape')hideAsk()">
+          <button onclick="submitAsk()">Run</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+<script>
+const logEl = document.getElementById('log');
+const inbar = document.getElementById('inbar');
+const inField = document.getElementById('inField');
+let askMethod = null, askKey = null;
+
+// The backend injects its own absolute address here at serve time, so fetch
+// works no matter how this page was loaded (http origin OR a file:// window).
+const API_BASE = "__GM_API_BASE__";
+const API = (API_BASE.indexOf("http") === 0) ? API_BASE : "";
+
+// Single transport: the backend serves this page over http and dispatches
+// POST /api/<method>. The pywebview window and the browser both load the same
+// http origin, so a plain relative fetch always works.
+async function call(method, args){
+  const payload = (args === undefined) ? undefined : JSON.stringify(args);
+  try{
+    const res = await fetch(API + '/api/' + method, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: payload ?? ''});
+    return await res.json();
+  }catch(e){ append([{line:'[ui] '+e, tag:'err'}]); return {error:String(e)}; }
+}
+
+function copyLog(){
+  const txt = logEl.innerText;
+  const done = () => append([{line:'[ui] log copied ('+txt.length+' chars).', tag:'dim'}]);
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
+  } else { fallbackCopy(txt, done); }
+}
+function fallbackCopy(txt, cb){
+  const ta = document.createElement('textarea');
+  ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); }catch(e){}
+  document.body.removeChild(ta); if(cb) cb();
+}
+
+function append(lines){
+  for(const it of lines){
+    const div = document.createElement('div');
+    if(it.tag) div.className = it.tag;
+    div.textContent = it.line;
+    logEl.appendChild(div);
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function drain(){
+  const lines = await call('poll_log');
+  if(Array.isArray(lines) && lines.length) append(lines);
+}
+
+function ask(method, key, label){
+  askMethod = method; askKey = key;
+  document.getElementById('inTag').textContent = label;
+  inbar.style.display = 'flex';
+  inField.value = ''; inField.focus();
+}
+function hideAsk(){ inbar.style.display = 'none'; askMethod = null; }
+function submitAsk(){
+  const v = inField.value.trim();
+  if(!v){ hideAsk(); return; }
+  const args = {}; args[askKey] = v;
+  call(askMethod, args);
+  hideAsk();
+}
+
+function setDot(id, cls){ document.getElementById(id).className = 'dot' + (cls?(' '+cls):''); }
+
+function showStatus(s){
+  if(!s || !s.running){
+    setDot('gmDot','err'); document.getElementById('gmTxt').textContent = 'not running';
+    return;
+  }
+  setDot('gmDot','ok');
+  const n = (s.servers||[]).length;
+  const iso = (s.servers||[]).filter(x=>!x.collaborative).length;
+  document.getElementById('gmTxt').textContent =
+    'running · ' + n + ' server' + (n===1?'':'s') + (iso?(' · '+iso+' isolated'):'');
+}
+
+async function refreshNet(){
+  const s = await call('net_state');
+  const btn = document.getElementById('netBtn');
+  if(!s) return;
+  if(s.state === 'up'){
+    setDot('nrDot','ok');
+    document.getElementById('nrTxt').textContent = 'tunnel up';
+    btn.textContent = 'Stop network'; btn.className = 'danger';
+  }else if(s.state === 'starting'){
+    setDot('nrDot','warn');
+    document.getElementById('nrTxt').textContent = 'network starting…';
+    btn.textContent = 'Stop network'; btn.className = 'danger';
+  }else{
+    setDot('nrDot','warn');
+    document.getElementById('nrTxt').textContent = 'tunnel off';
+    btn.textContent = 'Start network'; btn.className = 'accent';
+  }
+}
+
+async function toggleNet(){
+  const s = await call('net_state');
+  if(s && (s.state === 'up' || s.state === 'starting')) await call('net_stop');
+  else await call('net_start');
+  refreshNet();
+}
+
+async function refreshEco(){
+  const r = await call('eco_status');
+  const box = document.getElementById('ecoBox');
+  if(!r || !r.peers || !box) return;
+  box.innerHTML = '';
+  for(const p of r.peers){
+    const row = document.createElement('div');
+    row.className = 'ecorow';
+    const name = document.createElement('span');
+    name.textContent = p.label;
+    row.appendChild(name);
+    if(p.installed){
+      const ok = document.createElement('span');
+      ok.className = 'eco-ok'; ok.textContent = 'installed';
+      row.appendChild(ok);
+    }else{
+      const b = document.createElement('button');
+      b.textContent = p.sibling ? 'Install' : 'Clone + install';
+      b.onclick = () => ecoInstall(p.key);
+      row.appendChild(b);
+    }
+    box.appendChild(row);
+  }
+}
+async function ecoInstall(key){
+  await call('eco_install', {key});
+  setTimeout(refreshEco, 4000);
+}
+
+async function wizRegister(){ await call('wiz_register'); }
+
+function toggleTurso(){
+  const f = document.getElementById('tursoForm');
+  f.style.display = (f.style.display === 'none') ? 'block' : 'none';
+}
+function tVals(){
+  return {url: document.getElementById('tUrl').value.trim(),
+          token: document.getElementById('tTok').value.trim()};
+}
+async function tursoTest(){
+  const st = document.getElementById('tStatus');
+  st.textContent = 'Testing…'; st.style.color = 'var(--yellow)';
+  const r = await call('turso_test', tVals());
+  const save = document.getElementById('tSave');
+  if(r && r.ok){
+    st.textContent = 'Verified' + (r.scheme ? ' via '+r.scheme : '') + (r.detail ? ': '+r.detail : '');
+    st.style.color = 'var(--green)'; save.disabled = false;
+  }else{
+    st.textContent = 'Failed: ' + ((r && (r.error || r.detail)) || '?');
+    st.style.color = 'var(--red)'; save.disabled = true;
+  }
+}
+async function tursoSave(){
+  const r = await call('turso_save', tVals());
+  const st = document.getElementById('tStatus');
+  if(r && r.ok){ st.textContent = 'Saved. Restart Neuron to apply.'; st.style.color = 'var(--green)'; }
+  else{ st.textContent = 'Save failed: ' + ((r && r.error) || '?'); st.style.color = 'var(--red)'; }
+}
+
+async function refresh(){
+  const s = await call('gm_status');
+  showStatus(s);
+  await refreshNet();
+  await refreshEco();
+  const anyOk = s && s.running;
+  setDot('hdrDot', anyOk ? 'ok' : 'warn');
+  document.getElementById('hdrTxt').textContent = anyOk ? 'orchestrator online' : 'orchestrator offline';
+}
+
+setInterval(drain, 250);
+setInterval(refreshNet, 3000);
+append([{line:'[ui] control center ready.', tag:'dim'}]);
+append([{line:'[ui] api base: '+(API || '(NOT injected — an old webgui.py is '+
+  'running; reinstall editable: pip install -e ".[gui]")'),
+  tag: API ? 'dim' : 'err'}]);
+refresh();
+
+// Guard: only a raw .html opened with no backend at all (no injected API base
+// and not an http origin) is truly dead — say so clearly.
+if(!API && location.protocol !== 'http:' && location.protocol !== 'https:'){
+  append([{line:'[ui] no backend reachable — start with `gray-matter gui`, '+
+    'do not open the .html directly.', tag:'err'}]);
+}
+</script>
+</body>
+</html>
