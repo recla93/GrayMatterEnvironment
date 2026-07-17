@@ -205,7 +205,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if node_chunks:
                 lines.append("Chunks:")
                 for c in node_chunks[:top_n]:
-                    lines.append(f"  [{c['chunk_index']}] {c['section'] or c['source']}")
+                    lines.append(f"  [{c['chunk_index']}] {c['source']} :: {c['section'] or ''}")
                     lines.append(f"       {c['text'][:200]}...")
             return [TextContent(type="text", text="\n".join(lines))]
         # Fallback: semantic (embedder on) or lexical TF-IDF ranking
