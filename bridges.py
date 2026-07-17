@@ -1,17 +1,26 @@
-"""Cross-store bridges — the orchestrator's own memory.
+"""Cross-store bridges — the orchestrator's own memory, that *learns from use*.
 
 A bridge is a persisted link between a Neuron concept and a NeuRAG knowledge
 node: a connection only Gray-Matter (sitting between the two stores) can see.
 Persisted so a connection is *discovered once* and *recalled cheaply* forever.
 
-Tiny JSON store (a bridge set is small). Path overridable via GRAY_MATTER_BRIDGES
-(for tests). This is the only place Gray-Matter writes — see ARCHITETTURA.md.
+Auto-learning (B4): a bridge carries a `weight`. It grows every time the bridge
+re-emerges or is surfaced in a pulse (Hebbian: co-occurrence = reinforcement),
+and `decay()` shrinks bridges that go unused — an unconfirmed hypothesis that
+never proves useful fades away. **Only bridges decay**; NeuRAG knowledge is a
+permanent vault and is never touched here.
+
+Tiny JSON store. Path overridable via GRAY_MATTER_BRIDGES (for tests). This is
+the only place Gray-Matter writes — see ARCHITETTURA.md.
 """
 from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
+
+_WEIGHT_CAP = 1000          # weights are relative; cap keeps them bounded
 
 
 def _store() -> Path:
@@ -32,31 +41,74 @@ def _save(bridges: list[dict]) -> None:
     path.write_text(json.dumps(bridges, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _bump(b: dict) -> None:
+    b["weight"] = min(b.get("weight", 1) + 1, _WEIGHT_CAP)
+    b["last_used"] = time.time()
+
+
 def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "") -> bool:
-    """Record a bridge. Idempotent on (neuron_concept, neurag_node); returns False
-    if it already exists."""
+    """Record a bridge. Idempotent on (neuron_concept, neurag_node). If it already
+    exists, its weight is reinforced (+1) and False is returned; a brand-new bridge
+    returns True."""
     bridges = _load()
     key = (neuron_concept.strip().lower(), neurag_node.strip().lower())
     for b in bridges:
         if (b["neuron"].strip().lower(), b["neurag"].strip().lower()) == key:
+            _bump(b)                                   # re-emergence = reinforcement
+            if rationale and not b.get("rationale"):
+                b["rationale"] = rationale
+            _save(bridges)
             return False
-    bridges.append({"neuron": neuron_concept, "neurag": neurag_node, "rationale": rationale})
+    now = time.time()
+    bridges.append({"neuron": neuron_concept, "neurag": neurag_node,
+                    "rationale": rationale, "weight": 1,
+                    "created": now, "last_used": now})
     _save(bridges)
     return True
 
 
 def bridges_for(topic: str) -> list[dict]:
-    """Bridges whose Neuron or NeuRAG endpoint overlaps the topic (either direction)."""
+    """Bridges whose Neuron or NeuRAG endpoint overlaps the topic (either
+    direction). Surfacing a bridge in a pulse *is* using it → reinforce it.
+    Returned strongest-first."""
     t = topic.strip().lower()
     if not t:
         return []
-    out = []
-    for b in _load():
+    bridges = _load()
+    out, touched = [], False
+    for b in bridges:
         n, r = b["neuron"].lower(), b["neurag"].lower()
         if n in t or r in t or t in n or t in r:
+            _bump(b)                                   # recalled in a pulse = used
+            touched = True
             out.append(b)
+    if touched:
+        _save(bridges)
+    out.sort(key=lambda b: b.get("weight", 1), reverse=True)
     return out
 
 
+def decay(amount: float = 1.0, max_idle_seconds: float = 7 * 24 * 3600,
+          prune_below: float = 1.0) -> int:
+    """Maintenance: a bridge not surfaced within `max_idle_seconds` loses `amount`
+    weight; one that falls below `prune_below` is dropped. Returns how many were
+    pruned. Bridges are *hypotheses* — the unconfirmed ones that never get used
+    fade. Call from GM's idle/maintenance pass."""
+    bridges = _load()
+    now = time.time()
+    kept, changed = [], False
+    for b in bridges:
+        if now - b.get("last_used", now) > max_idle_seconds:
+            b["weight"] = b.get("weight", 1) - amount
+            changed = True
+        if b.get("weight", 1) >= prune_below:
+            kept.append(b)
+        else:
+            changed = True
+    if changed:
+        _save(kept)
+    return len(bridges) - len(kept)
+
+
 def all_bridges() -> list[dict]:
-    return _load()
+    return sorted(_load(), key=lambda b: b.get("weight", 1), reverse=True)

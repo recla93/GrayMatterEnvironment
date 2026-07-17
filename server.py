@@ -374,6 +374,12 @@ async def _sleep_monitor():
             _is_sleeping = True
             for s in _registry.all_servers():
                 s.status = "sleeping"
+            # Idle maintenance: let unused bridges (unconfirmed hypotheses) decay.
+            try:
+                from gray_matter.bridges import decay
+                decay()
+            except Exception:  # noqa: BLE001
+                pass
         elif idle < IDLE_SLEEP_TIMEOUT and _is_sleeping:
             _is_sleeping = False
 

@@ -139,10 +139,10 @@ def cmd_bridges() -> None:
     if not bs:
         print("No bridges yet.")
         return
-    print(f"{len(bs)} cross-store bridge(s):")
+    print(f"{len(bs)} cross-store bridge(s), strongest first:")
     for b in bs:
         rat = f" — {b['rationale']}" if b.get("rationale") else ""
-        print(f"  {b['neuron']} <-> {b['neurag']}{rat}")
+        print(f"  [w={b.get('weight', 1)}] {b['neuron']} <-> {b['neurag']}{rat}")
 
 
 def main() -> None:
