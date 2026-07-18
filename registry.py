@@ -20,8 +20,14 @@ class ServerEntry:
     # F12: real tool metadata (name -> {description, inputSchema}) fetched once from
     # the worker, so GM re-publishes accurate pass-through schemas instead of empty.
     tool_schemas: dict = field(default_factory=dict)
+    # Gateway model: a MANAGED server is a worker GM spawned itself (the client
+    # launches only GM), so it doesn't auto-register/heartbeat — liveness is the
+    # worker process, not a ping.
+    managed: bool = False
 
     def is_alive(self, timeout: float = 15.0) -> bool:
+        if self.managed:
+            return self.status != "dead"
         return self.status == "alive" and (time.time() - self.last_heartbeat) < timeout
 
 
@@ -43,6 +49,15 @@ class Registry:
         entry = ServerEntry(name=name, tool_names=tool_names, socket_path=socket_path, pid=pid)
         if prev is not None:
             entry.collaborative = prev.collaborative   # preserve isolate across re-register
+        self._servers[name] = entry
+        for tool in tool_names:
+            self._tool_index[tool] = name
+
+    def register_managed(self, name: str, tool_names: list[str], tool_schemas: dict | None = None) -> None:
+        """Register a GM-managed (worker-backed) sub-server for the gateway model."""
+        entry = ServerEntry(name=name, tool_names=list(tool_names), socket_path="", pid=0, managed=True)
+        if tool_schemas:
+            entry.tool_schemas = tool_schemas
         self._servers[name] = entry
         for tool in tool_names:
             self._tool_index[tool] = name

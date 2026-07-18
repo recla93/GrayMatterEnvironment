@@ -80,6 +80,32 @@ def cmd_doctor() -> None:
         print(f"  [{mark}] {s['name']} ({s.get('status')}, {collab}) {worker}")
 
 
+def cmd_config(action: str, key: str = "", value: str = "") -> None:
+    from gray_matter import settings
+    if action == "list":
+        cfg = settings.load()
+        print("Gray-Matter config (knob = valore):")
+        for k in sorted(cfg):
+            print(f"  {k:22} {cfg[k]}")
+        return
+    if action == "get":
+        if not key:
+            print("uso: gray-matter config get <key>"); sys.exit(1)
+        val = settings.get(key)
+        if val is None:
+            print(f"chiave sconosciuta: {key}"); sys.exit(1)
+        print(val)
+        return
+    # set
+    if not key or value == "":
+        print("uso: gray-matter config set <key> <value>"); sys.exit(1)
+    try:
+        cfg = settings.set(key, value)
+    except KeyError as e:
+        print(str(e)); sys.exit(1)
+    print(f"{key} = {cfg[key]}")
+
+
 def cmd_stop() -> None:
     import json
     result = _send_ipc({"action": "shutdown"})
@@ -201,6 +227,11 @@ def main() -> None:
     sub.add_parser("stats", help="Orchestrator counters: cache hit rate, flashes, bridges, latency")
     sub.add_parser("doctor", help="Health snapshot: servers, workers, cache, bridges")
 
+    cfg_p = sub.add_parser("config", help="Get/set tunable knobs (flash rate, cache TTL, prewarm, ...)")
+    cfg_p.add_argument("action", choices=["get", "set", "list"])
+    cfg_p.add_argument("key", nargs="?", default="")
+    cfg_p.add_argument("value", nargs="?", default="")
+
     args = parser.parse_args()
 
     if args.command == "status":
@@ -231,6 +262,8 @@ def main() -> None:
         cmd_stats()
     elif args.command == "doctor":
         cmd_doctor()
+    elif args.command == "config":
+        cmd_config(args.action, args.key, args.value)
 
 
 if __name__ == "__main__":
