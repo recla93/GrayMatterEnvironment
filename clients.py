@@ -19,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-__all__ = ["SERVERS", "CLIENTS", "register", "doctor"]
+__all__ = ["SERVERS", "CLIENTS", "register", "deregister", "doctor"]
 
 
 def _home(*parts: str) -> str:
@@ -207,6 +207,57 @@ def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
         # stale and the old servers still spawning.
         for path in paths:
             results.append(_register_json(spec, path, servers, py, evict))
+    return results
+
+
+def deregister(servers: "list[str] | None" = None) -> list[dict]:
+    """Remove ``servers`` (default: whole trio incl. legacy slugs) from every
+    existing client config. Backup `.bak` before each write; JSONC/unreadable
+    configs are reported, never clobbered. Claude Code goes via its CLI."""
+    targets = tuple(servers) if servers else ("gray-matter", *GATEWAY_EVICT)
+    results: list[dict] = []
+    for ckey, spec in CLIENTS.items():
+        paths_ = [p for p in spec["paths"]() if os.path.exists(p)]
+        if not paths_:
+            continue
+        if spec.get("cli") and shutil.which("claude"):
+            for s in targets:
+                try:
+                    subprocess.run(["claude", "mcp", "remove", "--scope", "user", s],
+                                   capture_output=True, text=True, timeout=60)
+                except Exception:  # noqa: BLE001
+                    pass
+            results.append({"client": spec["label"], "ok": True, "action": "claude mcp remove"})
+            continue
+        for path in paths_:
+            try:
+                raw = Path(path).read_text(encoding="utf-8")
+                data = json.loads(raw) if raw.strip() else {}
+            except (json.JSONDecodeError, OSError):
+                results.append({"client": spec["label"], "ok": False,
+                                "action": "manual", "detail": path})
+                continue
+            node = data
+            for k in spec["keys"]:
+                node = node.get(k) if isinstance(node, dict) else None
+                if node is None:
+                    break
+            removed = []
+            if isinstance(node, dict):
+                for s in targets:
+                    if s in node:
+                        node.pop(s)
+                        removed.append(s)
+            if removed:
+                try:
+                    Path(path + ".bak").write_text(raw, encoding="utf-8")
+                    Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+                except OSError as exc:
+                    results.append({"client": spec["label"], "ok": False,
+                                    "action": "error", "detail": str(exc)})
+                    continue
+            results.append({"client": spec["label"], "ok": True,
+                            "action": "deregistered", "removed": removed, "detail": path})
     return results
 
 

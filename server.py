@@ -443,7 +443,10 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict) 
     except Exception:
         return f"[{server_name}] error: bad worker response"
     if not resp.get("ok"):
-        return f"[{server_name}] error: {resp.get('error')}"
+        # ponytail: trace nel messaggio — L2 è intermittente, quando ricapita
+        # vogliamo il traceback intero, non solo str(e)
+        tail = f"\n{resp['trace']}" if resp.get("trace") else ""
+        return f"[{server_name}] error: {resp.get('error')}{tail}"
     return resp["text"]
 
 

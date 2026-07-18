@@ -60,7 +60,9 @@ def main() -> None:
                 text = result.content[0].text if hasattr(result.content[0], "text") else str(result.content[0])
             sys.stdout.write(json.dumps({"ok": True, "text": text}) + "\n")
         except Exception as e:  # noqa: BLE001
-            sys.stdout.write(json.dumps({"ok": False, "error": str(e)}) + "\n")
+            import traceback
+            sys.stdout.write(json.dumps({"ok": False, "error": str(e),
+                                         "trace": traceback.format_exc()}) + "\n")
         sys.stdout.flush()
 
 

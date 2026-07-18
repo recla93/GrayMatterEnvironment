@@ -194,6 +194,40 @@ def cmd_register(gateway: bool = False) -> None:
     print("Done. Restart your AI apps to load the servers.")
 
 
+def _print_results(results: list) -> None:
+    for r in results:
+        mark = "OK" if r.get("ok") else "!!"
+        line = f"  [{mark}] {r['action']}"
+        for key in ("component", "client", "name", "path", "detail"):
+            if isinstance(r.get(key), str):
+                line += f" {r[key]}" if key != "detail" else f" — {r[key]}"
+        print(line)
+        for s in (r.get("clients") if isinstance(r.get("clients"), list) else []):
+            smark = "OK" if s.get("ok") else ("--" if s.get("action") == "skipped" else "!!")
+            print(f"       [{smark}] {s.get('client')}: {s.get('action')}"
+                  + (f" — {s['detail']}" if s.get("detail") else ""))
+
+
+def cmd_install(dry_run: bool = False) -> None:
+    """Idempotent install: reap orphans, ensure data dirs, register ONLY the
+    gateway, deploy per-client hooks, write manifest (INSTALLER-UX §5)."""
+    from gray_matter import executor
+    print(("[dry-run] " if dry_run else "") + "Installing (gateway model)...")
+    _print_results(executor.execute_install(dry_run=dry_run))
+    print("Done." + ("" if dry_run else " Restart your AI apps."))
+
+
+def cmd_uninstall(purge_data: bool = False, yes: bool = False,
+                  dry_run: bool = False) -> None:
+    """Uninstall: reap, deregister, remove hooks/code; memory is INTERACTIVE
+    (asks per data path) unless --purge-data (INSTALLER-UX §6)."""
+    from gray_matter import executor
+    print(("[dry-run] " if dry_run else "") + "Uninstalling...")
+    _print_results(executor.execute_uninstall(
+        purge_data=purge_data, assume_yes=yes, dry_run=dry_run))
+    print("Done.")
+
+
 def cmd_bridges() -> None:
     from gray_matter.bridges import all_bridges
     bs = all_bridges()
@@ -229,6 +263,12 @@ def main() -> None:
     reg_p = sub.add_parser("register", help="Register installed trio servers in your MCP clients")
     reg_p.add_argument("--gateway", action="store_true",
                        help="Proxy model: register ONLY gray-matter, remove neuron/neurag from clients")
+    ins_p = sub.add_parser("install", help="Idempotent gateway install (reap, register GM, deploy hooks, manifest)")
+    ins_p.add_argument("--dry-run", action="store_true", help="Show actions without doing them")
+    uni_p = sub.add_parser("uninstall", help="Remove GM (interactive on the memory)")
+    uni_p.add_argument("--purge-data", action="store_true", help="Also wipe memory WITHOUT asking")
+    uni_p.add_argument("--yes", action="store_true", help="Answer yes to every prompt")
+    uni_p.add_argument("--dry-run", action="store_true", help="Show actions without doing them")
     sub.add_parser("bridges", help="List persisted cross-store bridges")
     sub.add_parser("stats", help="Orchestrator counters: cache hit rate, flashes, bridges, latency")
     sub.add_parser("doctor", help="Health snapshot: servers, workers, cache, bridges")
@@ -262,6 +302,10 @@ def main() -> None:
         gui_main()
     elif args.command == "register":
         cmd_register(args.gateway)
+    elif args.command == "install":
+        cmd_install(args.dry_run)
+    elif args.command == "uninstall":
+        cmd_uninstall(args.purge_data, args.yes, args.dry_run)
     elif args.command == "bridges":
         cmd_bridges()
     elif args.command == "stats":
