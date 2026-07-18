@@ -37,5 +37,7 @@ def test_ipc_listener_exits_when_port_taken(monkeypatch):
     try:
         with pytest.raises(SystemExit):
             asyncio.run(server._ipc_listener())
+        # stdio mode: same conflict must NOT kill the instance, just skip the listener
+        asyncio.run(server._ipc_listener(exit_on_busy=False))
     finally:
         blocker.close()

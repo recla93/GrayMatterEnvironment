@@ -656,8 +656,12 @@ async def _recv_message(loop, conn) -> bytes:
     return payload or b""
 
 
-async def _ipc_listener():
-    """Background task: listens for incoming IPC connections (registrations, heartbeats)."""
+async def _ipc_listener(*, exit_on_busy: bool = True):
+    """Background task: listens for incoming IPC connections (registrations, heartbeats).
+
+    exit_on_busy: a daemon that finds :9876 taken is a duplicate and must die
+    (SystemExit escapes asyncio). A stdio instance (main) must instead keep
+    serving MCP without a listener — its managed workers don't need the port."""
     loop = asyncio.get_event_loop()
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # Singleton guard: on Windows SO_REUSEADDR lets TWO daemons bind :9876 at
@@ -670,9 +674,10 @@ async def _ipc_listener():
     try:
         server_sock.bind((GRAY_MATTER_HOST, GRAY_MATTER_PORT))
     except OSError:
-        # ponytail: another GM already owns the port — this instance is a
-        # duplicate; exit instead of coordinating (SystemExit escapes asyncio).
-        raise SystemExit(0)
+        # Another GM already owns the port.
+        if exit_on_busy:
+            raise SystemExit(0)   # duplicate daemon: die instead of coordinating
+        return                    # stdio instance: serve MCP without a listener
     server_sock.listen(5)
     server_sock.setblocking(False)
 
@@ -760,7 +765,7 @@ def main() -> None:
     """Run Gray-Matter as a stdio MCP server with background IPC listener."""
     async def _run():
         # Start background tasks
-        ipc_task = asyncio.create_task(_ipc_listener())
+        ipc_task = asyncio.create_task(_ipc_listener(exit_on_busy=False))
         hb_task = asyncio.create_task(_heartbeat_monitor())
         sleep_task = asyncio.create_task(_sleep_monitor())
         reap_task = asyncio.create_task(_reap_dead_workers())
