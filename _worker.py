@@ -30,6 +30,18 @@ def main() -> None:
             continue
         try:
             req = json.loads(line)
+            # F12: schema introspection. Return this server's real tool list
+            # (name + description + inputSchema) so Gray-Matter can re-publish
+            # accurate pass-through schemas instead of empty ones.
+            if req.get("op") == "list_tools":
+                lt = app.request_handlers[_mcp_types.ListToolsRequest]
+                lresp = loop.run_until_complete(lt(_mcp_types.ListToolsRequest(method="tools/list")))
+                lres = lresp.root if hasattr(lresp, "root") else lresp
+                tools = [{"name": t.name, "description": t.description,
+                          "inputSchema": t.inputSchema} for t in lres.tools]
+                sys.stdout.write(json.dumps({"ok": True, "tools": tools}) + "\n")
+                sys.stdout.flush()
+                continue
             if reg is not None and hasattr(reg, "_graphs"):
                 try:
                     reg._graphs.clear()          # freshness: re-read DB, keep model warm

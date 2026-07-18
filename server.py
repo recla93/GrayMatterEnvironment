@@ -203,13 +203,17 @@ async def list_tools() -> list[Tool]:
         },
     ))
 
-    # Tools from registered servers
+    # Tools from registered servers (F12: re-publish REAL schemas, fetched once
+    # from each worker and cached; fall back to an empty schema if unavailable so
+    # list_tools never blocks on a cold/broken worker).
     for server in _registry.alive_servers():
+        await _ensure_schemas(server)
         for tool_name in server.tool_names:
+            meta = server.tool_schemas.get(tool_name) or {}
             tools.append(Tool(
                 name=tool_name,
-                description=f"({server.name}) {tool_name}",
-                inputSchema={"type": "object", "properties": {}},
+                description=meta.get("description") or f"({server.name}) {tool_name}",
+                inputSchema=meta.get("inputSchema") or {"type": "object", "properties": {}},
             ))
 
     return tools
@@ -414,6 +418,46 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict) 
     if not resp.get("ok"):
         return f"[{server_name}] error: {resp.get('error')}"
     return resp["text"]
+
+
+async def _fetch_tool_schemas(server_name: str) -> dict:
+    """F12: ask a server's worker for its real tool list (name -> {description,
+    inputSchema}) so GM can re-publish accurate pass-through schemas. Best-effort:
+    returns {} on any failure (caller falls back to an empty schema)."""
+    lock = _worker_locks.setdefault(server_name, asyncio.Lock())
+    async with lock:
+        p = _worker_for(server_name)
+        loop = asyncio.get_event_loop()
+
+        def _io() -> str:
+            p.stdin.write(json.dumps({"op": "list_tools"}) + "\n")
+            p.stdin.flush()
+            return p.stdout.readline()
+
+        try:
+            resp_line = await asyncio.wait_for(loop.run_in_executor(None, _io), timeout=60)
+        except Exception:  # noqa: BLE001 — pipe/timeout: leave schemas unknown
+            return {}
+    try:
+        resp = json.loads(resp_line)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not resp.get("ok"):
+        return {}
+    return {
+        t["name"]: {"description": t.get("description") or "",
+                    "inputSchema": t.get("inputSchema") or {"type": "object", "properties": {}}}
+        for t in resp.get("tools", []) if t.get("name")
+    }
+
+
+async def _ensure_schemas(server) -> None:
+    """Populate a server's real tool schemas once (cached on the ServerEntry)."""
+    if server.tool_schemas:
+        return
+    schemas = await _fetch_tool_schemas(server.name)
+    if schemas:
+        server.tool_schemas = schemas
 
 
 async def _sleep_monitor():

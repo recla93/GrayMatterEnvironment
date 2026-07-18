@@ -17,6 +17,9 @@ class ServerEntry:
     last_heartbeat: float = field(default_factory=time.time)
     status: str = "alive"
     collaborative: bool = True   # in the combined pulse fan-out; isolate = standalone-in-GM
+    # F12: real tool metadata (name -> {description, inputSchema}) fetched once from
+    # the worker, so GM re-publishes accurate pass-through schemas instead of empty.
+    tool_schemas: dict = field(default_factory=dict)
 
     def is_alive(self, timeout: float = 15.0) -> bool:
         return self.status == "alive" and (time.time() - self.last_heartbeat) < timeout
