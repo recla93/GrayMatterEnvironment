@@ -164,6 +164,22 @@ _is_sleeping: bool = False
 
 app = Server("gray-matter")
 
+# MCP handshake instructions (INSTALLER-UX §8b): the loop-guidance for clients
+# that honor `instructions` (Cursor/VS Code/Codex) — no hook needed there. The
+# per-client hooks stay for clients that ignore this field. Keep in sync with
+# Neuron/clients/claude-code-hook (same loop, GM-gateway flavored).
+GM_INSTRUCTIONS = (
+    "Gray-Matter gateway: Neuron (persistent semantic memory) + NeuRAG (knowledge "
+    "base) behind one proxy — their tools are served here pass-through.\n"
+    "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying (fold "
+    "the returned context in silently), then store_turn(topic, keywords, links) "
+    "AFTER, to persist what is new. gray_matter_pulse(topic) merges memory + "
+    "knowledge + flash in one call.\n"
+    "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a "
+    "self-link; before minting a concept check find_candidates; never store "
+    "secrets or tokens. Skip on procedural turns (ack/thanks/yes-no)."
+)
+
 
   # server_name -> consecutive failures
 
@@ -761,6 +777,22 @@ async def _heartbeat_monitor():
 # Main
 # ---------------------------------------------------------------------------
 
+def _init_options() -> InitializationOptions:
+    """Handshake metadata for stdio mode. `capabilities` is a REQUIRED pydantic
+    field — omitting it (as the old inline construction did) raises at the very
+    first stdio startup, which daemon-only runs never exercised."""
+    from mcp.server.lowlevel import NotificationOptions
+    return InitializationOptions(
+        server_name="gray-matter",
+        server_version=__version__,
+        capabilities=app.get_capabilities(
+            notification_options=NotificationOptions(),
+            experimental_capabilities={},
+        ),
+        instructions=GM_INSTRUCTIONS,
+    )
+
+
 def main() -> None:
     """Run Gray-Matter as a stdio MCP server with background IPC listener."""
     async def _run():
@@ -781,10 +813,7 @@ def main() -> None:
             await app.run(
                 read_stream,
                 write_stream,
-                InitializationOptions(
-                    server_name="gray-matter",
-                    server_version=__version__,
-                ),
+                _init_options(),
             )
 
         # Cleanup

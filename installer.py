@@ -14,6 +14,17 @@ from __future__ import annotations
 
 GATEWAY = "gray_matter"   # the ONLY server registered in MCP clients (§1 proxy model)
 
+# Per-client handshake assets (INSTALLER-UX §8b): the session-start hooks/plugins
+# that inject the pre_turn/store_turn loop-guidance. They live in Neuron/clients/
+# but their DEPLOY belongs to this unified installer, tracked in the manifest so
+# uninstall removes exactly what was written. Clients without an entry rely on
+# the MCP `instructions` GM serves at handshake.
+HOOK_ASSETS = {
+    "claude-code": "claude-code-hook/neuron_sessionstart_hook.py",
+    "cowork": "cowork-plugin/neuron-guard",
+    "opencode": "opencode-plugin/neuron-handshake.mjs",
+}
+
 
 def plan(state: dict) -> list[dict]:
     """Turn a detected state into an ordered, idempotent action list (pure).
@@ -38,6 +49,11 @@ def plan(state: dict) -> list[dict]:
     if clients:
         actions.append({"action": "register", "target": GATEWAY,
                         "clients": sorted(set(clients))})
+    # Handshake layer (§8b): deploy the per-client hook/plugin where one exists.
+    for c in sorted(set(clients)):
+        if c in HOOK_ASSETS:
+            actions.append({"action": "deploy_hook", "client": c,
+                            "asset": HOOK_ASSETS[c]})
     actions.append({"action": "write_manifest"})
     return actions
 
@@ -53,5 +69,9 @@ def record_install(state: dict, path=None):
     m.record_component(GATEWAY, present=True, registered=True)
     if state.get("clients"):
         m.set_clients(state["clients"])
+    # hooks: client -> deployed path(s), so uninstall knows exactly what to remove
+    for client, dest in (state.get("hooks") or {}).items():
+        for p in ([dest] if isinstance(dest, str) else dest):
+            m.record_hook(client, p)
     m.save(path)
     return m
