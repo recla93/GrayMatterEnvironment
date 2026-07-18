@@ -26,16 +26,21 @@ from mcp.types import Tool, TextContent
 from gray_matter import __version__
 from gray_matter.cache import ContextCache
 from gray_matter.registry import Registry
+from gray_matter import settings as _settings
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
+# Tunable knobs (see `gray-matter config`): read once at startup — `config set`
+# takes effect on the next restart. Missing/unknown keys fall back to defaults.
+_cfg = _settings.load()
+
 GRAY_MATTER_PORT = 9876
 GRAY_MATTER_HOST = "127.0.0.1"
-HEARTBEAT_INTERVAL = 5.0  # seconds
+HEARTBEAT_INTERVAL = _cfg["heartbeat_interval"]  # seconds
 HEARTBEAT_TIMEOUT = 15.0  # seconds — after 3 missed beats, mark dead
-IDLE_SLEEP_TIMEOUT = 600.0  # 10 minutes — sleep after this long idle
+IDLE_SLEEP_TIMEOUT = _cfg["idle_sleep_timeout"]  # sleep after this long idle
 
 # ---------------------------------------------------------------------------
 # IPC helpers (tiny TCP-based protocol for server <-> Gray-Matter)
@@ -142,7 +147,7 @@ _flash_counter: int = 0
 # ONE shared context cache. It used to be re-created inside every pulse, so it
 # never hit — a silent "cache that never caches" bug. A single instance persists
 # across calls and makes `gray-matter stats` hit-rate meaningful.
-_ctx_cache = ContextCache()
+_ctx_cache = ContextCache(max_size=_cfg["cache_max_size"], ttl=_cfg["cache_ttl_seconds"])
 
 # Lightweight observability counters, surfaced by `gray-matter stats` / `doctor`.
 _stats: dict[str, float] = {"pulses": 0, "cache_hits": 0, "cache_misses": 0,
@@ -152,7 +157,7 @@ _stats: dict[str, float] = {"pulses": 0, "cache_hits": 0, "cache_misses": 0,
 _last_topic: str = ""
 _flashed: set = set()          # concepts already flashed this session (cooldown)
 _calls_since_flash: int = 0
-FLASH_MIN_GAP = 3              # min pulses between flashes (anti-spam)
+FLASH_MIN_GAP = _cfg["flash_min_gap"]   # min pulses between flashes (anti-spam)
 
 
 _is_sleeping: bool = False
@@ -354,7 +359,7 @@ async def _prewarm_workers():
     collaborative server's worker and fires one cheap read to load its model.
     Best-effort: on any failure the server is left un-warmed and the lazy path in
     `_worker_for` still handles it on demand. Disable with GM_PREWARM=0."""
-    if os.environ.get("GM_PREWARM", "1") == "0":
+    if os.environ.get("GM_PREWARM", "1" if _cfg["prewarm"] else "0") == "0":
         return
     while True:
         for s in _registry.alive_servers():
@@ -376,9 +381,15 @@ def _worker_for(server_name: str):
     pkg = {"neurag": "neurag.server", "neuron": "neuron.server"}.get(server_name, server_name + ".server")
     p = _workers.get(server_name)
     if p is None or p.poll() is not None:        # not started, or died -> (re)spawn
+        # Windows: suppress the console window for the worker (a piped child would
+        # otherwise pop a visible CMD). GM's daemon already does this; the worker
+        # didn't — harmless before, but the startup self-bootstrap now spawns it
+        # eagerly, so the window showed at launch.
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         p = subprocess.Popen(
             [sys.executable, "-m", "gray_matter._worker", pkg],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+            creationflags=creationflags,
         )
         _workers[server_name] = p
     return p
@@ -458,6 +469,36 @@ async def _ensure_schemas(server) -> None:
     schemas = await _fetch_tool_schemas(server.name)
     if schemas:
         server.tool_schemas = schemas
+
+
+_SUBSERVER_MODULES = {"neuron": "neuron.server", "neurag": "neurag.server"}
+
+
+def detect_subservers() -> list[str]:
+    """Installed sub-servers importable right now (gateway self-discovery)."""
+    import importlib.util
+    out = []
+    for name, mod in _SUBSERVER_MODULES.items():
+        try:
+            if importlib.util.find_spec(mod) is not None:
+                out.append(name)
+        except Exception:  # noqa: BLE001 — broken/partial install
+            pass
+    return out
+
+
+async def _bootstrap_subservers() -> None:
+    """Gateway model: the client launches only GM, so the sub-servers no longer
+    auto-register via IPC. GM self-discovers the installed ones, fetches their real
+    tools from the worker (F12) and registers them as MANAGED so `list_tools`
+    re-publishes them. Best-effort; a sub-server that fails to answer is skipped
+    (a later autoregister or a retry can still add it)."""
+    for name in detect_subservers():
+        if _registry.get_server(name):
+            continue
+        schemas = await _fetch_tool_schemas(name)
+        if schemas:
+            _registry.register_managed(name, list(schemas), schemas)
 
 
 async def _sleep_monitor():
@@ -695,6 +736,8 @@ async def _heartbeat_monitor():
         await asyncio.sleep(HEARTBEAT_INTERVAL)
         now = time.time()
         for server in _registry.all_servers():
+            if server.managed:
+                continue   # worker-backed: liveness is the process, not a heartbeat
             if server.status == "alive" and (now - server.last_heartbeat) > HEARTBEAT_TIMEOUT:
                 server.status = "dead"
 
@@ -711,6 +754,10 @@ def main() -> None:
         sleep_task = asyncio.create_task(_sleep_monitor())
         reap_task = asyncio.create_task(_reap_dead_workers())
         prewarm_task = asyncio.create_task(_prewarm_workers())
+
+        # Gateway model: self-discover installed sub-servers as managed workers
+        # (they no longer autoregister when the client launches only GM).
+        await _bootstrap_subservers()
 
         # Start stdio MCP server
         from mcp.server.stdio import stdio_server
