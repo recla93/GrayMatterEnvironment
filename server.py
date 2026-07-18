@@ -304,6 +304,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             response += "\n\n" + "\n".join(
                 f"🔗 {b['neuron']} ↔ {b['neurag']}" + (f" — {b['rationale']}" if b.get("rationale") else "")
                 for b in rel)
+            # B4 — bridge appena promosso (5+ usi reali): il concetto Neuron ha
+            # dimostrato valore, confermalo (salience + trust). Best-effort.
+            promoted = [b["neuron"] for b in rel if b.pop("_just_promoted", False)]
+            if promoted:
+                try:
+                    await _call_server_async("neuron", "confirm",
+                                             {"keywords": promoted, "confidence": 0.5})
+                except Exception:  # noqa: BLE001
+                    pass
 
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
         flash_note, concept = await _maybe_flash(topic)

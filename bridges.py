@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 _WEIGHT_CAP = 1000          # weights are relative; cap keeps them bounded
+_PROMOTE_AT = 5             # B4: a 5+ volte il concetto Neuron merita un confirm
 _MAX_LEN = 200              # ingest guard: longer endpoints are pasted blobs, not concepts
 _MIN_LEN = 2                # a 1-char endpoint substring-matches almost every topic -> noise
 
@@ -101,15 +102,24 @@ def bridges_for(topic: str) -> list[dict]:
     if not t:
         return []
     bridges = _load()
-    out, touched = [], False
+    out, touched, just_promoted = [], False, []
     for b in bridges:
         n, r = b["neuron"].lower(), b["neurag"].lower()
         if n in t or r in t or t in n or t in r:
             _bump(b)                                   # recalled in a pulse = used
             touched = True
             out.append(b)
+            # B4 — promozione una tantum al crossing della soglia: il chiamante
+            # (pulse) manda un confirm al concetto Neuron. `promoted` persiste.
+            # ponytail: una sola promozione per bridge; ri-promozione periodica
+            # solo se i numeri diranno che serve.
+            if b.get("weight", 1) >= _PROMOTE_AT and not b.get("promoted"):
+                b["promoted"] = True
+                just_promoted.append(b)
     if touched:
         _save(bridges)
+    for b in just_promoted:            # marker post-save: mai persistito
+        b["_just_promoted"] = True
     out.sort(key=lambda b: b.get("weight", 1), reverse=True)
     return out
 
