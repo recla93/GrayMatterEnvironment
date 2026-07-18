@@ -660,8 +660,19 @@ async def _ipc_listener():
     """Background task: listens for incoming IPC connections (registrations, heartbeats)."""
     loop = asyncio.get_event_loop()
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_sock.bind((GRAY_MATTER_HOST, GRAY_MATTER_PORT))
+    # Singleton guard: on Windows SO_REUSEADDR lets TWO daemons bind :9876 at
+    # once (unlike POSIX), so a spawn race produced real duplicate GMs. Bind
+    # exclusively and let the loser die — every spawn path funnels through here.
+    if os.name == "nt":
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server_sock.bind((GRAY_MATTER_HOST, GRAY_MATTER_PORT))
+    except OSError:
+        # ponytail: another GM already owns the port — this instance is a
+        # duplicate; exit instead of coordinating (SystemExit escapes asyncio).
+        raise SystemExit(0)
     server_sock.listen(5)
     server_sock.setblocking(False)
 

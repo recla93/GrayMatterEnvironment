@@ -41,12 +41,24 @@ SERVERS: dict[str, list[str]] = {
 # Module used to detect whether a server is installed (importable).
 _DETECT = {"neuron": "neuron", "neurag": "neurag", "gray-matter": "gray_matter"}
 
+# Gateway flip (§1 proxy model): clients talk ONLY to GM; these slugs get
+# evicted from client configs (GM spawns them itself as managed workers).
+# "neuron5" is the slug real installs use, "neuron" the generic one.
+GATEWAY_EVICT = ("neuron", "neuron5", "neurag")
+
 
 def _claude_desktop_paths() -> list[str]:
     if sys.platform == "darwin":
         return [_home("Library", "Application Support", "Claude", "claude_desktop_config.json")]
     if _env("APPDATA"):
-        return [os.path.join(_env("APPDATA"), "Claude", "claude_desktop_config.json")]
+        out = [os.path.join(_env("APPDATA"), "Claude", "claude_desktop_config.json")]
+        # MSIX install reads its LocalCache redirect, NOT %APPDATA% — cover both.
+        if _env("LOCALAPPDATA"):
+            import glob
+            out += glob.glob(os.path.join(_env("LOCALAPPDATA"), "Packages", "Claude_*",
+                                          "LocalCache", "Roaming", "Claude",
+                                          "claude_desktop_config.json"))
+        return out
     return [_home(".config", "Claude", "claude_desktop_config.json")]
 
 
@@ -108,7 +120,8 @@ def _pick(paths: list[str]) -> "str | None":
     return max(existing, key=os.path.getmtime) if existing else None
 
 
-def _register_json(spec: dict, path: str, servers: list[str], py: str) -> dict:
+def _register_json(spec: dict, path: str, servers: list[str], py: str,
+                   evict: tuple = ()) -> dict:
     try:
         raw = Path(path).read_text(encoding="utf-8") if os.path.exists(path) else ""
         data = json.loads(raw) if raw.strip() else {}
@@ -125,6 +138,8 @@ def _register_json(spec: dict, path: str, servers: list[str], py: str) -> dict:
                     "detail": f"unexpected shape at '{k}'"}
     for s in servers:
         node[s] = _entry(spec["style"], py, SERVERS[s])
+    for s in evict:
+        node.pop(s, None)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path):
@@ -135,7 +150,8 @@ def _register_json(spec: dict, path: str, servers: list[str], py: str) -> dict:
     return {"client": spec["label"], "ok": True, "action": "registered", "detail": path}
 
 
-def _register_claude_cli(spec: dict, servers: list[str], py: str) -> dict:
+def _register_claude_cli(spec: dict, servers: list[str], py: str,
+                         evict: tuple = ()) -> dict:
     ok = True
     for s in servers:
         try:
@@ -145,18 +161,28 @@ def _register_claude_cli(spec: dict, servers: list[str], py: str) -> dict:
             ok = ok and r.returncode == 0
         except Exception:  # noqa: BLE001
             ok = False
+    for s in evict:
+        try:  # absent server -> nonzero exit; that's fine, we only want it gone
+            subprocess.run(["claude", "mcp", "remove", "--scope", "user", s],
+                           capture_output=True, text=True, timeout=60)
+        except Exception:  # noqa: BLE001
+            pass
     return {"client": spec["label"], "ok": ok,
             "action": "claude mcp add" if ok else "cli failed"}
 
 
 def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
-             only: "list[str] | None" = None) -> list[dict]:
+             only: "list[str] | None" = None, gateway: bool = False) -> list[dict]:
     """Register ``servers`` (default: all installed) into detected clients.
+
+    ``gateway=True`` flips clients to the proxy model: register ONLY
+    gray-matter and evict neuron/neurag entries (GM spawns them itself).
 
     Returns one result dict per client. Never raises — a failing client is
     reported, the others still get done.
     """
-    servers = servers or installed_servers()
+    evict: tuple = GATEWAY_EVICT if gateway else ()
+    servers = ["gray-matter"] if gateway else (servers or installed_servers())
     servers = [s for s in servers if s in SERVERS]
     py = py or sys.executable or "python"
     results: list[dict] = []
@@ -166,17 +192,21 @@ def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
     for ckey, spec in CLIENTS.items():
         if only and ckey not in only:
             continue
-        path = _pick(spec["paths"]())
-        if path is None and not spec.get("create"):
+        paths = [p for p in spec["paths"]() if os.path.exists(p)]
+        if not paths and not spec.get("create"):
             results.append({"client": spec["label"], "ok": False,
                             "action": "skipped", "detail": "client not found"})
             continue
         if spec.get("cli") and shutil.which("claude"):
-            results.append(_register_claude_cli(spec, servers, py))
+            results.append(_register_claude_cli(spec, servers, py, evict))
             continue
-        if path is None:
-            path = spec["paths"]()[0]
-        results.append(_register_json(spec, path, servers, py))
+        if not paths:
+            paths = [spec["paths"]()[0]]
+        # Every existing config for this client (Claude Desktop MSIX keeps a
+        # second one in LocalCache) — updating only the newest leaves the other
+        # stale and the old servers still spawning.
+        for path in paths:
+            results.append(_register_json(spec, path, servers, py, evict))
     return results
 
 

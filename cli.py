@@ -169,15 +169,19 @@ def cmd_mode(mode: str) -> None:
     print(f"Mode: {mode} (all servers).")
 
 
-def cmd_register() -> None:
-    """Register every installed trio server in the detected MCP clients."""
+def cmd_register(gateway: bool = False) -> None:
+    """Register every installed trio server in the detected MCP clients.
+
+    --gateway: proxy model — register ONLY gray-matter, evict neuron/neurag
+    (GM self-bootstraps them as managed workers)."""
     from gray_matter import clients
-    servers = clients.installed_servers()
+    servers = ["gray-matter"] if gateway else clients.installed_servers()
     if not servers:
         print("No installed servers to register (install one first).")
         return
-    print(f"Registering {', '.join(servers)} in detected MCP clients...")
-    for r in clients.register(servers):
+    verb = "Gateway flip: registering" if gateway else "Registering"
+    print(f"{verb} {', '.join(servers)} in detected MCP clients...")
+    for r in clients.register(servers, gateway=gateway):
         mark = "OK" if r.get("ok") else ("--" if r.get("action") == "skipped" else "!!")
         line = f"  [{mark}] {r['client']}: {r['action']}"
         if r.get("detail"):
@@ -222,7 +226,9 @@ def main() -> None:
     gui_p = sub.add_parser("gui", help="Open the unified web control center")
     gui_p.add_argument("--classic", action="store_true",
                        help="Use the legacy Tkinter control center instead")
-    sub.add_parser("register", help="Register installed trio servers in your MCP clients")
+    reg_p = sub.add_parser("register", help="Register installed trio servers in your MCP clients")
+    reg_p.add_argument("--gateway", action="store_true",
+                       help="Proxy model: register ONLY gray-matter, remove neuron/neurag from clients")
     sub.add_parser("bridges", help="List persisted cross-store bridges")
     sub.add_parser("stats", help="Orchestrator counters: cache hit rate, flashes, bridges, latency")
     sub.add_parser("doctor", help="Health snapshot: servers, workers, cache, bridges")
@@ -255,7 +261,7 @@ def main() -> None:
             from gray_matter.webgui import main as gui_main
         gui_main()
     elif args.command == "register":
-        cmd_register()
+        cmd_register(args.gateway)
     elif args.command == "bridges":
         cmd_bridges()
     elif args.command == "stats":
