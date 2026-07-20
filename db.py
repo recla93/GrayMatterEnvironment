@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from pyturso import connect as turso_connect
+    from turso import connect as turso_connect
     TURSO_AVAILABLE = True
 except ImportError:
     TURSO_AVAILABLE = False
@@ -62,7 +62,46 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_path   ON nodes(path);
 CREATE INDEX IF NOT EXISTS idx_chunks_node  ON chunks(node_id);
+
+CREATE TABLE IF NOT EXISTS node_links (
+    source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    link_type   TEXT    NOT NULL CHECK(link_type IN ('tag_overlap','cross_ref','semantic')),
+    weight      REAL    DEFAULT 1.0,
+    evidence    TEXT    DEFAULT '',
+    created_at  TEXT    DEFAULT (datetime('now')),
+    updated_at  TEXT    DEFAULT (datetime('now')),
+    PRIMARY KEY (source_id, target_id, link_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_links_source ON node_links(source_id);
+CREATE INDEX IF NOT EXISTS idx_links_target ON node_links(target_id);
 """
+
+
+class _CompatRow:
+    """Turso tuple wrapper: supports both r[0] and r['col'] like sqlite3.Row."""
+
+    __slots__ = ('_cols', '_vals')
+
+    def __init__(self, cols: list[str], vals: tuple):
+        object.__setattr__(self, '_cols', cols)
+        object.__setattr__(self, '_vals', vals)
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            idx = self._cols.index(key)
+            return self._vals[idx]
+        return self._vals[key]
+
+    def __iter__(self):
+        return iter(self._vals)
+
+    def __len__(self):
+        return len(self._vals)
+
+    def keys(self):
+        return self._cols
 
 
 class KnowledgeGraph:
@@ -82,12 +121,24 @@ class KnowledgeGraph:
     # -- connection ---------------------------------------------------------
 
     def _connect(self) -> None:
-        if TURSO_AVAILABLE:
-            # Turso (libsql) — local file
-            self._conn = turso_connect(str(self._db_path))
+        db_str = str(self._db_path)
+        # Turso engine whenever pyturso is installed — ALSO for local files
+        # (embedded libSQL legge il formato SQLite): sblocca vector_distance_cos
+        # nativa in SQL invece del coseno in Python. Prima veniva usato solo per
+        # URL cloud, quindi il tier locale girava sempre su sqlite3 stdlib.
+        use_turso = TURSO_AVAILABLE
+        self._vector_sql = use_turso
+        if use_turso:
+            self._conn = turso_connect(db_str)
+            def _row_factory(cursor, row):
+                if cursor.description is None:
+                    return row
+                cols = [c[0] for c in cursor.description]
+                return _CompatRow(cols, row)
+            self._conn.row_factory = _row_factory
         else:
-            self._conn = sqlite3.connect(str(self._db_path))
-        self._conn.row_factory = sqlite3.Row
+            self._conn = sqlite3.connect(db_str)
+            self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
 
@@ -172,6 +223,32 @@ class KnowledgeGraph:
             (node_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def delete_node(self, node_id: int) -> int:
+        """Delete a node and its whole subtree — EXPLICIT bottom-up deletes.
+
+        Non si appoggia alle FK ``ON DELETE CASCADE``: pyturso 0.6.1 va in
+        stack overflow C sul trigger ricorsivo della cascade (audit
+        2026-07-20). Qui cancelliamo noi, foglie prima (ORDER BY path DESC),
+        per ogni id prima chunks e links poi la riga nodo — nessuna cascade
+        ricorsiva da innescare. Funziona identico sul tier sqlite3.
+        Ritorna quanti nodi sono stati rimossi (0 = id inesistente)."""
+        start = self.get_node(node_id)
+        if not start:
+            return 0
+        # get_descendants ordina per path ASC (genitori prima): invertito, ogni
+        # figlio ('P/x' > 'P') precede il suo genitore → mai un DELETE su un
+        # nodo che ha ancora figli, quindi la cascade FK non parte mai.
+        doomed = [d["id"] for d in reversed(self.get_descendants(node_id))]
+        doomed.append(node_id)                     # la radice per ultima
+        for nid in doomed:
+            self._conn.execute("DELETE FROM chunks WHERE node_id = ?", (nid,))
+            self._conn.execute(
+                "DELETE FROM node_links WHERE source_id = ? OR target_id = ?",
+                (nid, nid))
+            self._conn.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+        self._conn.commit()
+        return len(doomed)
 
     def get_descendants(self, node_id: int) -> list[dict]:
         """Breadth-first descendants via path prefix."""
@@ -269,6 +346,226 @@ class KnowledgeGraph:
             total += self.index_into_node(fp, node_id)
         return total
 
+    # -- node links ----------------------------------------------------------
+
+    def upsert_link(self, source_id: int, target_id: int,
+                    link_type: str, weight: float = 1.0,
+                    evidence: str = "") -> None:
+        """Insert or update a link between two nodes. Self-links are silently ignored."""
+        if source_id == target_id:
+            return
+        self._conn.execute("""
+            INSERT INTO node_links (source_id, target_id, link_type, weight, evidence, updated_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(source_id, target_id, link_type) DO UPDATE SET
+                weight = excluded.weight,
+                evidence = excluded.evidence,
+                updated_at = datetime('now')
+        """, (source_id, target_id, link_type, weight, evidence))
+        self._conn.commit()
+
+    def get_links(self, node_id: int, link_type: Optional[str] = None) -> list[dict]:
+        """All links for a node (outgoing + incoming), with connected node info."""
+        # Outgoing: node_id is source → "other" node is target
+        sql = """
+            SELECT nl.link_type, nl.weight, nl.evidence, nl.created_at, nl.updated_at,
+                   nl.source_id, nl.target_id,
+                   nl.target_id AS other_id,
+                   t.name AS other_name, t.node_type AS other_type,
+                   'out' AS direction
+            FROM node_links nl
+            JOIN nodes t ON t.id = nl.target_id
+            WHERE nl.source_id = ?
+        """
+        params: list = [node_id]
+        if link_type:
+            sql += " AND nl.link_type = ?"
+            params.append(link_type)
+
+        # Incoming: node_id is target → "other" node is source
+        sql += """
+            UNION
+            SELECT nl.link_type, nl.weight, nl.evidence, nl.created_at, nl.updated_at,
+                   nl.source_id, nl.target_id,
+                   nl.source_id AS other_id,
+                   s.name AS other_name, s.node_type AS other_type,
+                   'in' AS direction
+            FROM node_links nl
+            JOIN nodes s ON s.id = nl.source_id
+            WHERE nl.target_id = ?
+        """
+        params.append(node_id)
+        if link_type:
+            sql += " AND nl.link_type = ?"
+            params.append(link_type)
+
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def get_neighbors(self, node_id: int, depth: int = 1, limit: int = 10) -> list[dict]:
+        """D3 — structured neighborhood: BFS over parent, children and links up
+        to ``depth`` hops. Returns [{name, path, node_type, relation, distance}]
+        sorted by distance (closest first), self excluded, deduped. SQL-only:
+        no embedding involved, so it is cheap enough for every pulse."""
+        start = self.get_node(node_id)
+        if not start:
+            return []
+        seen = {node_id}
+        out: list[dict] = []
+        frontier = [(start, 0)]
+        for dist in range(1, max(1, min(depth, 3)) + 1):
+            nxt: list[tuple[dict, int]] = []
+            for node, _ in frontier:
+                hops: list[tuple[dict, str]] = []
+                if node.get("parent_id"):
+                    parent = self.get_node(node["parent_id"])
+                    if parent:
+                        hops.append((parent, "parent"))
+                hops += [(c, "child") for c in self.get_children(node["id"])]
+                for lk in self.get_links(node["id"]):
+                    other = self.get_node(lk["other_id"])
+                    if other:
+                        hops.append((other, f"link:{lk['link_type']}"))
+                for other, relation in hops:
+                    if other["id"] in seen:
+                        continue
+                    seen.add(other["id"])
+                    out.append({"name": other["name"], "path": other.get("path"),
+                                "node_type": other.get("node_type"),
+                                "relation": relation, "distance": dist})
+                    nxt.append((other, dist))
+                    if len(out) >= limit:
+                        return out
+            frontier = nxt
+            if not frontier:
+                break
+        return out
+
+    def get_link_graph(self) -> list[dict]:
+        """All links with source/target node info (for graph visualization)."""
+        rows = self._conn.execute("""
+            SELECT nl.*,
+                   s.name AS source_name, s.node_type AS source_type,
+                   t.name AS target_name, t.node_type AS target_type
+            FROM node_links nl
+            JOIN nodes s ON s.id = nl.source_id
+            JOIN nodes t ON t.id = nl.target_id
+            ORDER BY nl.weight DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+    def link_count(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM node_links").fetchone()[0]
+
+    def build_tag_links(self) -> int:
+        """Create tag_overlap links between nodes sharing tags. Returns link count added."""
+        # Single pass: build inverted index + tag cache
+        index: dict[str, set[int]] = {}
+        node_tags: dict[int, set[str]] = {}
+        for row in self._conn.execute(
+            "SELECT id, tags FROM nodes WHERE tags IS NOT NULL AND tags != '[]'"
+        ).fetchall():
+            tags = set(json.loads(row["tags"]))
+            node_tags[row["id"]] = tags
+            for tag in tags:
+                index.setdefault(tag, set()).add(row["id"])
+
+        added = 0
+        seen: set[tuple[int,int]] = set()
+        for tag, node_ids in index.items():
+            ids = sorted(node_ids)
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    pair = (ids[i], ids[j])
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                    tags_a = node_tags[ids[i]]
+                    tags_b = node_tags[ids[j]]
+                    shared = tags_a & tags_b
+                    union = tags_a | tags_b
+                    weight = len(shared) / len(union) if union else 0.0
+                    evidence = ",".join(sorted(shared))
+                    self.upsert_link(ids[i], ids[j], "tag_overlap", weight, evidence)
+                    added += 1
+        self._conn.commit()
+        return added
+
+    def build_crossref_links(self) -> int:
+        """Create cross_ref links between nodes sharing the same source file. Returns count."""
+        # Pre-fetch all chunk data in 2 queries
+        source_nodes: dict[str, set[int]] = {}
+        node_source_chunks: dict[tuple[int,str], int] = {}
+        for row in self._conn.execute(
+            "SELECT node_id, source, COUNT(*) AS cnt FROM chunks "
+            "WHERE source IS NOT NULL AND source != '' GROUP BY node_id, source"
+        ).fetchall():
+            source_nodes.setdefault(row["source"], set()).add(row["node_id"])
+            node_source_chunks[(row["node_id"], row["source"])] = row["cnt"]
+
+        node_total_chunks: dict[int, int] = {}
+        for row in self._conn.execute(
+            "SELECT node_id, COUNT(*) AS cnt FROM chunks GROUP BY node_id"
+        ).fetchall():
+            node_total_chunks[row["node_id"]] = row["cnt"]
+
+        added = 0
+        seen: set[tuple[int,int]] = set()
+        for source, node_ids in source_nodes.items():
+            ids = sorted(node_ids)
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    pair = (ids[i], ids[j])
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                    chunks_a = node_source_chunks.get((ids[i], source), 0)
+                    chunks_b = node_source_chunks.get((ids[j], source), 0)
+                    total_a = node_total_chunks.get(ids[i], 1)
+                    total_b = node_total_chunks.get(ids[j], 1)
+                    min_chunks = min(chunks_a, chunks_b)
+                    max_total = max(total_a, total_b) or 1
+                    weight = min_chunks / max_total
+                    self.upsert_link(ids[i], ids[j], "cross_ref", weight, source)
+                    added += 1
+        self._conn.commit()
+        return added
+
+    def rebuild_links(self) -> dict:
+        """Clear all links and rebuild from tags + cross-refs."""
+        self._conn.execute("DELETE FROM node_links")
+        self._conn.commit()
+        tag_count = self.build_tag_links()
+        xref_count = self.build_crossref_links()
+        return {"tag_overlap": tag_count, "cross_ref": xref_count, "total": tag_count + xref_count}
+
+    def search_with_links(self, query: str, top_k: int = 5) -> list[dict]:
+        """Search, then enrich each result with links to other result nodes."""
+        results = self.search(query, top_n=top_k)
+        if len(results) < 2:
+            return results
+
+        result_node_ids = {r["node_id"] for r in results}
+        # Collect all links between result nodes
+        inter_links: list[dict] = []
+        for r in results:
+            for link in self.get_links(r["node_id"]):
+                if link["other_id"] in result_node_ids and link["other_id"] != r["node_id"]:
+                    inter_links.append({
+                        "source_id": r["node_id"],
+                        "target_id": link["other_id"],
+                        "target_name": link["other_name"],
+                        "link_type": link["link_type"],
+                        "weight": link["weight"],
+                        "evidence": link["evidence"],
+                    })
+
+        for r in results:
+            r["links"] = [
+                l for l in inter_links
+                if l["source_id"] == r["node_id"] or l["target_id"] == r["node_id"]
+            ]
+        return results
+
     # -- search: semantic (embedder) or lexical (TF-IDF) --------------------
 
     def _get_embedding(self, text: str):
@@ -293,11 +590,28 @@ class KnowledgeGraph:
 
     def search(self, query: str, top_n: int = 5) -> list[dict]:
         """Rank chunks for a free-text query. Semantic when the embedder is on and
-        embeddings exist, else lexical TF-IDF. Returns chunk rows, best first."""
+        embeddings exist, else lexical TF-IDF. Returns chunk rows, best first.
+
+        Fast path (Turso engine): ranking interamente in SQL con
+        ``vector_distance_cos`` — niente full-scan dei blob in Python, scala
+        con l'indice invece che con O(N) per query. Fallback trasparente al
+        coseno Python (sqlite3 stdlib) o al lessicale (senza embedder)."""
+        qv = self._get_embedding(query)
+        if qv and getattr(self, "_vector_sql", False):
+            try:
+                rows = self._conn.execute(
+                    "SELECT id, node_id, text, source, section, chunk_index, "
+                    "1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS sim "
+                    "FROM chunks WHERE embedding IS NOT NULL "
+                    "ORDER BY sim DESC LIMIT ?",
+                    (self._pack_vec(qv), top_n)).fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except Exception:  # noqa: BLE001 — engine senza f32blob → path Python
+                pass
         rows = [dict(r) for r in self._conn.execute("SELECT * FROM chunks").fetchall()]
         if not rows:
             return []
-        qv = self._get_embedding(query)
         embedded = [r for r in rows if r.get("embedding")]
         if qv and embedded:
             scored = [(self._cosine_sim(qv, self._unpack_vec(r["embedding"])), r) for r in embedded]
@@ -332,7 +646,8 @@ class KnowledgeGraph:
         embedded = self._conn.execute(
             "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL"
         ).fetchone()[0]
-        engine = "turso" if TURSO_AVAILABLE else "sqlite3"
+        db_str = str(self._db_path)
+        engine = "turso" if getattr(self, "_vector_sql", False) else "sqlite"
         return {
             "engine": engine,
             "embedder": self._embedder.name,
@@ -340,6 +655,7 @@ class KnowledgeGraph:
             "nodes": node_count,
             "chunks": chunk_count,
             "embedded": embedded,
+            "links": self.link_count(),
             "embedding_dim": 384,
         }
 

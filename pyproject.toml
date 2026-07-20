@@ -9,14 +9,18 @@ keywords = ["mcp", "rag", "knowledge-base", "vector-search", "turso"]
 
 dependencies = [
     "mcp>=1.28.0,<2.0",
-    # Turso is mandatory (same store engine as Neuron). Pinned exactly to match
-    # the prebuilt win_amd64 wheels in Neuron/vendor: there is no PyPI wheel for
-    # pyturso on Windows, so a loose ">=" would silently compile from Rust. Bump
-    # this together with Neuron's pin and release.yml.
-    "pyturso==0.6.1",
+    # NIENTE pyturso qui (decisione 2026-07-20): db.py è progettato a 3 tier
+    # (turso → sqlite3 → lessicale) e un pin hard lo contraddiceva — su un
+    # checkout Windows senza le wheel vendored (che vivono in Neuron/vendor,
+    # fonte unica) l'install COMPILAVA da Rust e falliva. Ora l'install base
+    # funziona ovunque sul tier sqlite3; il tier turso si attiva con l'extra
+    # [turso] — l'installer canonico lo tenta best-effort dal vendor/PyPI.
 ]
 
 [project.optional-dependencies]
+# Pin esatto = stesso motivo di Neuron: match con le wheel win_amd64 vendored.
+# Bump insieme al pin di Neuron e a release.yml.
+turso = ["pyturso==0.6.1"]
 dev = ["pytest>=8.0"]
 pdf = ["PyMuPDF>=1.24.0"]
 docx = ["python-docx>=1.1.0"]

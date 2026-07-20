@@ -130,12 +130,55 @@ async def list_tools() -> list[Tool]:
             description="Structural audit of the vault: broken hierarchy, tiny/empty chunks, duplicate names (serious) + orphan nodes, chunks without source, nodes without triggers (warnings). Read-only — flags, never deletes.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="knowledge_link_graph",
+            description="Show all node links (tag_overlap, cross_ref) with weights and evidence.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="knowledge_rebuild_links",
+            description="Clear all links and rebuild from tags + cross-refs. Returns count of links created.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="knowledge_neighbors",
+            description="D3 — structured neighborhood of a node, resolved from a query (trigger match, then exact name). BFS over parent/children/links up to `depth` hops. JSON: {node, neighbors:[{name, path, node_type, relation, distance}]}. Empty node = no match. Cheap (SQL-only) — built for Gray Matter's proactive-knowledge pulse.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Topic/keyword to resolve to a node (trigger match first, exact name second)"},
+                    "depth": {"type": "integer", "description": "Hops (1-3, default 2)", "default": 2},
+                    "limit": {"type": "integer", "description": "Max neighbors (default 5)", "default": 5},
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     db = _get_db()
+
+    if name == "knowledge_neighbors":
+        import json as _json
+        query = " ".join(str(arguments.get("query", "")).split())[:200]
+        if not query:
+            return [TextContent(type="text", text=_json.dumps({"node": None, "neighbors": []}))]
+        node = db.find_node_by_trigger(query) or db.get_node_by_name(query)
+        if not node:  # fallback: try single words of a multi-word topic
+            for w in query.split():
+                node = db.find_node_by_trigger(w) or db.get_node_by_name(w)
+                if node:
+                    break
+        if not node:
+            return [TextContent(type="text", text=_json.dumps({"node": None, "neighbors": []}))]
+        depth = min(max(int(arguments.get("depth", 2)), 1), 3)
+        limit = min(max(int(arguments.get("limit", 5)), 1), 20)
+        neigh = db.get_neighbors(node["id"], depth=depth, limit=limit)
+        return [TextContent(type="text", text=_json.dumps(
+            {"node": {"name": node["name"], "path": node.get("path")},
+             "neighbors": neigh}, ensure_ascii=False))]
 
     if name == "knowledge_index":
         path = Path(arguments["path"])
@@ -178,17 +221,27 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if not node:
             return [TextContent(type="text", text=f"Node '{node_name}' not found.")]
         chunks = arguments["chunks"]
-        count = 0
+        count, skipped = 0, 0
         for c in chunks:
+            # F4 (ingest validation) — reject junk at the door: non-dict, missing
+            # or whitespace-only text. Short-but-real chunks stay (code lines are
+            # legitimately short); emptiness is the only objective junk signal.
+            text = (c.get("text") or "").strip() if isinstance(c, dict) else ""
+            if not text:
+                skipped += 1
+                continue
             db.add_chunk(
                 node_id=node["id"],
-                text=c["text"],
+                text=text,
                 source=c.get("source"),
                 section=c.get("section"),
                 chunk_index=c.get("chunk_index", 0),
             )
             count += 1
-        return [TextContent(type="text", text=f"Attached {count} chunks to '{node_name}'.")]
+        msg = f"Attached {count} chunks to '{node_name}'."
+        if skipped:
+            msg += f" Skipped {skipped} empty/invalid."
+        return [TextContent(type="text", text=msg)]
 
     if name == "knowledge_query":
         query = arguments["query"]
@@ -229,6 +282,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "knowledge_health":
         return [TextContent(type="text", text=json.dumps(db.health(), indent=2))]
 
+    if name == "knowledge_link_graph":
+        graph = db.get_link_graph()
+        if not graph:
+            return [TextContent(type="text", text="No links. Run knowledge_rebuild_links first.")]
+        lines = []
+        for l in graph:
+            lines.append(f"{l['source_name']} --[{l['link_type']}, w={l['weight']:.2f}]--> {l['target_name']}")
+            if l.get("evidence"):
+                lines.append(f"  evidence: {l['evidence']}")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    if name == "knowledge_rebuild_links":
+        result = db.rebuild_links()
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -242,6 +310,8 @@ def main() -> None:
         "knowledge_status",
         "knowledge_tree",
         "knowledge_health",
+        "knowledge_link_graph",
+        "knowledge_rebuild_links",
     ]
 
     # Gray-Matter auto-registration (non-blocking)
