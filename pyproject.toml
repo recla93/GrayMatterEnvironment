@@ -1,6 +1,6 @@
 [project]
 name = "neurag"
-version = "0.2.0"
+version = "0.3.0"
 description = "Standalone MCP RAG server: hierarchical knowledge graph on Turso/SQLite with pluggable embeddings"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }
