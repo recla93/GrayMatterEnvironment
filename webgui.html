@@ -85,6 +85,20 @@
   <main>
     <div class="cards">
       <div class="card">
+        <div class="ct">🧭 Setup</div>
+        <div class="cs">installer wizard</div>
+        <div class="st"><span class="dot" id="setDot"></span><span id="setTxt">—</span></div>
+        <div class="row" style="align-items:center">
+          <label style="font-size:12px"><input type="checkbox" id="setNeuron" checked> Neuron</label>
+          <label style="font-size:12px"><input type="checkbox" id="setNeurag" checked> NeuRAG</label>
+          <button onclick="setupRun(true)">Preview</button>
+          <button class="accent" onclick="setupRun(false)">Install</button>
+          <button onclick="call('setup_test')">Test</button>
+          <button onclick="togglePrefs()">Prefs…</button>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="ct">◆ Orchestrator</div>
         <div class="cs">gray-matter</div>
         <div class="st"><span class="dot" id="gmDot"></span><span id="gmTxt">—</span></div>
@@ -136,6 +150,7 @@
         <div class="lbl">Setup</div>
         <div class="item" onclick="wizRegister()">Register in clients</div>
         <div class="item" onclick="toggleTurso()">Turso setup…</div>
+        <div class="item" onclick="togglePrefs()">Preferences…</div>
         <div class="lbl">Session</div>
         <div class="item" onclick="copyLog()">Copy log</div>
         <div class="item" onclick="call('clear_log').then(()=>logEl.textContent='')">Clear log</div>
@@ -154,6 +169,16 @@
               <button onclick="tursoTest()">Test</button>
               <button id="tSave" class="accent" disabled onclick="tursoSave()">Save</button>
               <button onclick="toggleTurso()">Close</button>
+            </span>
+          </div>
+        </div>
+        <div class="turso" id="prefsForm" style="display:none">
+          <div id="prefsRows"></div>
+          <div class="trow">
+            <span class="tstatus">Applied on the next daemon restart (Stop/Start).</span>
+            <span>
+              <button class="accent" onclick="prefsSave()">Save</button>
+              <button onclick="togglePrefs()">Close</button>
             </span>
           </div>
         </div>
@@ -276,6 +301,59 @@ async function toggleNet(){
   refreshNet();
 }
 
+async function togglePrefs(){
+  const f = document.getElementById('prefsForm');
+  if(f.style.display !== 'none'){ f.style.display = 'none'; return; }
+  const r = await call('setup_prefs_get');
+  if(!r || !r.prefs){ return; }
+  const box = document.getElementById('prefsRows');
+  box.innerHTML = '';
+  for(const [k, v] of Object.entries(r.prefs)){
+    const row = document.createElement('div'); row.className = 'trow';
+    const lab = document.createElement('label'); lab.textContent = k;
+    row.appendChild(lab);
+    let inp;
+    if(typeof v === 'boolean'){
+      inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = v;
+    }else{
+      inp = document.createElement('input'); inp.type = 'text'; inp.value = v;
+      inp.autocomplete = 'off'; inp.spellcheck = false;
+    }
+    inp.id = 'pref_' + k; inp.dataset.key = k;
+    inp.dataset.kind = typeof v;
+    row.appendChild(inp);
+    box.appendChild(row);
+  }
+  f.style.display = '';
+}
+
+async function prefsSave(){
+  const prefs = {};
+  for(const inp of document.querySelectorAll('#prefsRows input')){
+    prefs[inp.dataset.key] = (inp.dataset.kind === 'boolean') ? inp.checked : inp.value;
+  }
+  const r = await call('setup_prefs_set', {prefs});
+  if(r && r.ok) togglePrefs();
+}
+
+async function setupRun(dry){
+  const comps = [];
+  if(document.getElementById('setNeuron').checked) comps.push('neuron');
+  if(document.getElementById('setNeurag').checked) comps.push('neurag');
+  await call('setup_run', {components: comps, dry_run: !!dry});
+}
+
+async function refreshSetup(){
+  const s = await call('setup_state');
+  if(!s || !s.peers) return;
+  const inst = s.peers.filter(p => p.installed).length;
+  setDot('setDot', s.manifest ? 'ok' : 'warn');
+  document.getElementById('setTxt').textContent =
+    inst + '/' + s.peers.length + ' tools · ' +
+    (s.manifest ? 'gateway installed' : 'not installed yet') +
+    (s.clients && s.clients.length ? ' · ' + s.clients.length + ' clients' : '');
+}
+
 async function refreshEco(){
   const r = await call('eco_status');
   const box = document.getElementById('ecoBox');
@@ -340,6 +418,7 @@ async function refresh(){
   showStatus(s);
   await refreshNet();
   await refreshEco();
+  await refreshSetup();
   const anyOk = s && s.running;
   setDot('hdrDot', anyOk ? 'ok' : 'warn');
   document.getElementById('hdrTxt').textContent = anyOk ? 'orchestrator online' : 'orchestrator offline';

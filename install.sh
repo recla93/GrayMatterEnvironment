@@ -60,13 +60,39 @@ if [ -z "${GM_NO_NEURAG:-}" ] && [ -d "$ROOT/neurag" ]; then
     # shellcheck disable=SC2086
     "$VPY" -m pip install $FINDLINKS "$ROOT/neurag"
 fi
+# Launched from a standalone tool repo (Neuron-only / NeuRAG-only download):
+# the thin per-repo installer points GM_PEER_DIR at itself — install it too.
+if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
+    echo "Installing $(basename "$GM_PEER_DIR")..."
+    [ -d "$GM_PEER_DIR/Neuron/vendor" ] && FINDLINKS="--find-links $GM_PEER_DIR/Neuron/vendor"
+    [ -d "$GM_PEER_DIR/vendor" ] && FINDLINKS="--find-links $GM_PEER_DIR/vendor"
+    # shellcheck disable=SC2086
+    "$VPY" -m pip install $FINDLINKS "$GM_PEER_DIR"
+fi
 
-echo "Registering installed servers in your MCP clients..."
-"$VPY" -m gray_matter.cli register || true
+# Best-effort turso tier: prova le wheel vendored (Neuron/vendor o vendor del
+# peer), poi PyPI (mac/linux le ha). Se fallisce NON è un errore: NeuRAG e
+# Neuron degradano al tier sqlite3 e funzionano comunque.
+if ! "$VPY" -c "import turso" >/dev/null 2>&1; then
+    echo "Enabling the Turso vector tier (best-effort)..."
+    # shellcheck disable=SC2086
+    "$VPY" -m pip install $FINDLINKS "pyturso==0.6.1" \
+        || echo "  pyturso not available here — running on the sqlite3 tier (still fully functional)."
+fi
+
+# Gateway model (INSTALLER-UX): register ONLY gray-matter, deploy hooks, manifest.
+echo "Installing the gateway (register + hooks + manifest)..."
+"$VPY" -m gray_matter.cli install || "$VPY" -m gray_matter.cli register || true
 
 # Convenience: put `gray-matter` on PATH if ~/.local/bin exists.
 if [ -x "$VENV/bin/gray-matter" ] && [ -d "$HOME/.local/bin" ]; then
     ln -sf "$VENV/bin/gray-matter" "$HOME/.local/bin/gray-matter" 2>/dev/null || true
+fi
+
+# Desktop shortcut to the control center (double-clickable on macOS & most Linux).
+if [ -d "$HOME/Desktop" ]; then
+    SC="$HOME/Desktop/Gray-Matter-GUI.command"
+    printf '#!/bin/sh\nexec "%s" -m gray_matter.cli gui\n' "$VPY" > "$SC" && chmod +x "$SC" || true
 fi
 
 echo "Done. Restart your AI apps to load the servers."

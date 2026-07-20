@@ -9,11 +9,13 @@ keywords = ["mcp", "orchestrator", "proxy"]
 
 dependencies = [
     "mcp>=1.28.0,<2.0",
+    "neuron",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 gui = ["pywebview>=5.0"]
+rag = ["neurag"]
 
 [project.scripts]
 gray-matter = "gray_matter.cli:main"

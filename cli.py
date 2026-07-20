@@ -78,6 +78,9 @@ def cmd_doctor() -> None:
         collab = "collab" if s.get("collaborative") else "ISOLATED"
         worker = "worker+" if s.get("worker") else "worker-"
         print(f"  [{mark}] {s['name']} ({s.get('status')}, {collab}) {worker}")
+    if r.get("neurag_engine") == "sqlite":
+        print("  [!!] NeuRAG vector tier DEGRADED (sqlite3, Python cosine) — "
+              "full tier: pip install neurag[turso]  (wheels in Neuron/vendor)")
 
 
 def cmd_config(action: str, key: str = "", value: str = "") -> None:
@@ -240,6 +243,61 @@ def cmd_bridges() -> None:
         print(f"  [w={b.get('weight', 1)}] {b['neuron']} <-> {b['neurag']}{rat}")
 
 
+_KNOWLEDGE_TOOLS = {
+    "status": "knowledge_status",
+    "rebuild-links": "knowledge_rebuild_links",
+    "link-graph": "knowledge_link_graph",
+}
+
+
+def cmd_knowledge(subcmd: str) -> None:
+    tool = _KNOWLEDGE_TOOLS.get(subcmd)
+    if not tool:
+        print(f"Unknown knowledge subcommand: {subcmd}")
+        print(f"Available: {', '.join(_KNOWLEDGE_TOOLS)}")
+        sys.exit(1)
+    r = _send_ipc({"action": "knowledge_cmd", "tool": tool, "args": {}})
+    if "error" in r:
+        print(f"Error: {r['error']}")
+        sys.exit(1)
+    if "text" in r:
+        print(r["text"])
+    elif "result" in r:
+        print(r["result"])
+
+
+def cmd_gm_neuron(tool: str, args_json: str) -> None:
+    """Call a Neuron tool via Gray Matter orchestrator."""
+    try:
+        tool_args = json.loads(args_json) if args_json else {}
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON args: {e}")
+        sys.exit(1)
+    r = _send_ipc({"action": "gm-neuron", "tool": tool, "args": tool_args})
+    if "error" in r:
+        print(f"[gm-neuron] {tool} -> error: {r['error']}")
+        sys.exit(1)
+    if "result" in r:
+        result = r["result"].strip() if isinstance(r["result"], str) else str(r["result"])
+        print(f"[gm-neuron] {tool} -> {result}")
+
+
+def cmd_gm_neurag(tool: str, args_json: str) -> None:
+    """Call a NeuRAG tool via Gray Matter orchestrator."""
+    try:
+        tool_args = json.loads(args_json) if args_json else {}
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON args: {e}")
+        sys.exit(1)
+    r = _send_ipc({"action": "gm-neurag", "tool": tool, "args": tool_args})
+    if "error" in r:
+        print(f"[gm-neurag] {tool} -> error: {r['error']}")
+        sys.exit(1)
+    if "result" in r:
+        result = r["result"].strip() if isinstance(r["result"], str) else str(r["result"])
+        print(f"[gm-neurag] {tool} -> {result}")
+
+
 def main() -> None:
     import json
     parser = argparse.ArgumentParser(description="Gray-Matter control")
@@ -272,6 +330,18 @@ def main() -> None:
     sub.add_parser("bridges", help="List persisted cross-store bridges")
     sub.add_parser("stats", help="Orchestrator counters: cache hit rate, flashes, bridges, latency")
     sub.add_parser("doctor", help="Health snapshot: servers, workers, cache, bridges")
+
+    kn_p = sub.add_parser("knowledge", help="NeuRAG knowledge base management")
+    kn_p.add_argument("subcmd", choices=["status", "rebuild-links", "link-graph"],
+                       help="status=show nodes/chunks/links, rebuild-links= wipe+rebuild, link-graph= show graph")
+
+    gm_nrn = sub.add_parser("gm-neuron", help="Call a Neuron tool via Gray Matter")
+    gm_nrn.add_argument("tool", help="Neuron tool name (e.g. pre_turn, store_turn, get_context)")
+    gm_nrn.add_argument("args", nargs="?", default="{}", help="JSON arguments for the tool")
+
+    gm_nrg = sub.add_parser("gm-neurag", help="Call a NeuRAG tool via Gray Matter")
+    gm_nrg.add_argument("tool", help="NeuRAG tool name (e.g. knowledge_query, knowledge_status)")
+    gm_nrg.add_argument("args", nargs="?", default="{}", help="JSON arguments for the tool")
 
     cfg_p = sub.add_parser("config", help="Get/set tunable knobs (flash rate, cache TTL, prewarm, ...)")
     cfg_p.add_argument("action", choices=["get", "set", "list"])
@@ -314,6 +384,12 @@ def main() -> None:
         cmd_doctor()
     elif args.command == "config":
         cmd_config(args.action, args.key, args.value)
+    elif args.command == "knowledge":
+        cmd_knowledge(args.subcmd)
+    elif args.command == "gm-neuron":
+        cmd_gm_neuron(args.tool, args.args)
+    elif args.command == "gm-neurag":
+        cmd_gm_neurag(args.tool, args.args)
 
 
 if __name__ == "__main__":

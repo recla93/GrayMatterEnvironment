@@ -20,10 +20,18 @@ class ContextCache:
     bounds staleness; writes invalidate only the affected entries.
     """
 
+    # Dynamic TTL (D-roadmap §2): a topic that keeps getting hits is "hot" and
+    # earns a longer life; cold topics keep the base TTL. Bounded at 3x.
+    # ponytail: linear +50% per hit capped at 3x — tune only if stats say so.
+    _HOT_STEP, _HOT_CAP = 0.5, 3.0
+
     def __init__(self, max_size: int = 100, ttl: float = 60.0):
         self._max_size = max_size
         self._ttl = ttl
-        self._data: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self._data: OrderedDict[str, tuple[float, str, int]] = OrderedDict()
+
+    def _ttl_for(self, hits: int) -> float:
+        return self._ttl * min(self._HOT_CAP, 1.0 + self._HOT_STEP * hits)
 
     def get(self, topic: str) -> Optional[str]:
         """Return cached response if present and not expired."""
@@ -31,15 +39,18 @@ class ContextCache:
         entry = self._data.get(topic)
         if entry is None:
             return None
-        timestamp, response = entry
-        if now - timestamp > self._ttl:
+        timestamp, response, hits = entry
+        if now - timestamp > self._ttl_for(hits):
             del self._data[topic]
             return None
+        self._data[topic] = (timestamp, response, hits + 1)
         self._data.move_to_end(topic)
         return response
 
     def set(self, topic: str, response: str) -> None:
-        self._data[topic] = (time.time(), response)
+        # keep the hit count across refreshes so a hot topic stays hot
+        hits = self._data[topic][2] if topic in self._data else 0
+        self._data[topic] = (time.time(), response, hits)
         self._data.move_to_end(topic)
         while len(self._data) > self._max_size:
             self._data.popitem(last=False)

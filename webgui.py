@@ -229,12 +229,12 @@ class Api:
             })
         return {"peers": peers}
 
-    def eco_install(self, args: str = "") -> dict:
-        """Install a peer: editable from the sibling folder, else git clone it."""
-        key = json.loads(args or "{}").get("key", "")
+    def _peer_steps(self, key: str) -> "list[list[str]] | None":
+        """Command steps that install a peer: editable from the sibling folder,
+        else git clone + editable. None = impossible (no git, no sibling)."""
         p = _PEERS.get(key)
         if not p:
-            return {"ok": False, "error": "unknown peer"}
+            return None
         sib = _ENV_ROOT / p["dir"]
         # Turso is mandatory and pyturso has NO PyPI win_amd64 wheel: point pip
         # at the prebuilt wheels in Neuron/vendor so it never compiles from Rust.
@@ -243,13 +243,90 @@ class Api:
         if vendor.is_dir():
             pip += ["--find-links", str(vendor)]
         if sib.is_dir():
-            steps = [pip]
-        elif shutil.which("git"):
-            steps = [["git", "clone", p["git"], str(sib)], pip]
-        else:
-            self._emit("[!] git not found and no sibling folder — cannot install.", "err")
-            return {"ok": False, "error": "no git, no sibling"}
+            return [pip]
+        if shutil.which("git"):
+            return [["git", "clone", p["git"], str(sib)], pip]
+        return None
+
+    def eco_install(self, args: str = "") -> dict:
+        """Install a peer: editable from the sibling folder, else git clone it."""
+        key = json.loads(args or "{}").get("key", "")
+        steps = self._peer_steps(key)
+        if steps is None:
+            self._emit("[!] unknown peer, or git not found and no sibling folder.", "err")
+            return {"ok": False, "error": "cannot install"}
         return self._run_seq(steps, display=f"install {key}")
+
+    # -- setup wizard --------------------------------------------------------
+
+    def setup_state(self, _args: str = "") -> dict:
+        """Everything the Setup card needs: peers, manifest, detected clients."""
+        out = {"peers": self.eco_status()["peers"]}
+        try:
+            from gray_matter import executor, paths
+            st = executor.detect_state()
+            out.update({"manifest": paths.manifest_path().exists(),
+                        "clients": st.get("clients", []),
+                        "orphans": len(st.get("orphan_pids", []))})
+        except Exception as exc:  # noqa: BLE001
+            out["error"] = str(exc)
+        return out
+
+    def setup_run(self, args: str = "") -> dict:
+        """The wizard's Install: pip-install the selected missing peers, then
+        `gray-matter install` (gateway registration + hooks + manifest).
+        dry_run previews the gateway part without touching anything."""
+        a = json.loads(args or "{}")
+        dry = bool(a.get("dry_run"))
+        installed = {p["key"]: p["installed"] for p in self.eco_status()["peers"]}
+        steps: list[list[str]] = []
+        for key in a.get("components") or []:
+            if installed.get(key):
+                continue
+            peer = self._peer_steps(key)
+            if peer is None:
+                self._emit(f"[!] cannot install '{key}' (no sibling, no git) — skipping.", "err")
+                continue
+            if not dry:
+                steps += peer
+        steps.append([_python(), "-m", "gray_matter.cli", "install"]
+                     + (["--dry-run"] if dry else []))
+        return self._run_seq(steps, display="setup preview" if dry else "setup install")
+
+    def setup_prefs_get(self, _args: str = "") -> dict:
+        """Current settings (DEFAULTS + user overrides) for the wizard's prefs."""
+        try:
+            from gray_matter import settings
+            return {"prefs": settings.load(), "defaults": settings.DEFAULTS}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    def setup_prefs_set(self, args: str = "") -> dict:
+        """Save wizard prefs: only known keys, type-coerced by settings.set.
+        Effective on the next daemon (re)start — like `gray-matter config set`."""
+        try:
+            from gray_matter import settings
+            saved, errors = [], []
+            for k, v in (json.loads(args or "{}").get("prefs") or {}).items():
+                try:
+                    settings.set(k, v)
+                    saved.append(k)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{k}: {exc}")
+            self._emit(f"[prefs] saved: {', '.join(saved) or '-'}"
+                       + (f" | errors: {'; '.join(errors)}" if errors else ""),
+                       "err" if errors else "ok")
+            if saved:
+                self._emit("[prefs] restart the daemon (Stop/Start) to apply.", "")
+            return {"ok": not errors, "saved": saved, "errors": errors}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    def setup_test(self, _args: str = "") -> dict:
+        """The wizard's Test: daemon reachability + full health snapshot."""
+        return self._run_seq([[_python(), "-m", "gray_matter.cli", "ping"],
+                              [_python(), "-m", "gray_matter.cli", "doctor"]],
+                             display="setup test")
 
     def _run_seq(self, steps: "list[list[str]]", *, display: str = "") -> dict:
         """Run several commands in sequence in one thread, stopping on failure."""

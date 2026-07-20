@@ -153,6 +153,19 @@ _ctx_cache = ContextCache(max_size=_cfg["cache_max_size"], ttl=_cfg["cache_ttl_s
 _stats: dict[str, float] = {"pulses": 0, "cache_hits": 0, "cache_misses": 0,
                             "flashes": 0, "bridges_added": 0, "pulse_ms_total": 0.0}
 
+# D4 — conversation buffer: gli ultimi topic della sessione. Ogni pulse espande
+# la query NeuRAG col contesto recente (recall migliore su domande incrementali);
+# Neuron non ne ha bisogno (ha già la sua context window interna).
+from collections import deque as _deque
+_topic_buffer: "_deque[str]" = _deque(maxlen=3)
+
+
+def _remember_topic(topic: str) -> None:
+    if topic in _topic_buffer:          # ri-chiesto → torna in cima
+        _topic_buffer.remove(topic)
+    _topic_buffer.append(topic)
+
+
 # Flash v1: fire on a topic shift (serendipity at transitions), rate-limited.
 _last_topic: str = ""
 _flashed: set = set()          # concepts already flashed this session (cooldown)
@@ -260,6 +273,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         top_n = min(max(int(arguments.get("top_n", 5)), 1), 10)
         _t0 = time.monotonic()
         _stats["pulses"] += 1
+        _remember_topic(topic)   # D4: conversation buffer (anche sui cache hit)
 
         # Cache hit? (one shared cache — see _ctx_cache)
         cached = _ctx_cache.get(topic)
@@ -277,13 +291,32 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         neurag = _registry.get_server("neurag")
         if neurag and neurag.is_alive() and neurag.collaborative:
-            tasks.append(_call_server_async("neurag", "knowledge_query", {"query": topic, "top_n": top_n})); labels.append("neurag")
+            # D4 — multi-turn RAG: espandi la query NeuRAG con i topic recenti
+            # (Neuron ha già la sua context window; la cache resta keyed sul
+            # topic puro, quindi l'espansione non inquina i cache hit).
+            recent = [t for t in _topic_buffer if t != topic]
+            rag_query = topic + (" " + " ".join(recent) if recent else "")
+            tasks.append(_call_server_async("neurag", "knowledge_query", {"query": rag_query[:300], "top_n": top_n})); labels.append("neurag")
 
         if not tasks:
             return [TextContent(type="text", text="No servers available for pulse.")]
 
         # Parallel execution
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Auto-build cross-links once: if NeuRAG has nodes but zero links,
+        # rebuild so future queries get link enrichment. One-shot per session.
+        global _neurag_links_built
+        if not _neurag_links_built and "neurag" in labels:
+            try:
+                status_raw = await _call_server_async("neurag", "knowledge_status", {})
+                import json as _json
+                ns = _json.loads(status_raw) if isinstance(status_raw, str) else status_raw
+                if ns.get("links", 0) == 0 and ns.get("nodes", 0) > 1:
+                    await _call_server_async("neurag", "knowledge_rebuild_links", {})
+            except Exception:  # noqa: BLE001
+                pass
+            _neurag_links_built = True
 
         context_parts = []
         neurag_hit = False
@@ -313,6 +346,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                                              {"keywords": promoted, "confidence": 0.5})
                 except Exception:  # noqa: BLE001
                     pass
+
+        # D3 — knowledge proattiva: vicini strutturati del nodo NeuRAG matchato
+        # (parent/children/links, depth 2) non già presenti nella risposta.
+        # JSON dal tool knowledge_neighbors: niente parsing di prosa (anti-F15).
+        if neurag_hit:
+            try:
+                import json as _json
+                raw = await _call_server_async(
+                    "neurag", "knowledge_neighbors",
+                    {"query": topic, "depth": 2, "limit": 5})
+                data = _json.loads(raw)
+                fresh = [n["name"] for n in data.get("neighbors", [])
+                         if n.get("name") and n["name"].lower() not in response.lower()][:3]
+                if fresh:
+                    response += "\n\n💡 Potrebbe interessarti: " + ", ".join(fresh)
+            except Exception:  # noqa: BLE001 — proattiva = best-effort, mai bloccare la pulse
+                pass
 
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
         flash_note, concept = await _maybe_flash(topic)
@@ -367,6 +417,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 _workers: dict = {}          # server_name -> Popen
 _worker_locks: dict = {}     # server_name -> asyncio.Lock (serialize the shared pipe)
 _prewarmed: set = set()      # servers already warmed (D2), so we warm each once
+_neurag_links_built: bool = False  # auto-build links once when links=0 and nodes>1
 
 # Cheap read fired to warm a worker: spawns the subprocess (pays the import) and
 # loads the model (Neuron's fastembed) BEFORE the first real pulse, so that pulse
@@ -592,21 +643,32 @@ def _build_stats() -> dict:
     }
 
 
-def _build_doctor() -> dict:
-    """Health snapshot: servers, workers, cache, bridges."""
+async def _build_doctor() -> dict:
+    """Health snapshot: servers, workers, cache, bridges (+ vector tier NeuRAG)."""
     from gray_matter.bridges import all_bridges
     servers = [{
         "name": s.name, "status": s.status, "alive": s.is_alive(),
         "collaborative": s.collaborative,
         "worker": s.name in _workers and _workers[s.name].poll() is None,
     } for s in _registry.all_servers()]
-    return {
+    out = {
         "version": __version__,
         "sleeping": _is_sleeping,
         "servers": servers,
         "cache_size": _ctx_cache.size(),
         "bridges_total": len(all_bridges()),
     }
+    # Degradato mai silenzioso (nota Claudio 2026-07-20): se NeuRAG gira sul
+    # tier sqlite3 (niente pyturso → coseno in Python), il doctor deve dirlo.
+    neurag = _registry.get_server("neurag")
+    if neurag and neurag.is_alive():
+        try:
+            import json as _json
+            raw = await _call_server_async("neurag", "knowledge_status", {})
+            out["neurag_engine"] = _json.loads(raw).get("engine", "?")
+        except Exception:  # noqa: BLE001 — best-effort, il doctor non deve rompersi
+            pass
+    return out
 
 
 def _norm(s: str) -> str:
@@ -750,7 +812,37 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     elif action == "stats":
                         response = _build_stats()
                     elif action == "doctor":
-                        response = _build_doctor()
+                        response = await _build_doctor()
+                    elif action == "knowledge_cmd":
+                        tool_name = msg.get("tool", "knowledge_status")
+                        tool_args = msg.get("args", {})
+                        try:
+                            result = await _call_server_async("neurag", tool_name, tool_args)
+                            response = {"result": result}
+                        except Exception as e:
+                            response = {"error": str(e)}
+                    elif action == "gm-neuron":
+                        tool_name = msg.get("tool")
+                        tool_args = msg.get("args", {})
+                        if not tool_name:
+                            response = {"error": "Missing 'tool' parameter"}
+                        else:
+                            try:
+                                result = await _call_server_async("neuron", tool_name, tool_args)
+                                response = {"result": result}
+                            except Exception as e:
+                                response = {"error": str(e)}
+                    elif action == "gm-neurag":
+                        tool_name = msg.get("tool")
+                        tool_args = msg.get("args", {})
+                        if not tool_name:
+                            response = {"error": "Missing 'tool' parameter"}
+                        else:
+                            try:
+                                result = await _call_server_async("neurag", tool_name, tool_args)
+                                response = {"result": result}
+                            except Exception as e:
+                                response = {"error": str(e)}
                     elif action == "shutdown":
                         response = {"status": "ok"}
                         # Graceful shutdown

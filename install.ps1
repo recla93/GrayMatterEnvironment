@@ -48,9 +48,38 @@ if (-not $env:GM_NO_NEURAG -and (Test-Path (Join-Path $Root "neurag"))) {
     Write-Host "Installing NeuRAG..."
     & $VPy -m pip install @Find (Join-Path $Root "neurag")
 }
+# Launched from a standalone tool repo (Neuron-only / NeuRAG-only download):
+# the thin per-repo installer points GM_PEER_DIR at itself — install it too.
+if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml"))) {
+    Write-Host "Installing $(Split-Path -Leaf $env:GM_PEER_DIR)..."
+    foreach ($v in @("Neuron\vendor", "vendor")) {
+        $vd = Join-Path $env:GM_PEER_DIR $v
+        if (Test-Path $vd) { $Find = @("--find-links", $vd) }
+    }
+    & $VPy -m pip install @Find $env:GM_PEER_DIR
+}
 
-Write-Host "Registering installed servers in your MCP clients..."
-& $VPy -m gray_matter.cli register
+# Best-effort turso tier: wheel vendored (Neuron\vendor o vendor del peer),
+# altrimenti PyPI. Se fallisce NON blocca: si degrada al tier sqlite3.
+& $VPy -c "import turso" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Enabling the Turso vector tier (best-effort)..."
+    & $VPy -m pip install @Find "pyturso==0.6.1"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  pyturso not available here - running on the sqlite3 tier (still fully functional)."
+    }
+}
+
+# Gateway model (INSTALLER-UX): register ONLY gray-matter, deploy hooks, manifest.
+Write-Host "Installing the gateway (register + hooks + manifest)..."
+try { & $VPy -m gray_matter.cli install } catch { & $VPy -m gray_matter.cli register }
+
+# Desktop shortcut to the control center.
+$Desk = [Environment]::GetFolderPath("Desktop")
+if ($Desk) {
+    Set-Content -Path (Join-Path $Desk "Gray Matter GUI.cmd") `
+        -Value "@`"$VPy`" -m gray_matter.cli gui" -Encoding ASCII
+}
 
 Write-Host "Done. Restart your AI apps to load the servers."
 Write-Host "Control center any time:  $VPy -m gray_matter.cli gui"
