@@ -46,6 +46,8 @@ HELP_IT = {
     ("gray-matter", "uninstall"): "Rimuove Gray Matter dai client. Chiede cosa fare della memoria (si apre in un terminale).",
     ("gray-matter", "repair"):    "Reinstall pulito: scegli cosa cancellare (memoria, knowledge, bridges, config, registrazioni) e cosa tenere, poi reinstalla forzato bypassando il check di versione.",
     ("gray-matter", "start"):     "Avvia il daemon Gray Matter in background.",
+    ("neuron", "uninstall"):      "Deregistra Neuron dai client AI e opzionalmente cancella il database dei ricordi.",
+    ("neurag", "uninstall"):      "Deregistra NeuRAG dai client AI e opzionalmente cancella il database della conoscenza.",
     ("gray-matter", "stop"):      "Ferma il daemon Gray Matter.",
     ("gray-matter", "status"):    "Stato del daemon e dei server registrati (Neuron, NeuRAG).",
     ("gray-matter", "ping"):      "Verifica veloce: il daemon risponde?",

@@ -427,15 +427,19 @@ class Api:
         return self._terminal(argv, display=f"repair {scope}", keep_open=False)
 
     # -- uninstall (card dedicata, non interactive) -------------------------
-    # Solo Gray Matter espone il comando `uninstall` → la card compare solo per
-    # GM (Neuron/NeuRAG escono dal gateway con go-standalone/deregister, non con
-    # una disinstallazione dati). Tutto passa da `gray-matter uninstall --json`.
+    # Ogni tool può esporre il proprio uninstall. GM gestisce il proprio
+    # nativamente; per neuron e neurag si invoca il loro CLI.
+    # La card compare per ogni tool installato che supporta uninstall.
 
     def uninstall_state(self, args: str = "") -> dict:
         req = json.loads(args) if args else {}
         scope = req.get("scope", "gray-matter")
+        tools = self._detect_uninstall_tools()
+        if scope not in tools:
+            return {"ok": False, "error": f"uninstall non disponibile per '{scope}'", "scope": scope}
+        argv = tools[scope]
         try:
-            argv = _cli_argv(scope, "uninstall", "--list", "--json")
+            argv = _cli_argv(*argv)
         except ValueError as exc:
             return {"ok": False, "error": str(exc), "scope": scope}
         ok, out, err = self._capture(argv)
@@ -454,13 +458,15 @@ class Api:
         scope = req.get("scope", "gray-matter")
         purge_data = bool(req.get("purge_data", False))
         self._emit(f"$ uninstall  scope={scope}  purge_data={purge_data}", "cmd")
+        tools = self._detect_uninstall_tools()
+        if scope not in tools:
+            return {"ok": False, "error": f"uninstall non disponibile per '{scope}'", "scope": scope}
+        argv_template = tools[scope]
         try:
             extra = ["--purge-data"] if purge_data else []
-            argv = _cli_argv(scope, "uninstall", "--json", *extra)
+            argv = _cli_argv(*argv_template, *extra)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        # Sincrono ma breve: reap/deregister/rimozione file, poi verifica. Timeout
-        # generoso perché tocca i config dei client.
         ok, out, err = self._capture(argv, timeout=90)
         if not ok and not out.strip():
             msg = err.strip() or "uninstall fallito"
@@ -483,6 +489,27 @@ class Api:
             self._emit(f"[uninstall] {scope}: verifica ✗ ({', '.join(failed)})", "err")
         return {"ok": res.get("ok", verification.get("ok")),
                 "results": res.get("results", []), "verification": verification}
+
+    def _detect_uninstall_tools(self) -> dict[str, tuple[str, ...]]:
+        """Restituisce {scope: argv_template} per ogni tool con uninstall.
+
+        Il CLI arg deve essere un tuples/iterabile di argomenti passati a
+        _cli_argv (che costruisce il subprocess command). L'ordine è:
+        (python_or_bin, -m module, command, ...subargs)."""
+        installed = set()
+        try:
+            from gray_matter.clients import installed_servers
+            installed = set(installed_servers())
+        except Exception:  # noqa: BLE001
+            pass
+        tools: dict[str, tuple[str, ...]] = {}
+        if "gray-matter" in installed or True:
+            tools["gray-matter"] = ("gray-matter", "uninstall", "--list", "--json")
+        if "neuron" in installed:
+            tools["neuron"] = ("neuron", "setup", "--uninstall", "--json")
+        if "neurag" in installed:
+            tools["neurag"] = ("neurag", "uninstall", "--json")
+        return tools
 
     # -- gm_link (ri-aggancio tool standalone) -------------------------------
 
