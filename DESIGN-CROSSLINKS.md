@@ -423,7 +423,16 @@ def rebuild_links(self, tag_weight=0.5, cross_ref_weight=0.3, semantic_weight=0.
 
 ## 6. Integrazione con Search
 
-### Search arricchita con link
+> **Stato in v1.0.0 (2026-07-21):** spedita la versione **enrich-only**. Firma
+> reale `search_with_links(query, top_k=5)`: fa la `search` normale e annota ogni
+> risultato con un campo `links` verso gli altri nodi-risultato — **non** espande
+> i risultati con chunk dai nodi collegati. Lo schema qui sotto (`include_linked`
+> + espansione + budget `top_n*2`) è il design completo, tenuto come **tech-debt**
+> post-v1. Nota: `search_with_links` **non è esposto come tool MCP** (usato solo dai
+> test); `knowledge_query` usa la `search` semplice e `knowledge_neighbors` copre
+> l'espansione via grafo.
+
+### Search arricchita con link (design completo — non ancora spedito)
 
 ```python
 def search_with_links(self, query: str, top_n: int = 5, include_linked: bool = True) -> list[dict]:

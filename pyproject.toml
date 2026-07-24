@@ -1,6 +1,6 @@
 [project]
 name = "neurag"
-version = "0.3.0"
+version = "1.2.2"
 description = "Standalone MCP RAG server: hierarchical knowledge graph on Turso/SQLite with pluggable embeddings"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }
@@ -9,23 +9,25 @@ keywords = ["mcp", "rag", "knowledge-base", "vector-search", "turso"]
 
 dependencies = [
     "mcp>=1.28.0,<2.0",
-    # NIENTE pyturso qui (decisione 2026-07-20): db.py è progettato a 3 tier
-    # (turso → sqlite3 → lessicale) e un pin hard lo contraddiceva — su un
-    # checkout Windows senza le wheel vendored (che vivono in Neuron/vendor,
-    # fonte unica) l'install COMPILAVA da Rust e falliva. Ora l'install base
-    # funziona ovunque sul tier sqlite3; il tier turso si attiva con l'extra
-    # [turso] — l'installer canonico lo tenta best-effort dal vendor/PyPI.
+    # pyturso è mandatorio: il vector SQL è il tier di default, sqlite3 è il
+    # fallback automatico (db.py lo gestisce a runtime se turso non è
+    # disponibile). Le wheel win_amd64 sono vendored in vendor/ e installate
+    # dall'installer via --find-links, così non serve il toolchain Rust/MSVC.
+    "pyturso==0.6.1",
 ]
 
 [project.optional-dependencies]
-# Pin esatto = stesso motivo di Neuron: match con le wheel win_amd64 vendored.
-# Bump insieme al pin di Neuron e a release.yml.
-turso = ["pyturso==0.6.1"]
+cloud = ["libsql-client>=0.3.1"]        # shared Turso cloud (same pin as Neuron)
 dev = ["pytest>=8.0"]
 pdf = ["PyMuPDF>=1.24.0"]
 docx = ["python-docx>=1.1.0"]
 yaml = ["PyYAML>=6.0"]                  # bulk import mapping
 semantic = ["fastembed>=0.5.0,<1.0"]   # optional: turns on the semantic embedder
+rerank = ["fastembed>=0.5.0,<1.0"]     # optional: cross-encoder reranker (same dep as semantic; self-documenting alias, OFF by default)
+# GUI opzionale: il control center è UNO (gray_matter.webgui). NeuRAG gira
+# standalone senza; `neurag gui` lo bootstrappa se manca. Il runtime MCP NON
+# dipende da gray-matter (import guardato) — questo extra serve solo alla GUI.
+gui = ["gray-matter>=1.0"]
 
 [project.scripts]
 neurag = "neurag.cli:main"
@@ -37,6 +39,11 @@ packages = ["neurag"]
 
 [tool.setuptools.package-dir]
 neurag = "."
+
+[tool.setuptools.package-data]
+# Wheel d'emergenza di Gray Matter (fallback offline del bootstrap `neurag gui`).
+# Va ricostruito a ogni release di GM — vedi RELEASE-CHECKLIST.
+neurag = ["_gm_vendor/*.whl"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

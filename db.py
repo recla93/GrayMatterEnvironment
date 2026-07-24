@@ -1,8 +1,8 @@
-"""Turso/ SQLite-backed hierarchical knowledge graph with vector embeddings.
+"""Turso-backed hierarchical knowledge graph with vector embeddings.
 
 Single-database design using Turso (SQLite-compatible) with an extension for
-vector cosine-similarity search (384-dim, same as Neuron). When Turso is not
-available, falls back to pure SQLite (vector search via Python brute-force).
+vector cosine-similarity search (384-dim, same as Neuron). Local pyturso for
+single-machine, remote Turso (libSQL cloud) for multi-machine.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re as _re
 import re
 import sqlite3
 import struct
@@ -22,11 +23,182 @@ try:
 except ImportError:
     TURSO_AVAILABLE = False
 
-from neurag.chunker import chunk_file, scan_directory
-from neurag.embedder import get_embedder
+# --- Cloud Turso (multi-machine) — libsql-client facade ----------------------
+# Decoupled port (2026-07-21), keep-in-sync with Neuron/src/neuron/db.py. NeuRAG
+# accesses rows by name, so the remote cursor yields name-accessible _CompatRow
+# (defined below) instead of Neuron's plain tuples.
+#
+# IMPORTANT: NeuRAG has its OWN cloud DB. Neuron and NeuRAG must NOT share a Turso
+# database — both define a `nodes` table with DIFFERENT schemas, so one URL would
+# collide. Hence NeuRAG reads NEURAG_TURSO_DATABASE_URL (its own DB), never
+# Neuron's TURSO_DATABASE_URL. The auth token may be shared (org/group token):
+# NEURAG_TURSO_AUTH_TOKEN if set, else fall back to TURSO_AUTH_TOKEN.
+def _sanitize_credential(value: str) -> str:
+    """Toglie ogni whitespace/controllo, non solo agli estremi — keep-in-sync con
+    Neuron/_env.py. Il token diventa un header HTTP e lo stack rifiuta un valore
+    con CR/LF/NUL dentro: un a-capo nascosto da copia-incolla, o un .env CRLF,
+    faceva fallire il cloud senza spiegazione."""
+    return _re.sub(r"[\s\x00-\x1f\x7f]", "", value or "")
 
-_DEFAULT_DB_DIR = Path.home() / ".local" / "share" / "neurag"
-_DEFAULT_DB = _DEFAULT_DB_DIR / "knowledge.db"
+
+TURSO_DATABASE_URL = _sanitize_credential(os.environ.get("NEURAG_TURSO_DATABASE_URL", ""))
+TURSO_AUTH_TOKEN = _sanitize_credential(os.environ.get("NEURAG_TURSO_AUTH_TOKEN")
+                                        or os.environ.get("TURSO_AUTH_TOKEN", ""))
+REMOTE_TURSO = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
+
+_libsql = None
+if REMOTE_TURSO:
+    try:
+        import libsql_client as _libsql
+    except ImportError:
+        import sys as _sys
+        print("neurag: NEURAG_TURSO_DATABASE_URL is set but the 'cloud' extra "
+              "(libsql-client) is not installed — falling back to the local "
+              "engine. Enable cloud with: pip install \"neurag[cloud]\"",
+              file=_sys.stderr)
+        REMOTE_TURSO = False
+
+_REMOTE_NOOP_PRAGMAS = ("journal_mode", "synchronous", "foreign_keys")
+
+
+class _RemoteCursor:
+    """sqlite3-cursor-like view over a libsql ResultSet; rows name-accessible."""
+
+    def __init__(self, result=None):
+        self._result = result
+
+    @property
+    def description(self):
+        if self._result is None:
+            return None
+        return [(c,) for c in self._result.columns]
+
+    def fetchall(self):
+        if self._result is None:
+            return []
+        cols = list(self._result.columns)
+        return [_CompatRow(cols, tuple(r)) for r in self._result.rows]
+
+    def fetchone(self):
+        rows = self.fetchall()
+        return rows[0] if rows else None
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class RemoteTursoConnection:
+    """sqlite3-compatible facade over a remote Turso (libSQL cloud) database.
+
+    Per-statement autocommit; bulk writes go through executemany -> batch. Rows
+    come back as _CompatRow so NeuRAG's ``row['col']`` access works unchanged.
+    """
+
+    def __init__(self, url: str, auth_token: str):
+        self.row_factory = None  # accepted for API parity; rows already named
+        self._client = _libsql.create_client_sync(url=self._http(url), auth_token=auth_token)
+
+    @staticmethod
+    def _http(url: str) -> str:
+        # libsql_client's sync client wants an https:// endpoint; normalise the
+        # common libsql:// (WebSocket) URL to its https twin.
+        if url.startswith("libsql://"):
+            return "https://" + url[len("libsql://"):]
+        return url
+
+    @staticmethod
+    def _is_noop_pragma(sql: str) -> bool:
+        s = sql.strip().lower()
+        return (s.startswith("pragma")
+                and any(p in s for p in _REMOTE_NOOP_PRAGMAS)
+                and "table_info" not in s)
+
+    def execute(self, sql: str, params=()):
+        if self._is_noop_pragma(sql):
+            return _RemoteCursor(None)
+        res = self._client.execute(sql, list(params) if params else None)
+        return _RemoteCursor(res)
+
+    def executemany(self, sql: str, seq_of_params):
+        stmts = [_libsql.Statement(sql, list(p)) for p in seq_of_params]
+        if stmts:
+            self._client.batch(stmts)   # one atomic batch
+        return _RemoteCursor(None)
+
+    def executescript(self, script: str):
+        for s in script.split(";"):
+            s = s.strip()
+            if s:
+                self.execute(s)
+
+    def commit(self):
+        pass  # remote is autocommit / batch-committed
+
+    def close(self):
+        self._client.close()
+
+
+def _ensure_parent_dir(path: str) -> None:
+    """Create the file's parent dir before open (turso.connect raises
+    ``open: NotFound`` otherwise). keep-in-sync with Neuron/db.py."""
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+
+
+# ponytail: _turso_conn_cache stays permanent — pyturso 0.6.1 on Windows does NOT
+# release the OS file lock on conn.close(), so "release and re-acquire" is
+# impossible. The cache prevents multiple pyturso connections to the same file
+# within one process (which would fail on the second open). Reads from other
+# processes work fine (shared lock); only concurrent writes would fail, and
+# neurag CLI routes writes through GM when it's active (_run_via_gm in cli.py).
+_turso_conn_cache: dict[str, object] = {}
+
+
+def _open_local_turso(path: str):
+    """Open the local pyturso engine with a process-level connection cache.
+
+    Uses a module-level cache so multiple KnowledgeGraph instances sharing the
+    same DB path reuse one pyturso connection (pyturso acquires an exclusive
+    lock — a second open to the same file fails). On cache miss, retries a few
+    times then returns None so the caller logs an error.
+    keep-in-sync with Neuron/db.py _open_local_engine.
+    """
+    # Cache hit: reuse existing connection
+    cached = _turso_conn_cache.get(path)
+    if cached is not None:
+        try:
+            cached.execute("SELECT 1")
+            return cached
+        except Exception:  # noqa: BLE001 — stale connection
+            _turso_conn_cache.pop(path, None)
+
+    # Try to open — transient errors (dir not ready) get a few retries
+    import time as _t
+    try:
+        conn = turso_connect(path)
+        _turso_conn_cache[path] = conn
+        return conn
+    except Exception:  # noqa: BLE001
+        for attempt in range(2):
+            _t.sleep(0.05 * (attempt + 1))
+            _ensure_parent_dir(path)
+            try:
+                conn = turso_connect(path)
+                _turso_conn_cache[path] = conn
+                return conn
+            except Exception:  # noqa: BLE001
+                pass
+    return None
+
+
+# SSOT dei path: la posizione del vault vive in neurag/paths.py, non qui.
+from neurag import paths as _paths
+_DEFAULT_DB_DIR = _paths.data_dir()
+_DEFAULT_DB = _paths.db_path()
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -107,29 +279,51 @@ class _CompatRow:
 class KnowledgeGraph:
     """Hierarchical knowledge graph with vector search.
 
-    Uses Turso (libsql) when available via pyturso, falls back to sqlite3.
+    Uses Turso (libsql) via pyturso for local or remote (cloud) operation.
     """
 
     def __init__(self, db_path: Optional[Path] = None):
+        # Lazy imports: fastembed (380MB) loads only on first KG instantiation,
+        # not on `import neurag.db` — keeps MCP server startup fast. (audit 2026-07-22)
+        from neurag.chunker import chunk_file, scan_directory
+        from neurag.embedder import get_embedder
+        from neurag.reranker import get_reranker
+        self._chunk_file = chunk_file
+        self._scan_directory = scan_directory
         self._db_path = db_path or _DEFAULT_DB
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        # :memory: has no filesystem parent — skip mkdir (audit 2026-07-22)
+        if str(self._db_path) != ":memory:":
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
+        # Corruption is DATA, not a crash: a malformed knowledge.db must not blow
+        # up __init__ (that killed EVERY command, not just health). Flag it here
+        # and let status()/health() REPORT it with a recovery hint. (audit 2026-07-22)
+        self._corrupt = False
+        self._corrupt_err = ""
         self._connect()
+        self._ensure_turso(db_path)
         self._init_schema()
         self._embedder = get_embedder()  # auto: fastembed if present, else null (lexical)
+        self._reranker = get_reranker()  # OFF by default → NullReranker (zero cost)
 
     # -- connection ---------------------------------------------------------
 
     def _connect(self) -> None:
         db_str = str(self._db_path)
-        # Turso engine whenever pyturso is installed — ALSO for local files
-        # (embedded libSQL legge il formato SQLite): sblocca vector_distance_cos
-        # nativa in SQL invece del coseno in Python. Prima veniva usato solo per
-        # URL cloud, quindi il tier locale girava sempre su sqlite3 stdlib.
-        use_turso = TURSO_AVAILABLE
-        self._vector_sql = use_turso
-        if use_turso:
-            self._conn = turso_connect(db_str)
+        # Tier order: cloud Turso (shared, multi-machine) -> local pyturso
+        # (native vector_distance_cos). Reads from other processes work fine
+        # via shared lock; writes route through GM (_run_via_gm in cli.py).
+        if REMOTE_TURSO:
+            self._conn = RemoteTursoConnection(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
+            self._vector_sql = True
+            self._engine_name = "Turso (cloud)"
+            return  # remote: pragmas are no-ops, rows already name-accessible
+        _ensure_parent_dir(db_str)
+        conn = _open_local_turso(db_str) if TURSO_AVAILABLE else None
+        if conn is not None:
+            self._conn = conn
+            self._vector_sql = True
+            self._engine_name = "Turso (local)"
             def _row_factory(cursor, row):
                 if cursor.description is None:
                     return row
@@ -137,22 +331,153 @@ class KnowledgeGraph:
                 return _CompatRow(cols, row)
             self._conn.row_factory = _row_factory
         else:
-            self._conn = sqlite3.connect(db_str)
-            self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+            # turso not importable (missing wheel) — log and let _ensure_turso fix it
+            self._conn = None
+            self._vector_sql = False
+            self._engine_name = "Turso (pending)"
+        # WAL + busy_timeout: letture concorrenti non bloccano lo scrittore e gli
+        # scrittori si accodano invece di corrompersi (audit 2026-07-22). Su un
+        # file già malformato anche la PRAGMA può sollevare → flag, non crash.
+        if self._conn is not None:
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA busy_timeout=5000")
+                self._conn.execute("PRAGMA foreign_keys=ON")
+            except Exception as e:  # noqa: BLE001 — DB corrotto/illeggibile
+                self._corrupt = True
+                self._corrupt_err = str(e)
+
+    @staticmethod
+    def _find_vendor_dir():
+        """La cartella `vendor/` con le wheel pyturso, se localizzabile."""
+        import importlib.util
+        cands = []
+        env = os.environ.get("NEURAG_VENDOR")
+        if env:
+            cands.append(Path(env))
+        try:
+            spec = importlib.util.find_spec("neurag")
+            for loc in (spec.submodule_search_locations or []) if spec else []:
+                cands.append(Path(loc) / "vendor")
+                cands.append(Path(loc).parent / "vendor")
+        except Exception:  # noqa: BLE001
+            pass
+        cands.append(Path(__file__).resolve().parent / "vendor")
+        for c in cands:
+            try:
+                if c and c.is_dir():
+                    return c
+            except OSError:
+                pass
+        return None
+
+    def _ensure_turso(self, db_path) -> None:
+        """Turso PREFERITO sul vault reale, con fallback documentato.
+
+        Richiesta 2026-07-22: "deve usare Turso senza se e senza ma" MA "senza
+        dimenticare i fallback — prendere Turso dalle wheel, solo dopo X tentativi
+        va in fallback documentando l'errore". Quindi: se sul vault di default
+        (db_path None) NON siamo su Turso, si prova ad acquisirlo — import, e se
+        manca `pip install` dalle wheel vendored — fino a NEURAG_TURSO_ATTEMPTS
+        volte; solo allora si degrada a sqlite3 registrando gli errori (che
+        `status`/`doctor` mostrano). Nessun crash. Non tocca i DB di test
+        (db_path esplicito) né se sbloccato con NEURAG_REQUIRE_TURSO=0."""
+        self._turso_degraded = False
+        self._turso_errors: list[str] = []
+        if db_path is not None:
+            return
+        require = os.environ.get("NEURAG_REQUIRE_TURSO", "1").strip().lower() \
+            not in ("0", "false", "no", "off")
+        if not require or getattr(self, "_vector_sql", False):
+            return  # escape hatch, o già su Turso (cloud/pyturso locale)
+
+        import importlib
+        import subprocess
+        import sys as _sys
+        global TURSO_AVAILABLE, turso_connect
+        attempts = max(1, int(os.environ.get("NEURAG_TURSO_ATTEMPTS", "3") or 3))
+        autoinstall = os.environ.get("NEURAG_TURSO_AUTOINSTALL", "1").strip().lower() \
+            not in ("0", "false", "no", "off")
+        vendor = self._find_vendor_dir()
+
+        for i in range(1, attempts + 1):
+            got = False
+            try:
+                mod = importlib.import_module("turso")
+                turso_connect = mod.connect
+                TURSO_AVAILABLE = True
+                got = True
+            except Exception as e:  # noqa: BLE001 — non ancora installato
+                self._turso_errors.append(f"tentativo {i}: import turso KO ({e!r})")
+                if autoinstall:
+                    cmd = [_sys.executable, "-m", "pip", "install", "pyturso==0.6.1"]
+                    if vendor:
+                        cmd[4:4] = ["--find-links", str(vendor)]
+                    try:
+                        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                                           creationflags=(subprocess.CREATE_NO_WINDOW
+                                                          if os.name == "nt" else 0))
+                        if r.returncode != 0:
+                            self._turso_errors.append(
+                                f"tentativo {i}: pip install KO rc={r.returncode}: "
+                                f"{(r.stderr or '').strip()[-200:]}")
+                        else:
+                            importlib.invalidate_caches()
+                            try:
+                                mod = importlib.import_module("turso")
+                                turso_connect = mod.connect
+                                TURSO_AVAILABLE = True
+                                got = True
+                            except Exception as e2:  # noqa: BLE001
+                                self._turso_errors.append(
+                                    f"tentativo {i}: import post-install KO ({e2!r})")
+                    except Exception as pe:  # noqa: BLE001 — timeout/rete
+                        self._turso_errors.append(f"tentativo {i}: pip errore ({pe!r})")
+                else:
+                    self._turso_errors.append(f"tentativo {i}: autoinstall disattivato")
+            if got:
+                # turso disponibile: riconnetti al tier locale (TURSO_AVAILABLE ora True)
+                try:
+                    if self._conn is not None:
+                        self._conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._conn = None
+                self._connect()
+                if getattr(self, "_vector_sql", False):
+                    return  # riuscito → siamo su Turso
+                self._turso_errors.append(
+                    f"tentativo {i}: turso importato ma open locale fallito")
+
+        # Esauriti i tentativi → fallback documentato su sqlite3.
+        self._turso_degraded = True
+        if self._conn is None:            # riapri una connessione sqlite valida
+            self._connect()
+        print("neurag: TURSO non ottenuto dopo %d tentativi — degrado a sqlite3. "
+              "Dettagli: %s" % (attempts, " | ".join(self._turso_errors) or "n/d"),
+              file=_sys.stderr)
 
     def _init_schema(self) -> None:
-        for stmt in SCHEMA_SQL.split(";"):
-            s = stmt.strip()
-            if s:
-                self._conn.execute(s)
-        self._conn.commit()
+        try:
+            for stmt in SCHEMA_SQL.split(";"):
+                s = stmt.strip()
+                if s:
+                    self._conn.execute(s)
+            self._conn.commit()
+        except Exception as e:  # noqa: BLE001 — "file is not a database" & simili
+            # DB malformato: non alziamo qui, così i comandi diagnostici
+            # (status/health/doctor) possono girare e DIRLO invece di crashare.
+            self._corrupt = True
+            self._corrupt_err = str(e)
 
     def close(self) -> None:
         if self._conn:
-            self._conn.close()
-            self._conn = None
+            # Don't close cached pyturso connections — other KG instances may be using them
+            if self._engine_name == "Turso (local)":
+                self._conn = None  # release reference, keep connection alive in cache
+            else:
+                self._conn.close()
+                self._conn = None
 
     # -- node CRUD ----------------------------------------------------------
 
@@ -227,28 +552,55 @@ class KnowledgeGraph:
     def delete_node(self, node_id: int) -> int:
         """Delete a node and its whole subtree — EXPLICIT bottom-up deletes.
 
-        Non si appoggia alle FK ``ON DELETE CASCADE``: pyturso 0.6.1 va in
-        stack overflow C sul trigger ricorsivo della cascade (audit
-        2026-07-20). Qui cancelliamo noi, foglie prima (ORDER BY path DESC),
-        per ogni id prima chunks e links poi la riga nodo — nessuna cascade
-        ricorsiva da innescare. Funziona identico sul tier sqlite3.
+        pyturso 0.6.1 stack-overflows on FK cascade triggers even when
+        children are already gone (audit 2026-07-20). We disable FK
+        enforcement around the manual delete loop to avoid the C-level
+        recursion. Funziona identico sul tier sqlite3.
         Ritorna quanti nodi sono stati rimossi (0 = id inesistente)."""
         start = self.get_node(node_id)
         if not start:
             return 0
-        # get_descendants ordina per path ASC (genitori prima): invertito, ogni
-        # figlio ('P/x' > 'P') precede il suo genitore → mai un DELETE su un
-        # nodo che ha ancora figli, quindi la cascade FK non parte mai.
         doomed = [d["id"] for d in reversed(self.get_descendants(node_id))]
         doomed.append(node_id)                     # la radice per ultima
-        for nid in doomed:
-            self._conn.execute("DELETE FROM chunks WHERE node_id = ?", (nid,))
-            self._conn.execute(
-                "DELETE FROM node_links WHERE source_id = ? OR target_id = ?",
-                (nid, nid))
-            self._conn.execute("DELETE FROM nodes WHERE id = ?", (nid,))
-        self._conn.commit()
+        # ponytail: FK off for the loop, pyturso 0.6.1 C cascade bug.
+        # try/finally so FK enforcement is ALWAYS restored, even if a DELETE
+        # raises — otherwise the connection would silently keep FK disabled.
+        self._conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            for nid in doomed:
+                self._conn.execute("DELETE FROM chunks WHERE node_id = ?", (nid,))
+                self._conn.execute(
+                    "DELETE FROM node_links WHERE source_id = ? OR target_id = ?",
+                    (nid, nid))
+                self._conn.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+            self._conn.commit()
+        finally:
+            self._conn.execute("PRAGMA foreign_keys=ON")
         return len(doomed)
+
+    def rename_node(self, node_id: int, new_name: str) -> None:
+        """Rinomina un nodo aggiornando il suo path E i path dei discendenti.
+
+        Il path è derivato dai nomi (add_node lo costruisce da parent.path +
+        name): rinominare solo `name` lascerebbe l'albero incoerente. Qui il
+        prefisso vecchio viene riscritto in un colpo su tutto il sottoalbero.
+        """
+        node = self.get_node(node_id)
+        if not node:
+            raise ValueError(f"nodo inesistente: {node_id}")
+        new_name = new_name.strip()
+        if not new_name:
+            raise ValueError("il nuovo nome è vuoto")
+        old_path = node["path"]
+        parent_prefix = old_path.rsplit("/", 1)[0]
+        new_path = f"{parent_prefix}/{new_name}"
+        self._conn.execute("UPDATE nodes SET name = ?, path = ? WHERE id = ?",
+                           (new_name, new_path, node_id))
+        # substr è 1-based: si tiene tutto ciò che segue il vecchio prefisso.
+        self._conn.execute(
+            "UPDATE nodes SET path = ? || substr(path, ?) WHERE path LIKE ?",
+            (new_path, len(old_path) + 1, old_path + "/%"))
+        self._conn.commit()
 
     def get_descendants(self, node_id: int) -> list[dict]:
         """Breadth-first descendants via path prefix."""
@@ -324,7 +676,7 @@ class KnowledgeGraph:
     def index_into_node(self, filepath: Path, node_id: int) -> int:
         """Chunk a file, add the chunks to a node, and enrich the node's triggers
         with the symbols found (the tags each code chunk carries)."""
-        chunks = chunk_file(filepath)
+        chunks = self._chunk_file(filepath)
         count = 0
         tag_pool: list[str] = []
         for c in chunks:
@@ -342,7 +694,7 @@ class KnowledgeGraph:
 
     def index_directory_into_node(self, root: Path, node_id: int) -> int:
         total = 0
-        for fp in scan_directory(root):
+        for fp in self._scan_directory(root):
             total += self.index_into_node(fp, node_id)
         return total
 
@@ -592,6 +944,25 @@ class KnowledgeGraph:
         """Rank chunks for a free-text query. Semantic when the embedder is on and
         embeddings exist, else lexical TF-IDF. Returns chunk rows, best first.
 
+        Two stages: :meth:`_retrieve` fetches candidates cheaply (vector SQL /
+        Python cosine / lexical), then — only if the reranker is enabled — a
+        cross-encoder reorders a wider pool and keeps the true top-n. With the
+        reranker OFF (default) the pool equals top_n and this is a no-op wrapper
+        around the old behaviour."""
+        rr = getattr(self, "_reranker", None)
+        rerank_on = bool(rr is not None and getattr(rr, "available", False))
+        pool = top_n
+        if rerank_on:
+            from neurag import settings as _st
+            pool = max(top_n, int(_st.get("rerank_pool") or 50))
+        results = self._retrieve(query, pool)
+        if rerank_on and results:
+            results = rr.rerank(query, results, top_n)
+        return results[:top_n]
+
+    def _retrieve(self, query: str, top_n: int = 5) -> list[dict]:
+        """First-stage retrieval (no rerank).
+
         Fast path (Turso engine): ranking interamente in SQL con
         ``vector_distance_cos`` — niente full-scan dei blob in Python, scala
         con l'indice invece che con O(N) per query. Fallback trasparente al
@@ -641,16 +1012,31 @@ class KnowledgeGraph:
     # -- status -------------------------------------------------------------
 
     def status(self) -> dict:
+        if getattr(self, "_corrupt", False):
+            return {
+                "engine": getattr(self, "_engine_name", "SQLite"),
+                "embedder": getattr(getattr(self, "_embedder", None), "name", "?"),
+                "reranker": getattr(getattr(self, "_reranker", None), "name", "null"),
+                "db_path": str(self._db_path),
+                "corrupt": True,
+                "error": self._corrupt_err,
+                "nodes": 0, "chunks": 0, "embedded": 0, "links": 0,
+                "embedding_dim": 384,
+                "hint": "knowledge.db corrotto — ripristina un backup o rifai "
+                        "l'ingest (le fonti su disco sono intatte).",
+            }
         node_count = self._conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         chunk_count = self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         embedded = self._conn.execute(
             "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL"
         ).fetchone()[0]
         db_str = str(self._db_path)
-        engine = "turso" if getattr(self, "_vector_sql", False) else "sqlite"
+        engine = getattr(self, "_engine_name", "Turso (local)")
         return {
             "engine": engine,
+            "turso_errors": getattr(self, "_turso_errors", []),
             "embedder": self._embedder.name,
+            "reranker": getattr(getattr(self, "_reranker", None), "name", "null"),
             "db_path": str(self._db_path),
             "nodes": node_count,
             "chunks": chunk_count,
@@ -665,6 +1051,16 @@ class KnowledgeGraph:
         """Structural audit of the vault (no LLM, no embeddings). Flags problems;
         it never deletes — NeuRAG is a curated source of truth. `ok` is False only
         for the serious issues (broken hierarchy, tiny chunks, duplicate names)."""
+        if getattr(self, "_corrupt", False):
+            return {
+                "ok": False,
+                "corrupt": True,
+                "serious_count": 1,
+                "error": self._corrupt_err,
+                "issues": {}, "warnings": {},
+                "hint": "knowledge.db corrotto — ripristina un backup o rifai "
+                        "l'ingest (le fonti su disco sono intatte).",
+            }
         c = self._conn
         rows = lambda sql: [dict(r) for r in c.execute(sql).fetchall()]
         count = lambda sql: c.execute(sql).fetchone()[0]

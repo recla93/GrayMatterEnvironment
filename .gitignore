@@ -5,6 +5,8 @@ __pycache__/
 .eggs/
 build/
 dist/
+.pytest_cache/
+.coverage
 
 # Envs
 .venv/

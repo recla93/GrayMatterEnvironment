@@ -14,7 +14,12 @@ from __future__ import annotations
 import os
 
 # Same model Neuron defaults to → same 384-dim vector space when paired.
-_MODEL = os.environ.get("NEURAG_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+# Aligned 2026-07-20 (era all-MiniLM-L6-v2, English-only: spazio DIVERSO da
+# Neuron e cieco sull'italiano). Ordine: override NeuRAG → override Neuron
+# (una sola env governa la suite) → default multilingue IT/EN di Neuron.
+_MODEL = (os.environ.get("NEURAG_EMBED_MODEL")
+          or os.environ.get("NS_EMBED_MODEL")
+          or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 DIM = 384
 
 

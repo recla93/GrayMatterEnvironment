@@ -297,7 +297,11 @@ def test_search_with_links_enriches():
     kg.add_chunk(c, "python fastapi uvicorn", source="file3.md")
     kg.rebuild_links()
     results = kg.search_with_links("java", top_k=3)
-    assert len(results) == 3
+    # Tier-agnostic: search_with_links ENRICHES hits with a `links` field (it does
+    # not expand with linked nodes). The count is tier-dependent — the lexical
+    # tier returns the 2 "java" chunks; the vector tier (fastembed) ranks all 3 by
+    # similarity — so assert on the invariant (>=2 + enrichment), not a fixed count.
+    assert len(results) >= 2
     # At least one result should have links
     has_links = any(len(r.get("links", [])) > 0 for r in results)
     assert has_links

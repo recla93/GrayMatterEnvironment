@@ -38,8 +38,37 @@ app = Server("neurag", version=__version__)
 async def list_tools() -> list[Tool]:
     return [
         Tool(
+            name="knowledge_ingest",
+            description="Graph-ize a folder server-side in ONE call: nodes from the "
+                        "folder structure, chunks, embeddings, links. Runs in background — "
+                        "returns a job id immediately; poll knowledge_ingest_status. "
+                        "Prefer this over knowledge_index for whole folders (no chunk "
+                        "text travels through the LLM context).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "Absolute path of the folder to ingest"},
+                    "godnode": {"type": "string",
+                                "description": "Root node to use/create (default: folder name)"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="knowledge_ingest_status",
+            description="Status of ingest jobs started with knowledge_ingest "
+                        "(all jobs, or one via job_id).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "Job id (optional)"},
+                },
+            },
+        ),
+        Tool(
             name="knowledge_index",
-            description="Chunk a file or directory without saving. Returns JSON list of chunks. LLM then calls knowledge_add_node + knowledge_add_chunks to organize them.",
+            description="Chunk a file or directory without saving. Returns JSON list of chunks. LLM then calls knowledge_add_node + knowledge_add_chunks to organize them. For whole folders prefer knowledge_ingest (server-side, no chunks through context).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -153,6 +182,44 @@ async def list_tools() -> list[Tool]:
                 "required": ["query"],
             },
         ),
+        Tool(
+            name="knowledge_remove_node",
+            description="Delete a node and its entire subtree (children, chunks, links). "
+                        "Runs server-side on the single DB writer (the Gray-Matter worker "
+                        "or the standalone CLI) — never a second process.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the node to delete"},
+                },
+                "required": ["name"],
+            },
+        ),
+        Tool(
+            name="knowledge_rename_node",
+            description="Rename a node; updates the materialised path of itself and all "
+                        "descendants. Server-side on the single DB writer.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Current node name"},
+                    "new_name": {"type": "string", "description": "New node name"},
+                },
+                "required": ["name", "new_name"],
+            },
+        ),
+        Tool(
+            name="knowledge_import",
+            description="Bulk-import a folder tree from a YAML mapping (deterministic, no "
+                        "LLM). Nodes + chunks created server-side on the single DB writer.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mapping": {"type": "string", "description": "Path to the YAML mapping file"},
+                },
+                "required": ["mapping"],
+            },
+        ),
     ]
 
 
@@ -179,6 +246,29 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=_json.dumps(
             {"node": {"name": node["name"], "path": node.get("path")},
              "neighbors": neigh}, ensure_ascii=False))]
+
+    if name == "knowledge_ingest":
+        from neurag.ingest import start_job
+        path = Path(arguments["path"])
+        if not path.is_dir():
+            return [TextContent(type="text", text=f"Not a folder: {path}")]
+        job = start_job(path, arguments.get("godnode"))
+        return [TextContent(type="text", text=(
+            f"Ingest started: job {job['id']} on {path}. "
+            f"Poll knowledge_ingest_status to follow progress."))]
+
+    if name == "knowledge_ingest_status":
+        from neurag.ingest import JOBS, job_text
+        jid = arguments.get("job_id")
+        if jid:
+            job = JOBS.get(jid)
+            if job is None:
+                return [TextContent(type="text", text=f"No such job: {jid}")]
+            return [TextContent(type="text", text=job_text(job))]
+        if not JOBS:
+            return [TextContent(type="text", text="No ingest jobs this session.")]
+        return [TextContent(type="text",
+                            text="\n\n".join(job_text(j) for j in JOBS.values()))]
 
     if name == "knowledge_index":
         path = Path(arguments["path"])
@@ -297,12 +387,41 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = db.rebuild_links()
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
+    if name == "knowledge_remove_node":
+        name = arguments["name"]
+        node = db.get_node_by_name(name)
+        if not node:
+            return [TextContent(type="text", text=f"Node '{name}' not found.")]
+        n = db.delete_node(node["id"])
+        return [TextContent(type="text",
+                            text=f"[ok] eliminati {n} nodi (sottoalbero incluso).")]
+
+    if name == "knowledge_rename_node":
+        name = arguments["name"]
+        new_name = arguments["new_name"]
+        node = db.get_node_by_name(name)
+        if not node:
+            return [TextContent(type="text", text=f"Nodo '{name}' non trovato.")]
+        db.rename_node(node["id"], new_name)
+        return [TextContent(type="text",
+                            text=f"[ok] '{name}' → '{new_name}' (path aggiornati).")]
+
+    if name == "knowledge_import":
+        from neurag.importer import import_mapping
+        report = import_mapping(db, arguments["mapping"])
+        txt = f"Imported: {report['nodes']} nodes, {report['chunks']} chunks."
+        if report.get("skipped"):
+            txt += "\n" + "\n".join(f"  skipped: {s}" for s in report["skipped"])
+        return [TextContent(type="text", text=txt)]
+
     raise ValueError(f"Unknown tool: {name}")
 
 
 def main() -> None:
     """Start NeuRAG MCP server with optional Gray-Matter registration."""
     tool_names = [
+        "knowledge_ingest",
+        "knowledge_ingest_status",
         "knowledge_index",
         "knowledge_add_node",
         "knowledge_add_chunks",
@@ -312,10 +431,23 @@ def main() -> None:
         "knowledge_health",
         "knowledge_link_graph",
         "knowledge_rebuild_links",
+        "knowledge_remove_node",
+        "knowledge_rename_node",
+        "knowledge_import",
     ]
 
-    # Gray-Matter auto-registration (non-blocking)
+    # Gray-Matter auto-registration (non-blocking). Se NeuRAG è andato
+    # standalone (go-standalone), NON deve ri-registrarsi al gateway anche se
+    # GM è importabile nello stesso venv: i suoi tool sarebbero pubblicati due
+    # volte (entry diretta + proxy GM).
+    gm_manages_us = _GM_AVAILABLE
     if _GM_AVAILABLE:
+        try:
+            from gray_matter.clients import unmanaged_tools
+            gm_manages_us = "neurag" not in unmanaged_tools()
+        except Exception:  # noqa: BLE001 — GM vecchio senza unmanaged_tools
+            pass
+    if gm_manages_us:
         autoregister("neurag", tool_names)
         def _hb():
             from gray_matter.server import _send_heartbeat

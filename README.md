@@ -4,7 +4,7 @@
 
 <div align="center">
 
-<!-- <img src="assets/neurag-logo.png" alt="NeuRAG logo" width="360"> -->
+<img src="assets/neurag-logo.png" alt="NeuRAG logo" width="360">
 
 <h1>📚 NeuRAG</h1>
 
@@ -20,7 +20,7 @@ the Gray Matter gateway.
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-0.2.0-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-1.0.0-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -110,7 +110,13 @@ overlap. Links are queried bidirectionally and returned with search results.
 
 ### Install
 
+**Click and go**: double-click **`install.cmd`** (Windows) or
+**`install.command`** (macOS/Linux) — bootstraps Python if missing, installs
+NeuRAG + the Gray Matter gateway, registers your MCP clients and opens the
+control center GUI (wizard, Install/Repair, Test, Prefs, Folders).
+
 ```bash
+# terminal / dev alternative:
 pip install -e .
 # recommended: behind the gateway → gray-matter install
 # standalone: python -m neurag.server

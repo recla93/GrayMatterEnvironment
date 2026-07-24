@@ -1,7 +1,6 @@
 """Turso engine per file locali + ranking vettoriale in SQL (vector_distance_cos).
 
-Sul tier sqlite3 (pyturso assente) verifica il fallback; con pyturso installato
-(la macchina locale) verifica che il path SQL ordini per similarità reale.
+Con pyturso installato verifica che il path SQL ordini per similarità reale.
 """
 import pytest
 
@@ -37,7 +36,8 @@ def kg(tmp_path):
 
 def test_engine_uses_turso_for_local_files_when_available(kg):
     assert kg._vector_sql == TURSO_AVAILABLE
-    assert kg.status()["engine"] == ("turso" if TURSO_AVAILABLE else "sqlite")
+    # engine label mirrors Neuron's ENGINE_NAME: "Turso (cloud/local)" | "SQLite"
+    assert kg.status()["engine"] == ("Turso (local)" if TURSO_AVAILABLE else "SQLite")
 
 
 def test_semantic_ranking_best_first(kg):
