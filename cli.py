@@ -100,6 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
     der.add_argument("--client", default="all",
                      help="claude-desktop|claude-code|cursor|vscode|opencode|all (default: all)")
 
+    der.add_argument("--json", action="store_true", help="output as JSON")
+
+    uni = sub.add_parser("uninstall",
+                         help="Uninstall: deregister from clients, optionally purge data")
+    uni.add_argument("--purge-data", action="store_true", help="also delete knowledge.db")
+    uni.add_argument("--json", action="store_true", help="output JSON for webgui integration")
+    uni.add_argument("--yes", action="store_true", help="non-interactive: assume yes for prompts")
+
     gst = sub.add_parser("go-standalone",
                          help="NeuRAG esce dal gateway GM: si registra come MCP diretto nei client "
                               "e chiede a GM (se presente) di non gestirlo più. Reversibile con "
@@ -126,7 +134,7 @@ COMMAND_GROUPS = {
     "ingest": "maintenance", "rename-node": "maintenance",
     "remove-node": "maintenance",
     "config": "tuning", "repair": "lifecycle", "record-paths": "lifecycle",
-    "register": "lifecycle", "deregister": "lifecycle",
+    "register": "lifecycle", "deregister": "lifecycle", "uninstall": "lifecycle",
     "go-standalone": "lifecycle", "gui": "lifecycle",
     "start": "lifecycle", "stop": "lifecycle",
 }
@@ -151,6 +159,34 @@ def _cmd_go_standalone(dry_run: bool = False) -> None:
     except ImportError:
         print("  Gray Matter non installato: NeuRAG era già standalone.")
     print("Fatto. Riavvia le app AI. Per tornare al gateway: gray-matter register --gateway")
+
+
+def _cmd_uninstall(purge_data: bool = False, as_json: bool = False, yes: bool = False) -> None:
+    """Uninstall NeuRAG: deregister from clients, optionally purge data."""
+    from neurag.clients import deregister_all as _dereg_all
+    from neurag.clients import SLUG
+    if as_json:
+        dereg_results = [r.as_dict() for r in _dereg_all(SLUG)]
+        out = {"scope": "neurag", "deregister": dereg_results, "data_purged": False}
+        print(json_mod.dumps(out, ensure_ascii=False))
+        return
+    print("Uninstall NeuRAG:")
+    print("  1) Deregister from all AI clients")
+    for r in _dereg_all(SLUG):
+        print(f"     {'✓' if r.ok else '✗'} {r.line()}")
+    if purge_data:
+        from neurag import paths as _p
+        db_dir = _p.data_dir()
+        if db_dir.exists():
+            if yes or input(f"  Also delete data at {db_dir}? [y/N] ").strip().lower() in ("y", "yes", "s", "si"):
+                import shutil
+                shutil.rmtree(db_dir)
+                print(f"  [OK] removed {db_dir}")
+            else:
+                print(f"  Memory kept: {db_dir}")
+        else:
+            print("  Data dir not found — nothing to purge.")
+    print("Done. Uninstall the package with: pip uninstall neurag")
 
 
 def _cmd_start() -> None:
@@ -566,6 +602,9 @@ def main() -> None:
     if args.command == "deregister":
         from neurag import clients as _clients
         sys.exit(_clients.cli("deregister", args.client))
+    if args.command == "uninstall":
+        _cmd_uninstall(args.purge_data, args.json, args.yes)
+        return
     if args.command == "go-standalone":
         _cmd_go_standalone(args.dry_run)
         return
