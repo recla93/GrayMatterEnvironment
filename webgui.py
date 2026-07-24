@@ -493,22 +493,12 @@ class Api:
     def _detect_uninstall_tools(self) -> dict[str, tuple[str, ...]]:
         """Restituisce {scope: argv_template} per ogni tool con uninstall.
 
-        Il CLI arg deve essere un tuples/iterabile di argomenti passati a
-        _cli_argv (che costruisce il subprocess command). L'ordine è:
-        (python_or_bin, -m module, command, ...subargs)."""
-        installed = set()
-        try:
-            from gray_matter.clients import installed_servers
-            installed = set(installed_servers())
-        except Exception:  # noqa: BLE001
-            pass
+        Tutti gli scope sono inclusi: se un tool non è installato il
+        comando fallisce con un messaggio chiaro nel risultato JSON."""
         tools: dict[str, tuple[str, ...]] = {}
-        if "gray-matter" in installed or True:
-            tools["gray-matter"] = ("gray-matter", "uninstall", "--list", "--json")
-        if "neuron" in installed:
-            tools["neuron"] = ("neuron", "setup", "--uninstall", "--json")
-        if "neurag" in installed:
-            tools["neurag"] = ("neurag", "uninstall", "--json")
+        tools["gray-matter"] = ("gray-matter", "uninstall", "--list", "--json")
+        tools["neuron"] = ("neuron", "setup", "--uninstall", "--json")
+        tools["neurag"] = ("neurag", "uninstall", "--json")
         return tools
 
     # -- gm_link (ri-aggancio tool standalone) -------------------------------
