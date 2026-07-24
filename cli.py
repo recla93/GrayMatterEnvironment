@@ -166,7 +166,8 @@ def _cmd_uninstall(purge_data: bool = False, as_json: bool = False, yes: bool = 
     from neurag.clients import deregister_all as _dereg_all
     from neurag.clients import SLUG
     if as_json:
-        dereg_results = [r.as_dict() for r in _dereg_all(SLUG)]
+        dereg_results = [{"client": r.client, "ok": r.ok, "action": r.action,
+                        "detail": r.detail} for r in _dereg_all(SLUG)]
         out = {"scope": "neurag", "deregister": dereg_results, "data_purged": False}
         print(json_mod.dumps(out, ensure_ascii=False))
         return
