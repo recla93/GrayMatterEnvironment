@@ -19,7 +19,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-__all__ = ["SERVERS", "CLIENTS", "register", "deregister", "doctor"]
+# Windows: nascondi la console dei child (claude CLI) — la GUI gira via pythonw,
+# quindi register/deregister facevano lampeggiare un CMD. Guardia Windows-only
+# (CREATE_NO_WINDOW non esiste altrove).
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+__all__ = ["SERVERS", "CLIENTS", "register", "deregister", "doctor",
+           "unmanaged_tools", "set_unmanaged", "release_tool",
+           "standalone_register_tool"]
 
 
 def _home(*parts: str) -> str:
@@ -150,25 +157,60 @@ def _register_json(spec: dict, path: str, servers: list[str], py: str,
     return {"client": spec["label"], "ok": True, "action": "registered", "detail": path}
 
 
+def _claude_argv(*args) -> "list[str] | None":
+    """Argv per la CLI `claude`, funzionante ANCHE su Windows.
+
+    Root-cause del "register Claude Code fallisce sempre" (2026-07-21): su
+    Windows `claude` è uno shim `.cmd` (npm) — CreateProcess non esegue i .cmd,
+    quindi Popen(["claude", …]) alza FileNotFoundError anche se `which` lo
+    trova. Fix: path risolto da shutil.which + wrapper `cmd /c` per .cmd/.bat."""
+    exe = shutil.which("claude")
+    if not exe:
+        return None
+    argv = [exe, *args]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        argv = ["cmd", "/c", *argv]
+    return argv
+
+
 def _register_claude_cli(spec: dict, servers: list[str], py: str,
                          evict: tuple = ()) -> dict:
-    ok = True
+    ok, errors = True, []
     for s in servers:
+        argv = _claude_argv("mcp", "add", "--scope", "user", s, py, "--", *SERVERS[s])
+        if argv is None:
+            return {"client": spec["label"], "ok": False, "action": "skipped",
+                    "detail": "claude CLI not on PATH"}
         try:
-            r = subprocess.run(
-                ["claude", "mcp", "add", "--scope", "user", s, py, "--", *SERVERS[s]],
-                capture_output=True, text=True, timeout=60)
-            ok = ok and r.returncode == 0
-        except Exception:  # noqa: BLE001
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=60,
+                               creationflags=_NO_WINDOW)
+            if r.returncode != 0:
+                # l'errore VERO nel report, non un muto "cli failed"
+                tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["?"])[-1]
+                # "already exists in user config" = già registrato: è il caso
+                # IDEMPOTENTE (re-run dell'installer), non un errore. Segnalarlo
+                # rosso faceva sembrare fallito ogni reinstall.
+                if "already exists" in tail.lower():
+                    continue
+                ok = False
+                errors.append(f"{s}: {tail[:120]}")
+        except Exception as exc:  # noqa: BLE001
             ok = False
+            errors.append(f"{s}: {exc}")
     for s in evict:
+        argv = _claude_argv("mcp", "remove", "--scope", "user", s)
+        if argv is None:
+            break
         try:  # absent server -> nonzero exit; that's fine, we only want it gone
-            subprocess.run(["claude", "mcp", "remove", "--scope", "user", s],
-                           capture_output=True, text=True, timeout=60)
+            subprocess.run(argv, capture_output=True, text=True, timeout=60,
+                           creationflags=_NO_WINDOW)
         except Exception:  # noqa: BLE001
             pass
-    return {"client": spec["label"], "ok": ok,
-            "action": "claude mcp add" if ok else "cli failed"}
+    out = {"client": spec["label"], "ok": ok,
+           "action": "claude mcp add" if ok else "cli failed"}
+    if errors:
+        out["detail"] = "; ".join(errors)
+    return out
 
 
 def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
@@ -224,7 +266,8 @@ def deregister(servers: "list[str] | None" = None) -> list[dict]:
             for s in targets:
                 try:
                     subprocess.run(["claude", "mcp", "remove", "--scope", "user", s],
-                                   capture_output=True, text=True, timeout=60)
+                                   capture_output=True, text=True, timeout=60,
+                                   creationflags=_NO_WINDOW)
                 except Exception:  # noqa: BLE001
                     pass
             results.append({"client": spec["label"], "ok": True, "action": "claude mcp remove"})
@@ -259,6 +302,90 @@ def deregister(servers: "list[str] | None" = None) -> list[dict]:
             results.append({"client": spec["label"], "ok": True,
                             "action": "deregistered", "removed": removed, "detail": path})
     return results
+
+
+# ---------------------------------------------------------------------------
+# Deregister per-tool (go-standalone) — 2026-07-22
+# ---------------------------------------------------------------------------
+# Semantica: un tool "unmanaged" esce dal gateway (GM non lo spawna più come
+# worker e non ne ripubblica i tool) e vive come MCP diretto nei client, con la
+# SUA registrazione (`<tool>.clients`). Persistito in settings ("unmanaged"),
+# reversibile con `gray-matter register --gateway` (che azzera la lista).
+# Caso misto sicuro: l'entry `gray-matter` resta nei client finché ALMENO un
+# peer è ancora gestito da GM; sparisce solo quando nessuno lo è (decisione
+# utente 2026-07-22, §6 handoff).
+
+_STANDALONE_TOOLS = ("neuron", "neurag")
+
+
+def unmanaged_tools() -> set:
+    """I tool usciti dal gateway (da settings, csv)."""
+    from gray_matter import settings
+    raw = str(settings.get("unmanaged") or "")
+    return {t.strip() for t in raw.split(",") if t.strip() in _STANDALONE_TOOLS}
+
+
+def set_unmanaged(name: str, flag: bool) -> set:
+    """Aggiunge/toglie un tool dalla lista unmanaged (persistita)."""
+    from gray_matter import settings
+    cur = unmanaged_tools()
+    (cur.add if flag else cur.discard)(name)
+    settings.set("unmanaged", ",".join(sorted(cur)))
+    return cur
+
+
+def clear_unmanaged() -> None:
+    from gray_matter import settings
+    settings.set("unmanaged", "")
+
+
+def standalone_register_tool(name: str, dry_run: bool = False) -> list[str]:
+    """Fa registrare il tool DA SOLO nei client, con il SUO engine
+    (`neuron.clients` / `neurag.clients`) — GM non ridefinisce nulla, delega."""
+    lines: list[str] = []
+    try:
+        if name == "neuron":
+            from neuron import clients as _nc
+            slug = os.environ.get("NEURON_SLUG", "neuron5")
+            py = _nc.default_server_python(slug)
+            results = _nc.register_all(slug, py, dry_run=dry_run)
+        elif name == "neurag":
+            from neurag import clients as _rc
+            results = _rc.register_all(dry_run=dry_run)
+        else:
+            return [f"[!!] tool sconosciuto: {name}"]
+    except ImportError:
+        return [f"[!!] {name} non installato: impossibile registrarlo standalone"]
+    return [r.line().strip() for r in results]
+
+
+def release_tool(name: str) -> list[str]:
+    """GM smette di gestire `name`: persist (settings), IPC al daemon vivo
+    (best-effort) e — SOLO se nessun peer resta gestito — rimozione dell'entry
+    `gray-matter` dai client. Ritorna righe di report."""
+    if name not in _STANDALONE_TOOLS:
+        return [f"[!!] tool sconosciuto: {name}"]
+    lines = []
+    un = set_unmanaged(name, True)
+    lines.append(f"[OK] GM non gestisce più '{name}' (persistito)")
+    try:  # daemon vivo: molla il worker subito, senza aspettare un restart
+        from gray_matter.cli import _send_ipc
+        r = _send_ipc({"action": "unregister", "name": name})
+        lines.append("[OK] daemon avvisato (worker rilasciato)" if "error" not in r
+                     else f"[--] daemon non in esecuzione ({r['error']}) — vale dal prossimo avvio")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"[--] IPC non riuscito ({exc}) — vale dal prossimo avvio")
+    still_managed = [t for t in installed_servers()
+                     if t in _STANDALONE_TOOLS and t not in un]
+    if still_managed:
+        lines.append(f"[OK] entry 'gray-matter' TENUTA nei client: gestisce ancora "
+                     + ", ".join(still_managed))
+    else:
+        lines.append("[OK] nessun peer resta dietro GM: tolgo 'gray-matter' dai client")
+        for r in deregister(["gray-matter"]):
+            mark = "OK" if r.get("ok") else "!!"
+            lines.append(f"  [{mark}] {r['client']}: {r['action']}")
+    return lines
 
 
 def doctor(py: "str | None" = None) -> list[dict]:

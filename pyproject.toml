@@ -1,6 +1,6 @@
 [project]
 name = "gray-matter"
-version = "0.2.0"
+version = "1.1.2"
 description = "Gray-Matter: MCP orchestrator/proxy that fronts Neuron + NeuRAG"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }
@@ -9,10 +9,10 @@ keywords = ["mcp", "orchestrator", "proxy"]
 
 dependencies = [
     "mcp>=1.28.0,<2.0",
-    "neuron",
 ]
 
 [project.optional-dependencies]
+cloud = ["libsql-client>=0.3.1"]
 dev = ["pytest>=8.0"]
 gui = ["pywebview>=5.0"]
 rag = ["neurag"]

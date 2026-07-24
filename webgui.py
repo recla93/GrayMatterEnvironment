@@ -1,29 +1,32 @@
-"""`gray-matter gui` — web-based unified control center for the trio.
+"""`gray-matter gui` — control center unico dell'ecosistema.
 
-One window, three panels (Orchestrator/GM, Vault/NeuRAG, Memory/Neuron). The
-view is ``webgui.html`` (HTML/CSS/JS); it calls the :class:`Api` backend over a
-bridge. **All process management stays in Python** — pywebview only swaps the
-view for the old Tkinter widgets.
+Struttura (SoC):
 
-Transport is uniform across two modes:
+* **catalogo** (:mod:`gray_matter.catalog`) — *descrive* ambienti e comandi,
+  leggendoli dalle CLI dei tool. Nessun elenco di comandi vive qui.
+* **backend** (:class:`Api`, questo file) — *esegue*: un solo runner generico
+  ``run(tool, command, args)`` per qualunque comando di qualunque ambiente.
+  Prima c'era un metodo scritto a mano per comando (~60): la GUI era una copia
+  delle CLI e restava indietro a ogni comando nuovo.
+* **vista** (``webgui.html``) — *disegna* e basta.
 
-* **pywebview** (native window, Edge WebView2 on Windows): the view calls
-  ``window.pywebview.api.<method>(argsJson)``.
-* **browser fallback** (pywebview missing / headless): a stdlib
-  ``http.server`` serves the page and dispatches ``POST /api/<method>`` to the
-  same :class:`Api` methods, then the default browser is opened.
+Conseguenza: un subcomando aggiunto a una CLI compare nel control center da
+solo. Gli ambienti in sidebar sono quelli davvero installati sulla macchina.
 
-Either way the frontend polls :meth:`Api.poll_log` for streamed subprocess
-output, so there is no thread-unsafe push from worker threads.
+Trasporto invariato e uniforme nei due modi:
+
+* **pywebview** (finestra nativa, WebView2 su Windows);
+* **browser** (pywebview assente): ``http.server`` stdlib serve la pagina e
+  smista ``POST /api/<metodo>`` agli stessi metodi di :class:`Api`.
+
+In entrambi i casi la vista fa polling di :meth:`Api.poll_log` per l'output
+streamato, così nessun thread worker spinge nulla nella UI.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
-import queue
 import shutil
-import socket
 import subprocess
 import sys
 import threading
@@ -31,21 +34,28 @@ import time
 from collections import deque
 from pathlib import Path
 
+from gray_matter import catalog
+
 __all__ = ["Api", "main"]
 
 _HTML = Path(__file__).with_name("webgui.html")
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+_MAX_LOG = 4000
 
-# The workspace root holds the sibling project folders (dev layout). GM acts as
-# the ecosystem hub: whichever tool you install pulls GM in, and from GM you can
-# install the missing peers on a button — sibling `pip install -e` when the
-# folder is here, else a git clone + install.
+# Radice del workspace: in layout di sviluppo i tre repo sono cartelle sorelle.
 _ENV_ROOT = Path(__file__).resolve().parent.parent
-_PEERS = {
-    "neuron": {"label": "Neuron · memory", "module": "neuron", "dir": "Neuron",
-               "git": "https://github.com/recla93/Neuron"},
-    "neurag": {"label": "NeuRAG · vault", "module": "neurag", "dir": "neurag",
-               "git": "https://github.com/recla93/neurag"},
+_PEER_GIT = {
+    "neuron": "https://github.com/recla93/neuron",
+    "neurag": "https://github.com/recla93/neurag",
+}
+
+# Come si invoca ogni ambiente. `-m <modulo>` e non il console-script: gli
+# script stanno in Scripts/ e non sempre sono sul PATH del processo GUI —
+# era la causa dei "command not found" nel pannello.
+_MODULE_FOR = {
+    "gray-matter": ["-m", "gray_matter.cli"],
+    "neuron": ["-m", "neuron"],
+    "neurag": ["-m", "neurag.cli"],
 }
 
 
@@ -53,610 +63,560 @@ def _python() -> str:
     return sys.executable or "python"
 
 
-class Api:
-    """Backend exposed to the view. Every method returns JSON-able data.
+def _gm_version() -> str:
+    try:
+        from gray_matter import __version__
+        return __version__
+    except Exception:  # noqa: BLE001
+        return "?"
 
-    Long output does NOT come back as a return value — it is streamed line by
-    line into a buffer that the view drains via :meth:`poll_log`. This keeps
-    the UI responsive while a command runs and mirrors the old Tkinter queue.
+
+def _say(msg: str) -> None:
+    """print() sicuro. Lo shortcut lancia la GUI con pythonw.exe, dove
+    sys.stdout è None: un print() nudo uccideva il processo appena partito —
+    era il "crasha da sola" della modalità browser."""
+    try:
+        if sys.stdout is not None:
+            print(msg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _cli_argv(tool: str, *cmd: str) -> list[str]:
+    """argv per un comando CLI di un ambiente (``python -m <tool>.cli <cmd...>``).
+
+    È la stessa via generica di :meth:`Api.run`: i pannelli speciali (config,
+    repair, uninstall) passano da qui invece di importare gli interni di
+    gray_matter — così restano tool-agnostici e loggano in modo uniforme.
+    """
+    base = _MODULE_FOR.get(tool)
+    if base is None:
+        raise ValueError(f"ambiente sconosciuto: {tool}")
+    return [_python(), *base, *cmd]
+
+
+def _argv_for(tool: str, command: str, args: dict, extra: str = "") -> list[str]:
+    """Costruisce l'argv reale a partire dal comando e dai campi compilati.
+
+    Gli argomenti arrivano dal catalogo, quindi il form riflette la CLI vera:
+    i posizionali nell'ordine dichiarato, le opzioni come ``--flag valore``
+    (o il solo flag se è booleano). Il campo libero finale resta per i casi
+    che un form non copre.
+    """
+    base = _MODULE_FOR.get(tool)
+    if base is None:
+        raise ValueError(f"ambiente sconosciuto: {tool}")
+    argv = [_python(), *base, command]
+    for a in args.get("_order", []):
+        spec = args["_spec"].get(a, {})
+        val = args.get(a, "")
+        if spec.get("is_flag"):
+            if val:
+                argv.append(spec["flag"])
+        elif spec.get("flag"):
+            if str(val).strip():
+                argv += [spec["flag"], str(val).strip()]
+        elif str(val).strip():                     # posizionale
+            argv.append(str(val).strip())
+    if extra.strip():
+        import shlex
+        argv += shlex.split(extra.strip(), posix=(os.name != "nt"))
+    return argv
+
+
+class Api:
+    """Backend esposto alla vista. Ogni metodo ritorna dati JSON-abili.
+
+    L'output lungo NON torna come valore: viene streamato riga per riga in un
+    buffer che la vista svuota con :meth:`poll_log`, così la UI resta viva
+    mentre un comando gira.
     """
 
     def __init__(self) -> None:
-        self._procs: dict[str, subprocess.Popen[str]] = {}
-        self._keepalive: set[str] = set()
-        self._bg_args: dict[str, list[str]] = {}
-        self._restarts: dict[str, int] = {}
-        self._stopping: set[str] = set()
-        self._log_buf: deque[dict] = deque(maxlen=5000)
+        self._log: deque = deque(maxlen=_MAX_LOG)
         self._lock = threading.Lock()
-        # network stack state (Bridge + Tunnel), mirrors the Tkinter GUI
-        self._net_state = "off"            # off | starting | up
-        self._net_port = 8000
-        self._tunnel_url = ""
+        self._procs: dict[str, subprocess.Popen] = {}
+        self._running: dict[str, str] = {}     # key -> etichetta mostrata
 
-    # -- log plumbing --------------------------------------------------------
-
+    # -- log ---------------------------------------------------------------
     def _emit(self, line: str, tag: str = "") -> None:
         with self._lock:
-            for part in line.splitlines() or [""]:
-                self._log_buf.append({"line": part, "tag": tag})
+            self._log.append({"line": line, "tag": tag, "t": time.time()})
 
-    def poll_log(self, _args: str = "") -> list[dict]:
-        """Drain and return buffered log lines (called on a timer by the view)."""
+    def poll_log(self, _args: str = "") -> dict:
         with self._lock:
-            out = list(self._log_buf)
-            self._log_buf.clear()
-        return out
+            lines = list(self._log)
+            self._log.clear()
+        return {"lines": lines, "running": dict(self._running)}
 
     def clear_log(self, _args: str = "") -> dict:
         with self._lock:
-            self._log_buf.clear()
+            self._log.clear()
         return {"ok": True}
 
-    # -- generic streaming command ------------------------------------------
+    def copy_clipboard(self, args: str = "") -> dict:
+        """Rete di sicurezza per il pulsante Copia: scrive `text` negli appunti
+        di sistema quando la clipboard del WebView è bloccata (WebView2/pywebview).
+        Usa lo strumento nativo dell'OS così non serve nessuna dipendenza."""
+        req = json.loads(args) if args else {}
+        text = req.get("text", "")
+        try:
+            if sys.platform == "win32":
+                cmd = ["clip"]
+            elif sys.platform == "darwin":
+                cmd = ["pbcopy"]
+            else:
+                cmd = ["xclip", "-selection", "clipboard"] if shutil.which("xclip") \
+                    else ["xsel", "--clipboard", "--input"]
+            proc = subprocess.run(cmd, input=text.encode("utf-8"),
+                                  creationflags=_CREATE_NO_WINDOW, timeout=5)
+            return {"ok": proc.returncode == 0}
+        except Exception as exc:  # noqa: BLE001 — nessuno strumento clipboard
+            return {"ok": False, "error": str(exc)}
 
-    def _stream(self, argv: list[str], *, key: str = "__fg__",
-                display: str = "", cwd: "str | None" = None,
-                env_extra: "dict[str, str] | None" = None) -> dict:
-        """Run ``argv`` in the background, streaming stdout to the log buffer.
+    # -- catalogo ----------------------------------------------------------
+    def catalog(self, _args: str = "") -> dict:
+        """Ambienti installati + comandi, raggruppati dal più grande al più piccolo.
 
-        Only one foreground command (``key='__fg__'``) runs at a time. Named
-        keys (Bridge/Tunnel) coexist so the network stack stays up while the
-        user runs other actions.
+        Mai sollevare: se il catalogo esplode la GUI deve dirlo, non morire.
         """
+        try:
+            envs = []
+            for env in catalog.environments():
+                envs.append({**env, "groups": catalog.grouped(env),
+                             "installable": (not env["installed"]) and env["key"] != "gray-matter"})
+            return {"envs": envs, "python": _python(), "version": _gm_version()}
+        except BaseException as exc:  # noqa: BLE001 — anche SystemExit
+            return {"envs": [], "python": _python(), "version": _gm_version(),
+                    "error": f"catalogo non leggibile: {type(exc).__name__}: {exc}"}
+
+    # -- esecuzione --------------------------------------------------------
+    def _stream(self, argv: list[str], *, key: str, display: str) -> dict:
+        """Esegue ``argv`` in background streamando stdout nel buffer di log."""
         existing = self._procs.get(key)
         if existing is not None and existing.poll() is None:
-            self._emit(f"[!] '{display or key}' is already running — wait or Stop.", "err")
+            self._emit(f"[!] '{display}' è già in esecuzione — attendi o premi Ferma.", "err")
             return {"ok": False, "busy": True}
         self._emit(f"$ {' '.join(argv)}", "cmd")
+        self._running[key] = display
 
         def _run() -> None:
             try:
                 env = os.environ.copy()
                 env["PYTHONUNBUFFERED"] = "1"
                 env["PYTHONUTF8"] = "1"
-                if env_extra:
-                    env.update(env_extra)
                 proc = subprocess.Popen(
                     argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, encoding="utf-8", errors="replace",
-                    creationflags=_CREATE_NO_WINDOW, env=env, cwd=cwd)
+                    stdin=subprocess.DEVNULL, text=True, bufsize=1,
+                    encoding="utf-8", errors="replace",
+                    creationflags=_CREATE_NO_WINDOW, env=env)
                 self._procs[key] = proc
                 assert proc.stdout is not None
                 for line in proc.stdout:
-                    self._route(key, display, line.rstrip("\n"))
+                    self._emit(line.rstrip("\n"), _tag_of(line))
                 proc.wait()
+                self._emit(f"[{display}] terminato (exit {proc.returncode})",
+                           "ok" if proc.returncode == 0 else "err")
             except FileNotFoundError:
-                self._emit(f"[!] command not found: {argv[0]}", "err")
+                self._emit(f"[!] eseguibile non trovato: {argv[0]}", "err")
             except Exception as exc:  # noqa: BLE001
-                self._emit(f"[{display or key}] {exc}", "err")
+                self._emit(f"[{display}] {exc}", "err")
             finally:
-                self._on_done(key, display)
+                self._running.pop(key, None)
 
         threading.Thread(target=_run, daemon=True).start()
         return {"ok": True}
 
-    def _route(self, key: str, display: str, line: str) -> None:
-        """Tag a streamed line; detect the tunnel URL for the network stack."""
-        tag = ""
-        if key in ("Bridge", "Tunnel"):
-            low = line.lower()
-            tag = "err" if any(k in low for k in ("error", "fail", "traceback")) else "dim"
-            if "trycloudflare.com" in line:
-                import re
-                m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
-                if m:
-                    self._tunnel_url = m.group(0)
-                    self._net_state = "up"
-                    self._emit(f"connector URL: {self._tunnel_url}/mcp", "ok")
-            self._emit(f"[{key}] {line}", tag)
-        else:
-            self._emit(line, tag)
-
-    def _on_done(self, key: str, display: str) -> None:
-        proc = self._procs.pop(key, None)
-        intentional = key in self._stopping
-        self._stopping.discard(key)
-        rc = proc.returncode if proc else 0
-        if rc and not intentional:
-            self._emit(f"[{display or key}] exited with code {rc}.", "err")
-        elif key in ("Bridge", "Tunnel"):
-            self._emit(f"[{key}] stopped.", "dim")
-        # watchdog: revive a keep-alive process that died unexpectedly
-        if key in self._keepalive and not intentional:
-            n = self._restarts.get(key, 0) + 1
-            self._restarts[key] = n
-            delay = min(2.0 * (2 ** min(n - 1, 5)), 60.0)
-            self._emit(f"[{key}] watchdog: restarting in {int(delay)}s (#{n})…", "dim")
-            threading.Timer(delay, lambda: self._revive(key)).start()
-
-    def _revive(self, key: str) -> None:
-        if key in self._keepalive and (
-                key not in self._procs or self._procs[key].poll() is not None):
-            self._stream(self._bg_args.get(key, []), key=key, display=key)
-
-    # -- orchestrator (gray-matter) -----------------------------------------
-
-    def gm_status(self, _args: str = "") -> dict:
-        """Fast structured status via the daemon IPC (no subprocess)."""
+    def _capture(self, argv: list[str], *, timeout: float = 25) -> "tuple[bool, str, str]":
+        """Esegue un comando CORTO e ne cattura stdout/stderr. Sincrono: SOLO per
+        letture rapide (``config list --json``, ``repair --json``), mai per comandi
+        lunghi — quelli restano non-bloccanti via :meth:`_stream`."""
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         try:
-            from gray_matter.cli import _send_ipc
-            r = _send_ipc({"action": "status"})
-        except Exception as exc:  # noqa: BLE001
-            return {"running": False, "error": str(exc)}
-        if "error" in r:
-            return {"running": False, "error": r["error"]}
-        servers = [{"name": n, "status": i.get("status", "?"),
-                    "pid": i.get("pid"), "tools": i.get("tool_names", []),
-                    "collaborative": i.get("collaborative", True)}
-                   for n, i in r.items()]
-        return {"running": True, "servers": servers}
+            r = subprocess.run(argv, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=timeout,
+                               creationflags=_CREATE_NO_WINDOW, env=env)
+        except Exception as exc:  # noqa: BLE001 — eseguibile assente / timeout
+            return False, "", str(exc)
+        return r.returncode == 0, r.stdout, r.stderr
 
-    def gm_start(self, _args: str = "") -> dict:
-        return self._stream(["gray-matter", "start"], display="gm start")
+    def _terminal(self, argv: list[str], *, display: str, keep_open: bool = True) -> dict:
+        """Apre ``argv`` in una finestra di terminale vera.
 
-    def gm_stop(self, _args: str = "") -> dict:
-        return self._stream(["gray-matter", "stop"], display="gm stop")
+        Serve ai comandi interattivi (setup, uninstall, connect, ...): fanno
+        domande, e nel pannello — che esegue con stdin chiuso — restavano
+        appesi senza dire niente. Era il "clicco e non parte nulla".
 
-    def gm_mode(self, args: str = "") -> dict:
-        mode = json.loads(args or "{}").get("mode", "collaborate")
-        return self._stream(["gray-matter", "mode", mode], display=f"mode {mode}")
-
-    def gm_isolate(self, args: str = "") -> dict:
-        name = json.loads(args or "{}").get("name", "")
-        return self._stream(["gray-matter", "isolate", name], display=f"isolate {name}")
-
-    def gm_collaborate(self, args: str = "") -> dict:
-        name = json.loads(args or "{}").get("name", "")
-        return self._stream(["gray-matter", "collaborate", name], display=f"collab {name}")
-
-    def gm_bridges(self, _args: str = "") -> dict:
-        return self._stream(["gray-matter", "bridges"], display="bridges")
-
-    # -- ecosystem (GM as hub: detect + install peers) ----------------------
-
-    def eco_status(self, _args: str = "") -> dict:
-        """Which peers are importable, and which are here as sibling folders."""
-        peers = []
-        for key, p in _PEERS.items():
-            try:
-                installed = importlib.util.find_spec(p["module"]) is not None
-            except Exception:  # noqa: BLE001 — a broken/partial install
-                installed = False
-            peers.append({
-                "key": key, "label": p["label"], "installed": installed,
-                "sibling": (_ENV_ROOT / p["dir"]).is_dir(),
-            })
-        return {"peers": peers}
-
-    def _peer_steps(self, key: str) -> "list[list[str]] | None":
-        """Command steps that install a peer: editable from the sibling folder,
-        else git clone + editable. None = impossible (no git, no sibling)."""
-        p = _PEERS.get(key)
-        if not p:
-            return None
-        sib = _ENV_ROOT / p["dir"]
-        # Turso is mandatory and pyturso has NO PyPI win_amd64 wheel: point pip
-        # at the prebuilt wheels in Neuron/vendor so it never compiles from Rust.
-        pip = [_python(), "-m", "pip", "install", "-e", str(sib)]
-        vendor = _ENV_ROOT / "Neuron" / "vendor"
-        if vendor.is_dir():
-            pip += ["--find-links", str(vendor)]
-        if sib.is_dir():
-            return [pip]
-        if shutil.which("git"):
-            return [["git", "clone", p["git"], str(sib)], pip]
-        return None
-
-    def eco_install(self, args: str = "") -> dict:
-        """Install a peer: editable from the sibling folder, else git clone it."""
-        key = json.loads(args or "{}").get("key", "")
-        steps = self._peer_steps(key)
-        if steps is None:
-            self._emit("[!] unknown peer, or git not found and no sibling folder.", "err")
-            return {"ok": False, "error": "cannot install"}
-        return self._run_seq(steps, display=f"install {key}")
-
-    # -- setup wizard --------------------------------------------------------
-
-    def setup_state(self, _args: str = "") -> dict:
-        """Everything the Setup card needs: peers, manifest, detected clients."""
-        out = {"peers": self.eco_status()["peers"]}
+        keep_open: se True (default), la finestra resta aperta a fine comando
+                   per leggere l'esito (cmd /k). Se False, la finestra si chiude
+                   automaticamente (cmd /c).
+        """
+        self._emit(f"$ {' '.join(argv)}", "cmd")
+        self._emit(f"[{display}] è interattivo: si apre in una finestra di "
+                   "terminale — continua lì.", "warn")
         try:
-            from gray_matter import executor, paths
-            st = executor.detect_state()
-            out.update({"manifest": paths.manifest_path().exists(),
-                        "clients": st.get("clients", []),
-                        "orphans": len(st.get("orphan_pids", []))})
-        except Exception as exc:  # noqa: BLE001
-            out["error"] = str(exc)
-        return out
-
-    def setup_run(self, args: str = "") -> dict:
-        """The wizard's Install: pip-install the selected missing peers, then
-        `gray-matter install` (gateway registration + hooks + manifest).
-        dry_run previews the gateway part without touching anything."""
-        a = json.loads(args or "{}")
-        dry = bool(a.get("dry_run"))
-        installed = {p["key"]: p["installed"] for p in self.eco_status()["peers"]}
-        steps: list[list[str]] = []
-        for key in a.get("components") or []:
-            if installed.get(key):
-                continue
-            peer = self._peer_steps(key)
-            if peer is None:
-                self._emit(f"[!] cannot install '{key}' (no sibling, no git) — skipping.", "err")
-                continue
-            if not dry:
-                steps += peer
-        steps.append([_python(), "-m", "gray_matter.cli", "install"]
-                     + (["--dry-run"] if dry else []))
-        return self._run_seq(steps, display="setup preview" if dry else "setup install")
-
-    def setup_prefs_get(self, _args: str = "") -> dict:
-        """Current settings (DEFAULTS + user overrides) for the wizard's prefs."""
-        try:
-            from gray_matter import settings
-            return {"prefs": settings.load(), "defaults": settings.DEFAULTS}
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-
-    def setup_prefs_set(self, args: str = "") -> dict:
-        """Save wizard prefs: only known keys, type-coerced by settings.set.
-        Effective on the next daemon (re)start — like `gray-matter config set`."""
-        try:
-            from gray_matter import settings
-            saved, errors = [], []
-            for k, v in (json.loads(args or "{}").get("prefs") or {}).items():
-                try:
-                    settings.set(k, v)
-                    saved.append(k)
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"{k}: {exc}")
-            self._emit(f"[prefs] saved: {', '.join(saved) or '-'}"
-                       + (f" | errors: {'; '.join(errors)}" if errors else ""),
-                       "err" if errors else "ok")
-            if saved:
-                self._emit("[prefs] restart the daemon (Stop/Start) to apply.", "")
-            return {"ok": not errors, "saved": saved, "errors": errors}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
-
-    def setup_test(self, _args: str = "") -> dict:
-        """The wizard's Test: daemon reachability + full health snapshot."""
-        return self._run_seq([[_python(), "-m", "gray_matter.cli", "ping"],
-                              [_python(), "-m", "gray_matter.cli", "doctor"]],
-                             display="setup test")
-
-    def _run_seq(self, steps: "list[list[str]]", *, display: str = "") -> dict:
-        """Run several commands in sequence in one thread, stopping on failure."""
-        existing = self._procs.get("__fg__")
-        if existing is not None and existing.poll() is None:
-            self._emit("[!] a command is already running — wait or Stop.", "err")
-            return {"ok": False, "busy": True}
-
-        def _go() -> None:
-            ok = True
-            for argv in steps:
-                self._emit(f"$ {' '.join(argv)}", "cmd")
-                try:
-                    env = os.environ.copy()
-                    env["PYTHONUNBUFFERED"] = "1"
-                    env["PYTHONUTF8"] = "1"
-                    proc = subprocess.Popen(
-                        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, bufsize=1, encoding="utf-8", errors="replace",
-                        creationflags=_CREATE_NO_WINDOW, env=env)
-                    self._procs["__fg__"] = proc
-                    assert proc.stdout is not None
-                    for line in proc.stdout:
-                        self._emit(line.rstrip("\n"))
-                    proc.wait()
-                    if proc.returncode:
-                        self._emit(f"[{display}] step failed (code {proc.returncode}) — stopping.", "err")
-                        ok = False
-                        break
-                except FileNotFoundError:
-                    self._emit(f"[!] command not found: {argv[0]}", "err")
-                    ok = False
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    self._emit(f"[{display}] {exc}", "err")
-                    ok = False
-                    break
-            self._procs.pop("__fg__", None)
-            self._emit(f"[{display}] {'done.' if ok else 'aborted.'}", "ok" if ok else "err")
-
-        threading.Thread(target=_go, daemon=True).start()
-        return {"ok": True}
-
-    # -- vault (neurag) ------------------------------------------------------
-
-    def rag_status(self, _args: str = "") -> dict:
-        return self._stream(["neurag", "status"], display="neurag status")
-
-    def rag_tree(self, _args: str = "") -> dict:
-        return self._stream(["neurag", "tree"], display="neurag tree")
-
-    def rag_query(self, args: str = "") -> dict:
-        q = json.loads(args or "{}").get("text", "").strip()
-        if not q:
-            return {"ok": False, "error": "empty query"}
-        return self._stream(["neurag", "query", q], display="neurag query")
-
-    def rag_import(self, args: str = "") -> dict:
-        path = json.loads(args or "{}").get("path", "").strip()
-        if not path:
-            return {"ok": False, "error": "no file"}
-        return self._stream(["neurag", "import", path], display="neurag import")
-
-    # -- memory (neuron) -----------------------------------------------------
-
-    def nr_overview(self, _args: str = "") -> dict:
-        return self._stream(["neuron", "manage", "--overview"], display="overview")
-
-    def nr_doctor(self, _args: str = "") -> dict:
-        return self._stream(["neuron", "doctor"], display="doctor")
-
-    def nr_consolidate(self, _args: str = "") -> dict:
-        return self._stream(["neuron", "manage", "--consolidate"], display="consolidate")
-
-    def nr_visualize(self, _args: str = "") -> dict:
-        return self._stream(["neuron", "manage", "--visualize"], display="visualize")
-
-    def nr_register(self, _args: str = "") -> dict:
-        return self._stream(["neuron", "register", "--client", "all"], display="register")
-
-    def nr_console(self, _args: str = "") -> dict:
-        """Console is a stdin REPL — open it in a real terminal (the one case)."""
-        return self._open_terminal(["neuron", "console"], "console")
-
-    # -- setup wizard: register the installed trio in MCP clients ------------
-
-    def wiz_detect(self, _args: str = "") -> dict:
-        from gray_matter import clients as C
-        return {"servers": C.installed_servers(), "clients": C.doctor()}
-
-    def wiz_register(self, _args: str = "") -> dict:
-        from gray_matter import clients as C
-        servers = C.installed_servers()
-        if not servers:
-            self._emit("[!] no installed servers to register — install one first.", "err")
-            return {"ok": False}
-        self._emit(f"Registering {', '.join(servers)} in detected clients…", "cmd")
-        results = C.register(servers, py=_python())
-        for r in results:
-            tag = "ok" if r.get("ok") else ("dim" if r.get("action") == "skipped" else "err")
-            line = f"  {r['client']}: {r['action']}"
-            if r.get("detail"):
-                line += f" — {r['detail']}"
-            self._emit(line, tag)
-            if r.get("snippet"):
-                self._emit("    add this by hand:", "dim")
-                for ln in r["snippet"].splitlines():
-                    self._emit("      " + ln, "dim")
-        self._emit("Done. Restart your AI apps to pick up the servers.", "ok")
-        return {"ok": True, "results": results}
-
-    # -- Turso cloud form (delegates to neuron.connect) ---------------------
-
-    def turso_test(self, args: str = "") -> dict:
-        d = json.loads(args or "{}")
-        url, token = d.get("url", "").strip(), d.get("token", "").strip()
-        try:
-            from neuron.connect import probe_connection, validate_url
-        except Exception:
-            return {"ok": False, "error": "Neuron not installed — Turso is a Neuron feature"}
-        err = validate_url(url)
-        if err:
-            return {"ok": False, "error": err}
-        if not token:
-            return {"ok": False, "error": "auth token required"}
-        try:
-            ok, scheme, detail = probe_connection(url, token)
-            return {"ok": ok, "scheme": scheme or "", "detail": detail}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
-
-    def turso_save(self, args: str = "") -> dict:
-        d = json.loads(args or "{}")
-        url, token = d.get("url", "").strip(), d.get("token", "").strip()
-        try:
-            from neuron.connect import update_env_file
-            env_path = os.path.join(os.getcwd(), ".env")
-            update_env_file(env_path, {"TURSO_DATABASE_URL": url,
-                                       "TURSO_AUTH_TOKEN": token})
-        except Exception as exc:  # noqa: BLE001
-            self._emit(f"[turso] save failed: {exc}", "err")
-            return {"ok": False, "error": str(exc)}
-        self._emit(f"[turso] credentials saved to {env_path} — restart Neuron to apply.", "ok")
-        return {"ok": True, "path": env_path}
-
-    # -- network stack (Bridge + Tunnel, watchdog) --------------------------
-
-    def net_state(self, _args: str = "") -> dict:
-        active = [n for n in ("Bridge", "Tunnel")
-                  if n in self._procs and self._procs[n].poll() is None]
-        return {"state": self._net_state, "active": active,
-                "tunnel_url": self._tunnel_url}
-
-    def net_start(self, _args: str = "") -> dict:
-        missing = self._network_preflight()
-        if missing:
-            self._emit("Install the missing dependencies above, then retry.", "err")
-            return {"ok": False, "missing": missing}
-        self._net_state = "starting"
-        self._tunnel_url = ""
-        self._restarts.pop("Bridge", None)
-        self._restarts.pop("Tunnel", None)
-        self._keepalive.update(("Bridge", "Tunnel"))
-        self._bg_args["Bridge"] = ["neuron", "bridge"]
-        self._bg_args["Tunnel"] = ["neuron", "tunnel"]
-        self._stream(["neuron", "bridge"], key="Bridge", display="Bridge")
-        threading.Thread(target=self._await_bridge_then_tunnel, daemon=True).start()
-        return {"ok": True}
-
-    def _await_bridge_then_tunnel(self, port: int = 8000, timeout: float = 90.0) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if "Tunnel" not in self._keepalive:      # user pressed Stop meanwhile
-                return
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=1.5):
-                    pass
-                self._emit(f"[Bridge] ready on 127.0.0.1:{port} — starting Tunnel…", "ok")
-                self._stream(["neuron", "tunnel"], key="Tunnel", display="Tunnel")
-                return
-            except OSError:
-                time.sleep(1.0)
-        self._emit(f"[!] Bridge did not open port {port} within {int(timeout)}s — "
-                   "Tunnel NOT started.", "err")
-        self._keepalive.discard("Tunnel")
-        self._net_state = "off"
-
-    def net_stop(self, _args: str = "") -> dict:
-        self._net_state = "off"
-        self._keepalive.discard("Bridge")
-        self._keepalive.discard("Tunnel")
-        self._stopping.update(("Bridge", "Tunnel"))
-        for name in ("Bridge", "Tunnel"):
-            self._kill(name)
-        self._tunnel_url = ""
-        return {"ok": True}
-
-    def _network_preflight(self) -> list[str]:
-        missing: list[str] = []
-        self._emit("Checking dependencies:", "dim")
-        runner = next((r for r in ("mcp-proxy", "uvx", "uv", "pipx") if shutil.which(r)), None)
-        if runner:
-            self._emit(f"  ok  mcp-proxy runner: {runner}", "ok")
-        else:
-            missing.append("mcp-proxy runner (uv/pipx)")
-            self._emit("  xx  no mcp-proxy runner (Bridge). Try: winget install astral-sh.uv", "err")
-        if shutil.which("cloudflared"):
-            self._emit("  ok  cloudflared (Tunnel)", "ok")
-        else:
-            missing.append("cloudflared")
-            self._emit("  xx  cloudflared not found. Try: winget install Cloudflare.cloudflared", "err")
-        return missing
-
-    # -- process control -----------------------------------------------------
-
-    def _kill(self, name: str) -> None:
-        proc = self._procs.get(name)
-        if proc and proc.poll() is None:
-            try:
-                if os.name == "nt":
-                    subprocess.call(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                                    creationflags=_CREATE_NO_WINDOW)
-                else:
-                    proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:  # noqa: BLE001
-                pass
-            self._emit(f"[{name}] terminated.", "err")
-
-    def stop_all(self, _args: str = "") -> dict:
-        self._keepalive.clear()
-        self._net_state = "off"
-        for name in list(self._procs):
-            self._stopping.add(name)
-            self._kill(name)
-        self._tunnel_url = ""
-        self._emit("[all stopped]", "err")
-        return {"ok": True}
-
-    def _open_terminal(self, argv: list[str], display: str) -> dict:
-        try:
-            if sys.platform == "win32":
-                subprocess.Popen(["cmd", "/k", *argv],
+            if os.name == "nt":
+                cmd_flag = "/k" if keep_open else "/c"
+                subprocess.Popen(["cmd", cmd_flag, *argv],
                                  creationflags=subprocess.CREATE_NEW_CONSOLE)
-            elif sys.platform == "darwin":
-                script = " ".join(argv).replace('"', '\\"')
-                subprocess.Popen(["osascript", "-e",
-                                  f'tell app "Terminal" to do script "{script}"'])
-            else:
-                for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
-                    if shutil.which(term):
-                        subprocess.Popen([term, "-e", *argv])
-                        break
-                else:
-                    self._emit(f"[!] no terminal emulator — run `{' '.join(argv)}` manually.", "err")
-                    return {"ok": False}
-            self._emit(f"[{display}] opened in a new terminal.", "ok")
-            return {"ok": True}
+                return {"ok": True}
+            for term in (("x-terminal-emulator", "-e"), ("gnome-terminal", "--"),
+                         ("konsole", "-e"), ("xterm", "-e")):
+                if shutil.which(term[0]):
+                    subprocess.Popen([*term, *argv])
+                    return {"ok": True}
+            self._emit("[!] nessun terminale trovato: esegui a mano: "
+                       + " ".join(argv), "err")
+            return {"ok": False, "error": "nessun terminale disponibile"}
         except Exception as exc:  # noqa: BLE001
-            self._emit(f"[!] could not open terminal: {exc}", "err")
+            self._emit(f"[{display}] {exc}", "err")
             return {"ok": False, "error": str(exc)}
 
+    def run(self, args: str = "") -> dict:
+        """Esegue QUALUNQUE comando del catalogo. Unico punto di esecuzione."""
+        req = json.loads(args) if args else {}
+        tool, command = req.get("tool", ""), req.get("command", "")
+        if not tool or not command:
+            return {"ok": False, "error": "servono 'tool' e 'command'"}
+        # Il comando deve esistere nel catalogo: la GUI non inventa comandi.
+        env = next((e for e in catalog.environments() if e["key"] == tool), None)
+        if env is None or not env["installed"]:
+            return {"ok": False, "error": f"{tool} non è installato"}
+        spec = next((c for c in env["commands"] if c["name"] == command), None)
+        if spec is None:
+            return {"ok": False, "error": f"{tool} non ha il comando '{command}'"}
+        fields = req.get("args") or {}
+        fields["_spec"] = {a["dest"]: a for a in spec["args"]}
+        fields["_order"] = [a["dest"] for a in spec["args"]]
+        # Argomenti obbligatori vuoti: meglio dirlo subito che far fallire
+        # argparse dentro la console con un usage criptico.
+        missing = [a["dest"] for a in spec["args"]
+                   if a.get("required") and not str(fields.get(a["dest"], "")).strip()]
+        if missing:
+            return {"ok": False,
+                    "error": f"compila prima: {', '.join(missing)}"}
+        try:
+            argv = _argv_for(tool, command, fields, req.get("extra", ""))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if spec.get("interactive"):
+            return self._terminal(argv, display=f"{tool} {command}")
+        return self._stream(argv, key=f"{tool}:{command}",
+                            display=f"{tool} {command}")
 
-# ---------------------------------------------------------------------------
-# Local HTTP server — the SINGLE transport. Both the pywebview window and the
-# browser fallback point at http://127.0.0.1:<port>/ , so the frontend always
-# talks plain fetch to a real http origin. No js_api bridge, no file:// content
-# (which on Windows left window.pywebview undefined and the buttons dead).
-# ---------------------------------------------------------------------------
+    # -- config knobs (settings card) -------------------------------------
+    def config_knobs(self, args: str = "") -> dict:
+        """Knob correnti di un ambiente (key, value, type, default, help, suggest).
+
+        Via CLI: ``<tool> config list --json`` — i metadati dei knob vivono nel
+        tool che li possiede (SSOT), la GUI non importa più `settings`. Un tool
+        senza config (es. Neuron) non ha il comando → il pannello non compare.
+        """
+        req = json.loads(args) if args else {}
+        tool = req.get("tool", "")
+        try:
+            argv = _cli_argv(tool, "config", "list", "--json")
+        except ValueError as exc:
+            return {"ok": False, "knobs": [], "error": str(exc)}
+        ok, out, err = self._capture(argv)
+        if not ok:
+            return {"ok": False, "knobs": [],
+                    "error": err.strip() or out.strip() or f"{tool}: nessun config"}
+        try:
+            data = json.loads(out)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "knobs": [], "error": f"config illeggibile: {exc}"}
+        return {"ok": True, "knobs": data.get("knobs", []), "note": data.get("note", "")}
+
+    def config_set(self, args: str = "") -> dict:
+        """Persiste un knob via ``<tool> config set <key> <value> --json``,
+        con eco in console. Il tool fa la coercizione di tipo e ritorna il valore
+        effettivo."""
+        req = json.loads(args) if args else {}
+        tool, key, value = req.get("tool", ""), req.get("key", ""), req.get("value", "")
+        try:
+            argv = _cli_argv(tool, "config", "set", str(key), str(value), "--json")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        ok, out, err = self._capture(argv)
+        if not ok:
+            msg = err.strip() or out.strip() or "errore"
+            self._emit(f"[{tool} config] {msg}", "err")
+            return {"ok": False, "error": msg}
+        try:
+            data = json.loads(out)
+        except Exception:  # noqa: BLE001
+            data = {"key": key, "value": value}
+        self._emit(f"[{tool} config] {data.get('key')} = {data.get('value')}", "ok")
+        return {"ok": True, "key": data.get("key"), "value": data.get("value")}
+
+    def stop(self, args: str = "") -> dict:
+        """Ferma un comando in corso (o tutti, se non se ne indica uno)."""
+        req = json.loads(args) if args else {}
+        keys = [req["key"]] if req.get("key") else list(self._procs)
+        stopped = 0
+        for k in keys:
+            p = self._procs.get(k)
+            if p is not None and p.poll() is None:
+                p.terminate()
+                stopped += 1
+                self._emit(f"[{k}] fermato su richiesta.", "warn")
+        return {"ok": True, "stopped": stopped}
+
+    # -- installazione ambienti -------------------------------------------
+    def install_env(self, args: str = "") -> dict:
+        """Installa un ambiente mancante: cartella sorella se c'è, else git clone."""
+        req = json.loads(args) if args else {}
+        key = req.get("key", "")
+        if key not in _PEER_GIT:
+            return {"ok": False, "error": f"non installabile: {key}"}
+        sib = _ENV_ROOT / key
+        find_links = [str(d / "vendor") for d in (_ENV_ROOT / "gray_matter", sib)
+                      if (d / "vendor").is_dir()]
+        pip = [_python(), "-m", "pip", "install", str(sib)]
+        for fl in find_links:
+            pip += ["--find-links", fl]
+        if sib.is_dir():
+            return self._stream(pip, key=f"install:{key}", display=f"installa {key}")
+        if not shutil.which("git"):
+            return {"ok": False,
+                    "error": f"{key} non è qui e git non è disponibile: installalo a mano"}
+        self._emit(f"[installa {key}] clono da {_PEER_GIT[key]}", "cmd")
+        return self._stream([shutil.which("git"), "clone", _PEER_GIT[key], str(sib)],
+                            key=f"install:{key}", display=f"clona {key}")
+
+    # -- repair (clean reinstall + scelta cosa cancellare) -----------------
+    def repair_state(self, args: str = "") -> dict:
+        """Superfici cancellabili + reinstall, chieste al TOOL via ``<tool> repair
+        --json`` (ogni tool conosce i PROPRI path/installer — SSOT). Da Neuron mostra
+        solo Neuron, da NeuRAG solo NeuRAG, da Gray Matter tutta la suite."""
+        req = json.loads(args) if args else {}
+        scope = req.get("scope", "gray-matter")
+        try:
+            argv = _cli_argv(scope, "repair", "--json")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "targets": []}
+        ok, out, err = self._capture(argv)
+        if not ok:
+            return {"ok": False, "error": err.strip() or out.strip() or "repair non disponibile",
+                    "targets": []}
+        try:
+            data = json.loads(out)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"repair illeggibile: {exc}", "targets": []}
+        return {"ok": True, "scope": data.get("scope", scope),
+                "targets": data.get("targets", []),
+                "reinstall": data.get("reinstall", "?"),
+                "installer": bool(data.get("installer"))}
+
+    def repair_run(self, args: str = "") -> dict:
+        """Delega al TOOL: ``<tool> repair <wipe...> --reinstall``. I `wipe` sono i
+        token CLI restituiti da repair_state (positional per GM, flag `--wipe-*`
+        per Neuron/NeuRAG), così questa resta generica. Aperto in un TERMINALE:
+        l'installer -Force è pesante e può fare domande — lì può rispondere, e
+        non compete con la GUI (che gira dallo stesso venv)."""
+        req = json.loads(args) if args else {}
+        wipe = req.get("wipe") or []
+        scope = req.get("scope", "gray-matter")
+        self._emit(f"$ repair  scope={scope}  wipe={wipe or '(niente)'}", "cmd")
+        try:
+            argv = _cli_argv(scope, "repair", *wipe, "--reinstall")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return self._terminal(argv, display=f"repair {scope}", keep_open=False)
+
+    # -- uninstall (card dedicata, non interactive) -------------------------
+    # Solo Gray Matter espone il comando `uninstall` → la card compare solo per
+    # GM (Neuron/NeuRAG escono dal gateway con go-standalone/deregister, non con
+    # una disinstallazione dati). Tutto passa da `gray-matter uninstall --json`.
+
+    def uninstall_state(self, args: str = "") -> dict:
+        req = json.loads(args) if args else {}
+        scope = req.get("scope", "gray-matter")
+        try:
+            argv = _cli_argv(scope, "uninstall", "--list", "--json")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "scope": scope}
+        ok, out, err = self._capture(argv)
+        if not ok:
+            return {"ok": False, "error": err.strip() or out.strip() or "uninstall non disponibile",
+                    "scope": scope}
+        try:
+            data = json.loads(out)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"uninstall illeggibile: {exc}", "scope": scope}
+        return {"ok": True, "scope": data.get("scope", scope),
+                "targets": data.get("targets", []), "data": data.get("data", [])}
+
+    def uninstall_run(self, args: str = "") -> dict:
+        req = json.loads(args) if args else {}
+        scope = req.get("scope", "gray-matter")
+        purge_data = bool(req.get("purge_data", False))
+        self._emit(f"$ uninstall  scope={scope}  purge_data={purge_data}", "cmd")
+        try:
+            extra = ["--purge-data"] if purge_data else []
+            argv = _cli_argv(scope, "uninstall", "--json", *extra)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        # Sincrono ma breve: reap/deregister/rimozione file, poi verifica. Timeout
+        # generoso perché tocca i config dei client.
+        ok, out, err = self._capture(argv, timeout=90)
+        if not ok and not out.strip():
+            msg = err.strip() or "uninstall fallito"
+            self._emit(f"[uninstall] {msg}", "err")
+            return {"ok": False, "error": msg}
+        try:
+            res = json.loads(out)
+        except Exception as exc:  # noqa: BLE001
+            self._emit(f"[uninstall] output illeggibile: {exc}", "err")
+            return {"ok": False, "error": str(exc)}
+        for r in res.get("results", []):
+            name = r.get("name") or r.get("action")
+            self._emit(f"  {'✓' if r.get('ok') else '✗'} {name}",
+                       "ok" if r.get("ok") else "err")
+        verification = res.get("verification", {"ok": res.get("ok"), "checks": {}})
+        if verification.get("ok"):
+            self._emit(f"[uninstall] {scope}: verificato ✓", "ok")
+        else:
+            failed = [k for k, v in verification.get("checks", {}).items() if not v]
+            self._emit(f"[uninstall] {scope}: verifica ✗ ({', '.join(failed)})", "err")
+        return {"ok": res.get("ok", verification.get("ok")),
+                "results": res.get("results", []), "verification": verification}
+
+    # -- gm_link (ri-aggancio tool standalone) -------------------------------
+
+    def link_state(self, args: str = "") -> dict:
+        """Stato gateway per la card gm_link: quali tool sono standalone e
+        ricollegabili. USA --list --json del CLI come SSOT."""
+        from gray_matter import clients
+        installed = set(clients.installed_servers())
+        unmanaged = clients.unmanaged_tools()
+        tools = []
+        for t in ("neuron", "neurag"):
+            tools.append({
+                "key": t,
+                "installed": t in installed,
+                "standalone": t in installed and t in unmanaged,
+                "managed": t in installed and t not in unmanaged,
+            })
+        return {"ok": True, "tools": tools}
+
+    def link_run(self, args: str = "") -> dict:
+        """Esegui link per i tool selezionati."""
+        req = json.loads(args) if args else {}
+        selected = req.get("tools", [])
+        if not selected:
+            return {"ok": False, "error": "nessun tool selezionato"}
+        from gray_matter import clients
+        installed = set(clients.installed_servers())
+        unmanaged = clients.unmanaged_tools()
+        linked, skipped = [], []
+        LINK_TOOL_SLUGS = {"neuron": ["neuron", "neuron5"], "neurag": ["neurag"]}
+        for t in selected:
+            if t not in ("neuron", "neurag"):
+                skipped.append({"tool": t, "reason": "tool sconosciuto"})
+            elif t not in installed:
+                skipped.append({"tool": t, "reason": "non installato"})
+            elif t not in unmanaged:
+                skipped.append({"tool": t, "reason": "già gestito da GM"})
+            else:
+                clients.set_unmanaged(t, False)
+                linked.append(t)
+        reg, dereg = [], []
+        if linked:
+            reg = clients.register(["gray-matter"])
+            drop = [s for t in linked for s in LINK_TOOL_SLUGS.get(t, [t])]
+            dereg = clients.deregister(drop) if drop else []
+        return {"ok": bool(linked), "linked": linked, "skipped": skipped,
+                "details": reg + dereg}
+
+    # -- process management ------------------------------------------------
+
+    def process_list(self, args: str = "") -> dict:
+        """Comandi lanciati DAL control center ancora vivi (fonte 'gui').
+
+        ponytail: niente scan `tasklist`/lettura pids del daemon qui — toglieva il
+        coupling a `executor`/`paths` E spawnava `tasklist` a OGNI render (era il
+        flash + la latenza, task D). Il daemon GM di background si ferma dalla card
+        `gray-matter → stop` (comando già nel catalogo). Aggiungere il daemon qui:
+        serve una via CLI che ne esponga il PID (oggi non c'è) — non vale il costo.
+        """
+        processes = [{"pid": p.pid, "name": k, "status": "running", "source": "gui"}
+                     for k, p in self._procs.items() if p.poll() is None]
+        return {"ok": True, "processes": processes}
+
+    def process_stop(self, args: str = "") -> dict:
+        """Ferma un comando lanciato dalla GUI (per PID) o tutti."""
+        req = json.loads(args) if args else {}
+        target = req.get("pid")
+        try:
+            target = int(target) if target is not None else None
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "pid non valido"}
+        stopped = 0
+        for k, p in list(self._procs.items()):
+            if p.poll() is None and (target is None or p.pid == target):
+                p.terminate()
+                stopped += 1
+                self._emit(f"[{k}] fermato.", "warn")
+        return {"ok": True, "stopped": stopped}
+
+
+def _tag_of(line: str) -> str:
+    low = line.lower()
+    if any(w in low for w in ("error", "errore", "traceback", "[!!]", "failed")):
+        return "err"
+    if any(w in low for w in ("warning", "attenzione", "[!]")):
+        return "warn"
+    if any(w in low for w in ("[ok]", " ok", "done", "success")):
+        return "ok"
+    return ""
+
+
+# --------------------------------------------------------------------------
+# Trasporto
+# --------------------------------------------------------------------------
 
 def _build_server(api: Api):
-    """Start the local API server. Returns (server, port, injected_html).
-
-    The page's own absolute address is baked into the HTML (``__GM_API_BASE__``)
-    so the frontend fetches an absolute URL — which works whether pywebview
-    renders the page from an http origin or from a file:// window. CORS headers
-    (plus an OPTIONS preflight handler) let a file:// page reach the server.
-    """
     import http.server
 
-    holder = {"html": ""}
+    holder: dict = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *_a):  # silence default logging
+        def log_message(self, *a):        # niente rumore su stdout
             pass
-
-        def _cors(self) -> None:
-            self.send_header("Access-Control-Allow-Origin", "*")
 
         def _send(self, code: int, body: bytes, ctype: str) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self._cors()
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
 
-        def do_OPTIONS(self) -> None:               # CORS preflight
+        def do_OPTIONS(self):
             self.send_response(204)
-            self._cors()
-            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.send_header("Content-Length", "0")
             self.end_headers()
 
-        def do_GET(self) -> None:
-            if self.path in ("/", "/index.html"):
-                self._send(200, holder["html"].encode("utf-8"),
-                           "text/html; charset=utf-8")
-            else:
-                self._send(404, b"not found", "text/plain")
+        def do_GET(self):
+            self._send(200, holder["html"].encode("utf-8"), "text/html; charset=utf-8")
 
-        def do_POST(self) -> None:
-            if not self.path.startswith("/api/"):
-                self._send(404, b"not found", "text/plain")
+        def do_POST(self):
+            name = self.path.rsplit("/", 1)[-1]
+            fn = getattr(api, name, None)
+            if not self.path.startswith("/api/") or fn is None or name.startswith("_"):
+                self._send(404, b'{"error":"unknown"}', "application/json")
                 return
-            method = self.path[len("/api/"):]
-            fn = getattr(api, method, None)
-            if fn is None or method.startswith("_"):
-                self._send(404, b'{"error":"no such method"}',
-                           "application/json")
-                return
-            length = int(self.headers.get("Content-Length", 0))
+            length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             try:
                 result = fn(raw) if raw else fn()
             except Exception as exc:  # noqa: BLE001
                 result = {"error": str(exc)}
-            self._send(200, json.dumps(result).encode("utf-8"),
-                       "application/json")
+            self._send(200, json.dumps(result).encode("utf-8"), "application/json")
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = srv.server_address[1]
@@ -665,45 +625,68 @@ def _build_server(api: Api):
     return srv, port, holder["html"]
 
 
+def _browser_mode(url: str, srv, reason: str) -> int:
+    """Fallback universale: la pagina nel browser di sistema, server in vita."""
+    import webbrowser
+    _say(f"Gray Matter control center -> {url}  (browser; {reason})")
+    if not os.environ.get("GM_GUI_NOBROWSER"):
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.shutdown()
+    return 0
+
+
 def main(argv: "list[str] | None" = None) -> int:
     api = Api()
     srv, port, html = _build_server(api)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/"
 
+    if os.environ.get("GM_GUI_BROWSER"):          # scelta esplicita dell'utente
+        return _browser_mode(url, srv, "GM_GUI_BROWSER=1")
     try:
         import webview  # noqa: F401
-    except Exception:
-        import webbrowser
-        print(f"Gray Matter control center → {url}  (browser; pywebview not installed)")
-        if not os.environ.get("GM_GUI_NOBROWSER"):
-            threading.Timer(0.4, lambda: webbrowser.open(url)).start()
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            srv.shutdown()
-        return 0
+    except Exception:  # noqa: BLE001
+        return _browser_mode(url, srv, "pywebview assente")
 
-    # html= (with the absolute API base baked in) renders reliably on WebView2;
-    # the frontend reaches the server by absolute URL + CORS, so the file://
-    # origin that broke relative fetch no longer matters.
+    # URL, NON html=: una pagina passata come stringa vive su about:blank e
+    # WebView2 le blocca le fetch verso http://127.0.0.1 — finestra aperta,
+    # zero card. Servita dal nostro stesso server è same-origin: tutto lecito.
     window = webview.create_window(
-        "Gray Matter — Control Center", html=html,
-        width=1080, height=720, min_size=(900, 600),
+        "Gray Matter — Control Center", url=url,
+        width=1180, height=780, min_size=(940, 620),
         background_color="#1a1b26")
     if os.environ.get("GM_GUI_SELFTEST"):
         def _close():
             time.sleep(1.0)
             try:
                 window.destroy()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
         threading.Thread(target=_close, daemon=True).start()
     try:
-        webview.start()
+        # Su Windows si ESIGE WebView2 (edgechromium): senza, pywebview
+        # ripiegherebbe su MSHTML (IE11), che non parla il JS della pagina —
+        # finestra aperta, niente card, nessun errore. Meglio il browser vero.
+        kwargs = {"debug": bool(os.environ.get("GM_GUI_DEBUG"))}
+        if os.name == "nt":
+            kwargs["gui"] = "edgechromium"
+        # Set the window icon from the bundled .ico (best-effort, never block).
+        try:
+            _ico = Path(__file__).parent / "assets" / "gray-matter.ico"
+            if _ico.is_file():
+                kwargs["icon"] = str(_ico)
+        except Exception:  # noqa: BLE001
+            pass
+        webview.start(**kwargs)
+    except Exception as exc:  # noqa: BLE001 — WebView2 mancante o rotto
+        _say(f"[!] finestra nativa non disponibile ({exc}) — apro nel browser.")
+        return _browser_mode(url, srv, "WebView2 non disponibile")
     finally:
         srv.shutdown()
     return 0

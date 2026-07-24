@@ -43,9 +43,34 @@ def pids_path() -> Path:    return gm_home() / "pids.json"
 
 
 # --- User MEMORY (never wiped without explicit consent — INSTALLER-UX §6) ---
-def neuron_graphs() -> Path: return _user_base() / SLUG / "graphs"
-def gm_bridges() -> Path:    return gm_home() / "bridges.json"
-def neurag_db() -> Path:     return _user_base() / "neurag" / "knowledge.db"
+# SoC: GM NON definisce i path dei peer, li SCOPRE chiamando i peer (ognuno è la
+# SSOT dei propri). Import lazy + fallback storico se il peer non è installato,
+# così GM standalone non si rompe. (richiesta 2026-07-22: SSOT/SoC ai massimi)
+def neuron_graphs() -> Path:
+    try:
+        from neuron import paths as _np
+        return _np.graphs_dir()
+    except Exception:  # noqa: BLE001 — Neuron non installato: fallback storico
+        return _user_base() / SLUG / "graphs"
+
+
+def neurag_db() -> Path:
+    try:
+        from neurag import paths as _rp
+        return _rp.db_path()
+    except Exception:  # noqa: BLE001 — NeuRAG non installato: fallback storico
+        return _user_base() / "neurag" / "knowledge.db"
+
+
+def neurag_config() -> Path:
+    try:
+        from neurag import paths as _rp
+        return _rp.config_path()
+    except Exception:  # noqa: BLE001
+        return _user_base() / "neurag" / "config.json"
+
+
+def gm_bridges() -> Path:    return gm_home() / "bridges.db"   # was bridges.json (migrated once)
 
 
 def data_paths() -> dict:
@@ -53,6 +78,86 @@ def data_paths() -> dict:
     return {"neuron_graphs": neuron_graphs(),
             "gm_bridges": gm_bridges(),
             "neurag_db": neurag_db()}
+
+
+# --- Source discovery: GM registra il PROPRIO sorgente, SCOPRE quelli dei peer
+# SoC/SSOT: ogni componente è la fonte di verità del proprio path sorgente
+# (`<comp>.paths.source_dir()`). GM tiene solo il PROPRIO record e, per repair/
+# reinstall/GUI, COMPONE la vista chiedendo ai peer — non li ridefinisce.
+def env_file() -> Path:
+    return gm_home() / "paths.json"          # record del sorgente DI GM
+
+
+def record_self(source: "str | Path | None" = None) -> dict:
+    """GM registra la propria cartella sorgente (repo). La chiama l'installer.
+    I peer registrano sé stessi con i loro `record-paths`. Idempotente."""
+    data = {}
+    try:
+        data = json.loads(env_file().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        data = {}
+    if source and (Path(source) / "pyproject.toml").exists():
+        data["source"] = str(Path(source).resolve())
+    data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        f = env_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return data
+
+
+def _gm_source() -> Path:
+    try:
+        rec = json.loads(env_file().read_text(encoding="utf-8")).get("source")
+        if rec and Path(rec).exists():
+            return Path(rec)
+    except Exception:  # noqa: BLE001
+        pass
+    return Path(__file__).resolve().parent   # .../gray_matter (posizione pacchetto)
+
+
+def source_dir(component: str) -> "Path | None":
+    """Cartella sorgente (repo) di un componente. GM la conosce per sé, i peer la
+    ESPONGONO loro (`<comp>.paths.source_dir()`) → GM chiede, non hardcoda."""
+    try:
+        if component == "gray-matter":
+            p = _gm_source()
+        elif component == "neuron":
+            from neuron import paths as _np
+            p = _np.source_dir()
+        elif component == "neurag":
+            from neurag import paths as _rp
+            p = _rp.source_dir()
+        else:
+            return None
+        return p if p and Path(p).exists() else None
+    except Exception:  # noqa: BLE001 — peer non installato
+        return None
+
+
+def discover_sources() -> dict:
+    """Vista composta {componente: sorgente} chiedendo a ciascuno il proprio."""
+    out = {}
+    for c in ("gray-matter", "neuron", "neurag"):
+        d = source_dir(c)
+        if d:
+            out[c] = str(d)
+    return out
+
+
+def installer_script() -> "Path | None":
+    """L'installer completo (install.ps1/sh) dal sorgente gray-matter."""
+    gm = source_dir("gray-matter")
+    if not gm:
+        return None
+    ps1, sh = gm / "install.ps1", gm / "install.sh"
+    if os.name == "nt" and ps1.exists():
+        return ps1
+    if sh.exists():
+        return sh
+    return ps1 if ps1.exists() else None
 
 
 class Manifest:

@@ -15,12 +15,19 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
 from gray_matter import installer, paths, uninstaller
 
-__all__ = ["detect_state", "execute_install", "execute_uninstall"]
+# Windows: nascondi la finestra console dei child (tasklist/taskkill). La GUI gira
+# via pythonw (senza console), quindi ogni subprocess console LAMPEGGIA un CMD —
+# era il "cmd che appare a ogni clic sul tool" (pannello Processi in render()).
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+__all__ = ["detect_state", "execute_install", "execute_uninstall",
+           "repair_targets", "execute_repair"]
 
 # Marker used to recognise our own entries when scrubbing client configs.
 _HOOK_MARKERS = ("neuron_sessionstart_hook", "neuron-handshake", "neuron-guard")
@@ -33,9 +40,9 @@ _HOOK_MARKERS = ("neuron_sessionstart_hook", "neuron-handshake", "neuron-guard")
 def _alive(pid: int) -> bool:
     try:
         if os.name == "nt":
-            import subprocess
             r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, timeout=10,
+                               creationflags=_NO_WINDOW)
             return str(pid) in r.stdout
         os.kill(pid, 0)
         return True
@@ -82,9 +89,9 @@ def _reap(pids: list[int], dry_run: bool) -> dict:
             continue
         try:
             if os.name == "nt":
-                import subprocess
                 subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                               capture_output=True, timeout=10)
+                               capture_output=True, timeout=10,
+                               creationflags=_NO_WINDOW)
             else:
                 os.kill(pid, signal.SIGTERM)
             killed.append(pid)
@@ -210,6 +217,62 @@ def _deploy_hook(client: str, asset: str, assets_root: Path, dry_run: bool) -> d
             "deployed": deployed, "detail": detail}
 
 
+# A sentinel asset every valid clients-root must contain. Guards against
+# returning a dir that merely *exists* but is empty (the old "asset missing"
+# trap: a stale env var or an assets-less repo-root shell).
+_CLIENTS_SENTINEL = "claude-code-hook/neuron_sessionstart_hook.py"
+
+
+def _has_assets(p: Path) -> bool:
+    return (p / _CLIENTS_SENTINEL).exists()
+
+
+def _find_clients_root() -> Path:
+    """Locate the handshake-assets ``clients/`` directory.
+
+    Since the assets now travel *inside* the installed ``neuron`` package
+    (`src/neuron/clients/`, shipped via package-data), the robust primary path
+    is to ask importlib where ``neuron`` lives — this works identically for a
+    wheel install and an editable (`pip install -e`) checkout. The dev-layout
+    and env-var paths remain as fallbacks. Every candidate is validated with
+    :func:`_has_assets` so a stale/empty dir never wins.
+    """
+    import os
+    # 1. Explicit env var (power users / dev) — only if it actually has assets.
+    env_dir = os.environ.get("GM_NEURON_CLIENTS")
+    if env_dir and _has_assets(Path(env_dir)):
+        return Path(env_dir)
+    # 2. Installed neuron package (wheel OR editable): <neuron>/clients.
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("neuron")
+        for loc in (spec.submodule_search_locations or []) if spec else []:
+            cand = Path(loc) / "clients"
+            if _has_assets(cand):
+                return cand
+    except Exception:  # noqa: BLE001 — import machinery must never break install
+        pass
+    # 3. Dev/source layouts (no neuron installed): new in-package location, then
+    #    the legacy repo-root location, bundled-in-GM, and a short walk-up.
+    pkg = Path(__file__).resolve().parent
+    for cand in (
+        pkg / "neuron" / "src" / "neuron" / "clients",          # bundled in GM zip
+        pkg.parent / "neuron" / "src" / "neuron" / "clients",   # sibling checkout
+        pkg / "neuron" / "clients",                             # legacy bundled
+        pkg.parent / "neuron" / "clients",                      # legacy sibling
+    ):
+        if _has_assets(cand):
+            return cand
+    for parent in (pkg.parent, pkg.parent.parent, pkg.parent.parent.parent):
+        for cand in (parent / "neuron" / "src" / "neuron" / "clients",
+                     parent / "neuron" / "clients"):
+            if _has_assets(cand):
+                return cand
+    # 4. Nothing found — return the canonical in-package path so the deploy step
+    #    emits a clear "asset missing: <path>" pointing at the right place.
+    return pkg.parent / "neuron" / "src" / "neuron" / "clients"
+
+
 # --------------------------------------------------------------------------
 # Install executor
 # --------------------------------------------------------------------------
@@ -223,8 +286,7 @@ def execute_install(state: dict | None = None, *, assets_root=None,
     """
     from gray_matter import clients as _clients
     state = state if state is not None else detect_state()
-    root = Path(assets_root) if assets_root else (
-        Path(__file__).resolve().parent.parent / "Neuron" / "clients")
+    root = Path(assets_root) if assets_root else _find_clients_root()
     hooks: dict[str, list[str]] = {}
     results: list[dict] = []
     for act in installer.plan(state):
@@ -355,6 +417,82 @@ def _remove_data(name: str, path: str, dry_run: bool) -> dict:
         return {"action": "remove_data", "ok": False, "name": name, "detail": str(exc)}
 
 
+# --------------------------------------------------------------------------
+# Repair — granular clean: the user picks WHAT to wipe; code reinstall (forced)
+# is done separately by the installer (`install.ps1 -Force`). This function is
+# only the "cosa togliere" half: it removes exactly the chosen data surfaces and
+# never touches anything not requested. Every item is optional and independent.
+# --------------------------------------------------------------------------
+
+def _neurag_config_path() -> Path:
+    """NeuRAG's own knob file — chiesto a NeuRAG (SSOT), non hardcodato."""
+    return paths.neurag_config()
+
+
+# Cosa "possiede" ciascun ambiente: da Neuron si pulisce solo Neuron, da NeuRAG
+# solo NeuRAG, da Gray Matter tutta la suite. Le registrazioni client (gateway)
+# sono un fatto GM, quindi solo nello scope gray-matter.
+_SCOPE_KEYS = {
+    "gray-matter": ["neuron_graphs", "neurag_db", "gm_bridges",
+                    "gm_config", "neurag_config", "registrations"],
+    "neuron":      ["neuron_graphs"],
+    "neurag":      ["neurag_db", "neurag_config"],
+}
+
+
+def repair_targets(scope: str = "gray-matter") -> list[dict]:
+    """Wipeable surfaces for a given SCOPE (which tool launched the repair), each
+    with its live state — so the GUI shows only what's present and pertinent, and
+    the user picks keep/remove per item. `key` is the id passed to execute_repair."""
+    allp = {
+        "neuron_graphs": ("Memoria Neuron (grafi)", paths.neuron_graphs()),
+        "neurag_db":     ("Knowledge NeuRAG (knowledge.db)", paths.neurag_db()),
+        "gm_bridges":    ("Bridges Gray Matter", paths.gm_bridges()),
+        "gm_config":     ("Config Gray Matter (config.json)", paths.config_file()),
+        "neurag_config": ("Config NeuRAG (rerank, ...)", _neurag_config_path()),
+    }
+    out = []
+    for key in _SCOPE_KEYS.get(scope, _SCOPE_KEYS["gray-matter"]):
+        if key == "registrations":
+            out.append({"key": "registrations", "label": "Registrazioni MCP nei client",
+                        "path": "(client configs)", "exists": True})
+            continue
+        label, p = allp[key]
+        out.append({"key": key, "label": label, "path": str(p), "exists": p.exists()})
+    return out
+
+
+def execute_repair(wipe: list[str], *, dry_run: bool = False) -> list[dict]:
+    """Remove ONLY the chosen surfaces (`wipe` = list of keys from
+    :func:`repair_targets`). Anything not listed is kept untouched. Never raises;
+    one result dict per requested action."""
+    from gray_matter import clients as _clients
+    file_targets = {
+        "neuron_graphs": paths.neuron_graphs(),
+        "neurag_db": paths.neurag_db(),
+        "gm_bridges": paths.gm_bridges(),
+        "gm_config": paths.config_file(),
+        "neurag_config": _neurag_config_path(),
+    }
+    results: list[dict] = []
+    for key in wipe:
+        if key == "registrations":
+            if dry_run:
+                results.append({"action": "deregister", "ok": True,
+                                "detail": "would deregister from all clients"})
+            else:
+                regs = _clients.deregister()
+                results.append({"action": "deregister", "ok": True, "clients": regs})
+            continue
+        target = file_targets.get(key)
+        if target is None:
+            results.append({"action": "remove_data", "ok": False, "name": key,
+                            "detail": "chiave sconosciuta"})
+            continue
+        results.append(_remove_data(key, str(target), dry_run))
+    return results
+
+
 def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
                       dry_run: bool = False, ask=None) -> list[dict]:
     """Run `uninstaller.plan()` for real.
@@ -365,12 +503,16 @@ def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
     """
     from gray_matter import clients as _clients
     manifest = paths.Manifest.load().data
-    orphans = [p for p in _tracked_pids() if _alive(p) and p != os.getpid()]
     ask = ask or (lambda q: assume_yes or
                   input(f"{q} [y/N] ").strip().lower() in ("y", "yes", "s", "si", "sì"))
     results: list[dict] = []
+    # Kill orphans first — pre-condition, not part of the plan loop.
+    # If kill fails the error is isolated and doesn't block deregister/remove.
+    orphans = [p for p in _tracked_pids() if _alive(p) and p != os.getpid()]
+    if orphans:
+        results.append(_reap(orphans, dry_run))
     for act in uninstaller.plan(manifest, purge_data=purge_data,
-                                orphan_pids=orphans, data_paths=paths.data_paths()):
+                                orphan_pids=[], data_paths=paths.data_paths()):
         a = act["action"]
         if a == "reap":
             results.append(_reap(act["pids"], dry_run))

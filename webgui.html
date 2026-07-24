@@ -1,443 +1,721 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="it">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gray Matter — Control Center</title>
 <style>
+  /* tokyo-night, la stessa palette del Control Center di Neuron */
   :root{
-    --bg:#1a1b26; --surface:#24283b; --hover:#414868; --accent:#7aa2f7;
-    --fg:#c0caf5; --dim:#565f89; --out:#16161e; --green:#9ece6a;
-    --red:#f7768e; --yellow:#e0af68; --card:#20243a; --edge:#303653;
+    --bg:#1a1b26; --panel:#1f2335; --panel2:#24283b; --line:#2f3450;
+    --fg:#c0caf5; --dim:#7f88b0; --accent:#7aa2f7; --ok:#9ece6a;
+    --warn:#e0af68; --err:#f7768e;
     --mono:"Cascadia Code","Consolas",ui-monospace,monospace;
     --sans:"Segoe UI",system-ui,-apple-system,sans-serif;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
-       font-size:14px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
-  header{display:flex;align-items:center;justify-content:space-between;
-         padding:12px 18px;background:var(--card);border-bottom:1px solid var(--edge)}
-  .brand{display:flex;align-items:center;gap:12px}
-  .logo{width:34px;height:34px;border-radius:9px;background:var(--surface);
-        display:flex;align-items:center;justify-content:center;color:var(--accent);
-        font-size:18px;font-weight:700}
-  .brand h1{font-size:16px;font-weight:600;margin:0}
-  .brand p{font-size:12px;color:var(--dim);margin:0}
-  .pill{display:flex;align-items:center;gap:7px;font-size:13px;padding:5px 12px;
-        border-radius:20px;background:var(--surface)}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
-  .dot.ok{background:var(--green)} .dot.warn{background:var(--yellow)} .dot.err{background:var(--red)}
-  main{flex:1;display:flex;flex-direction:column;gap:14px;padding:16px 18px;min-height:0}
-  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-  .card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px}
-  .card .ct{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
-  .card .cs{font-size:12px;color:var(--dim);margin:2px 0 10px}
-  .card .st{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:10px;min-height:18px}
-  .row{display:flex;gap:6px;flex-wrap:wrap}
-  button{font-family:var(--sans);font-size:12px;color:var(--fg);background:var(--surface);
-         border:1px solid var(--edge);border-radius:7px;padding:6px 10px;cursor:pointer;
-         transition:background .12s}
-  button:hover{background:var(--hover)}
-  button.accent{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
-  button.danger{background:var(--red);color:var(--bg);border-color:var(--red);font-weight:600}
-  button:disabled{opacity:.45;cursor:default}
-  .body{flex:1;display:grid;grid-template-columns:160px 1fr;gap:12px;min-height:0}
-  .side{background:var(--card);border:1px solid var(--edge);border-radius:12px;
-        padding:8px;display:flex;flex-direction:column;gap:3px;overflow:auto}
-  .side .lbl{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;padding:6px 8px 2px}
-  .side .item{font-size:13px;padding:7px 9px;border-radius:7px;cursor:pointer;color:var(--fg)}
-  .side .item:hover{background:var(--hover)}
-  .side .item.on{background:var(--surface);color:var(--accent)}
-  .ecorow{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 8px;font-size:12.5px}
-  .ecorow .eco-ok{font-size:11px;color:var(--green)}
-  .ecorow button{font-size:11px;padding:3px 7px}
-  .console{background:var(--out);border-radius:12px;display:flex;flex-direction:column;min-height:0}
-  .log{flex:1;overflow:auto;padding:12px 14px;font-family:var(--mono);font-size:12.5px;
-       line-height:1.65;white-space:pre-wrap;word-break:break-word;
-       user-select:text;-webkit-user-select:text;cursor:text}
-  .log .cmd{color:var(--accent)} .log .ok{color:var(--green)} .log .err{color:var(--red)}
-  .log .dim{color:var(--dim)}
-  .inbar{display:flex;gap:6px;padding:8px;border-top:1px solid var(--edge)}
-  .inbar input{flex:1;background:var(--surface);border:1px solid var(--edge);border-radius:7px;
-        color:var(--fg);font-family:var(--mono);font-size:12.5px;padding:6px 9px}
-  .inbar input:focus{outline:none;border-color:var(--accent)}
-  .inbar .tag{font-family:var(--mono);color:var(--accent);align-self:center;font-size:12px}
-  .turso{padding:12px 14px;border-bottom:1px solid var(--edge);background:var(--card)}
-  .trow{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-  .trow label{width:110px;font-size:12px;color:var(--dim)}
-  .trow input{flex:1;background:var(--surface);border:1px solid var(--edge);border-radius:7px;
-       color:var(--fg);font-family:var(--mono);font-size:12.5px;padding:6px 9px}
-  .trow input:focus{outline:none;border-color:var(--accent)}
-  .trow:last-child{justify-content:space-between;margin-bottom:0}
-  .tstatus{font-size:12px;color:var(--dim)}
-  .trow button{font-size:12px;margin-left:6px}
+  body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;
+       background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans)}
+  header{display:flex;align-items:baseline;gap:12px;padding:10px 16px;
+         border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.2px}
+  header .sub{color:var(--dim);font-size:12px}
+  header .spacer{flex:1}
+  main{flex:1;display:flex;min-height:0}
+
+  /* --- sidebar: gli ambienti installati --- */
+  nav{width:236px;flex-shrink:0;border-right:1px solid var(--line);
+      background:var(--panel);overflow-y:auto;padding:10px 0}
+  nav h2{margin:6px 14px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+         color:var(--dim);font-weight:600}
+  .env{display:block;width:100%;text-align:left;background:none;border:0;cursor:pointer;
+       color:var(--fg);padding:9px 14px;border-left:3px solid transparent;font:inherit}
+  .env:hover{background:var(--panel2)}
+  .env[aria-current="true"]{background:var(--panel2);border-left-color:var(--accent)}
+  .env .name{font-weight:600}
+  .env .meta{font-size:11px;color:var(--dim)}
+  .env.off{opacity:.62}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;
+       background:var(--ok);vertical-align:middle}
+  .dot.off{background:var(--dim)}
+  .install{margin:2px 14px 8px;font-size:12px;padding:5px 10px;border-radius:6px;
+           border:1px solid var(--accent);background:none;color:var(--accent);cursor:pointer}
+  .install:hover{background:var(--accent);color:var(--bg)}
+
+  /* --- corpo: gruppi, dal più grande al più piccolo --- */
+  section{flex:1;overflow-y:auto;padding:16px 20px;min-width:0}
+  .grp{margin-bottom:22px}
+  .grp h3{margin:0 0 9px;font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+          color:var(--dim);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:5px}
+  .cmds{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:8px}
+  .cmd{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+       padding:10px 12px;cursor:pointer;transition:border-color .12s}
+  .cmd:hover{border-color:var(--accent)}
+  .cmd[aria-expanded="true"]{border-color:var(--accent);grid-column:1/-1}
+  .cmd .n{font-family:var(--mono);font-size:13px;color:var(--accent)}
+  .cmd .h{font-size:12px;color:var(--dim);margin-top:3px}
+  .form{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);
+        display:grid;gap:8px;cursor:default}
+  .row{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center}
+  .row label{font-size:12px;color:var(--dim);font-family:var(--mono);overflow-wrap:anywhere}
+  .row .req{color:var(--err)}
+  input,select{background:var(--bg);border:1px solid var(--line);border-radius:6px;
+               color:var(--fg);padding:6px 9px;font:13px var(--mono);width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  input[type=checkbox]{width:auto}
+  .knobs{display:grid;gap:10px}
+  .pill{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);
+        border:1px solid var(--warn);border-radius:10px;padding:1px 7px;vertical-align:middle}
+  .kstat{margin-left:6px}
+  .go{justify-self:start;background:var(--accent);color:var(--bg);border:0;border-radius:6px;
+      padding:7px 18px;font-weight:600;cursor:pointer;font-size:13px}
+  .go:hover{filter:brightness(1.1)}
+  .hint{font-size:11px;color:var(--dim)}
+  details{border:1px dashed var(--line);border-radius:6px;padding:6px 10px}
+  details[open]{display:grid;gap:8px}
+  summary{cursor:pointer;user-select:none}
+  summary:hover{color:var(--fg)}
+  .empty{color:var(--dim);font-size:13px;padding:22px 0}
+
+  /* --- console --- */
+  footer{height:238px;flex-shrink:0;border-top:1px solid var(--line);
+         background:var(--panel2);display:flex;flex-direction:column}
+  .bar{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--line)}
+  .bar .t{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  .bar .spacer{flex:1}
+  .bar button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--dim);
+              padding:4px 11px;font-size:12px;cursor:pointer}
+  .bar button:hover{color:var(--fg);border-color:var(--accent)}
+  .run{font-size:11px;color:var(--warn);font-family:var(--mono)}
+  pre{flex:1;margin:0;overflow-y:auto;padding:9px 12px;font:12px/1.55 var(--mono);
+      white-space:pre-wrap;word-break:break-word}
+  .l-cmd{color:var(--accent)} .l-ok{color:var(--ok)} .l-warn{color:var(--warn)}
+  .l-err{color:var(--err)}
 </style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <div class="logo">◑</div>
-      <div><h1>Gray Matter</h1><p>Control center · unified</p></div>
-    </div>
-    <div class="pill"><span class="dot" id="hdrDot"></span><span id="hdrTxt">connecting…</span></div>
-  </header>
 
-  <main>
-    <div class="cards">
-      <div class="card">
-        <div class="ct">🧭 Setup</div>
-        <div class="cs">installer wizard</div>
-        <div class="st"><span class="dot" id="setDot"></span><span id="setTxt">—</span></div>
-        <div class="row" style="align-items:center">
-          <label style="font-size:12px"><input type="checkbox" id="setNeuron" checked> Neuron</label>
-          <label style="font-size:12px"><input type="checkbox" id="setNeurag" checked> NeuRAG</label>
-          <button onclick="setupRun(true)">Preview</button>
-          <button class="accent" onclick="setupRun(false)">Install</button>
-          <button onclick="call('setup_test')">Test</button>
-          <button onclick="togglePrefs()">Prefs…</button>
-        </div>
-      </div>
+<header>
+  <h1>Gray Matter</h1>
+  <span class="sub">Control Center</span>
+  <span class="spacer"></span>
+  <span class="sub" id="pyv"></span>
+</header>
 
-      <div class="card">
-        <div class="ct">◆ Orchestrator</div>
-        <div class="cs">gray-matter</div>
-        <div class="st"><span class="dot" id="gmDot"></span><span id="gmTxt">—</span></div>
-        <div class="row">
-          <button onclick="call('gm_start').then(refresh)">Start</button>
-          <button class="danger" onclick="call('gm_stop').then(refresh)">Stop</button>
-          <button onclick="call('gm_status').then(showStatus)">Status</button>
-          <button onclick="call('gm_mode',{mode:'collaborate'})">Collab all</button>
-          <button onclick="call('gm_mode',{mode:'separate'})">Separate</button>
-          <button onclick="call('gm_bridges')">Bridges</button>
-        </div>
-      </div>
+<main>
+  <nav>
+    <h2>Ambienti</h2>
+    <div id="envs"></div>
+  </nav>
+  <section id="body"><div class="empty">Carico il catalogo…</div></section>
+</main>
 
-      <div class="card">
-        <div class="ct">▤ Vault</div>
-        <div class="cs">neurag</div>
-        <div class="st"><span class="dot" id="ragDot"></span><span id="ragTxt">semantic store</span></div>
-        <div class="row">
-          <button onclick="call('rag_status')">Status</button>
-          <button onclick="call('rag_tree')">Tree</button>
-          <button onclick="ask('rag_query','text','Query:')">Query…</button>
-          <button onclick="ask('rag_import','path','YAML/file path:')">Import…</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="ct">◈ Memory</div>
-        <div class="cs">neuron</div>
-        <div class="st"><span class="dot" id="nrDot"></span><span id="nrTxt">—</span></div>
-        <div class="row">
-          <button onclick="call('nr_overview')">Overview</button>
-          <button onclick="call('nr_doctor')">Doctor</button>
-          <button id="netBtn" class="accent" onclick="toggleNet()">Start network</button>
-          <button onclick="call('nr_visualize')">Graph</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="body">
-      <div class="side">
-        <div class="lbl">Ecosystem</div>
-        <div id="ecoBox"></div>
-        <div class="lbl">Memory</div>
-        <div class="item" onclick="call('nr_overview')">Overview</div>
-        <div class="item" onclick="call('nr_consolidate')">Consolidate</div>
-        <div class="item" onclick="call('nr_visualize')">Visualize</div>
-        <div class="item" onclick="call('nr_register')">Register clients</div>
-        <div class="item" onclick="call('nr_console')">Console (terminal)</div>
-        <div class="lbl">Setup</div>
-        <div class="item" onclick="wizRegister()">Register in clients</div>
-        <div class="item" onclick="toggleTurso()">Turso setup…</div>
-        <div class="item" onclick="togglePrefs()">Preferences…</div>
-        <div class="lbl">Session</div>
-        <div class="item" onclick="copyLog()">Copy log</div>
-        <div class="item" onclick="call('clear_log').then(()=>logEl.textContent='')">Clear log</div>
-        <div class="item" style="color:var(--red)" onclick="call('stop_all').then(refresh)">Stop everything</div>
-      </div>
-
-      <div class="console">
-        <div class="turso" id="tursoForm" style="display:none">
-          <div class="trow"><label>Database URL</label>
-            <input id="tUrl" autocomplete="off" spellcheck="false" placeholder="libsql://…"></div>
-          <div class="trow"><label>Auth token</label>
-            <input id="tTok" type="password" autocomplete="off" placeholder="paste your Turso token"></div>
-          <div class="trow">
-            <span id="tStatus" class="tstatus">Enter both, then Test.</span>
-            <span>
-              <button onclick="tursoTest()">Test</button>
-              <button id="tSave" class="accent" disabled onclick="tursoSave()">Save</button>
-              <button onclick="toggleTurso()">Close</button>
-            </span>
-          </div>
-        </div>
-        <div class="turso" id="prefsForm" style="display:none">
-          <div id="prefsRows"></div>
-          <div class="trow">
-            <span class="tstatus">Applied on the next daemon restart (Stop/Start).</span>
-            <span>
-              <button class="accent" onclick="prefsSave()">Save</button>
-              <button onclick="togglePrefs()">Close</button>
-            </span>
-          </div>
-        </div>
-        <div class="log" id="log"></div>
-        <div class="inbar" id="inbar" style="display:none">
-          <span class="tag" id="inTag">▸</span>
-          <input id="inField" autocomplete="off" spellcheck="false"
-                 onkeydown="if(event.key==='Enter')submitAsk();if(event.key==='Escape')hideAsk()">
-          <button onclick="submitAsk()">Run</button>
-        </div>
-      </div>
-    </div>
-  </main>
+<footer>
+  <div class="bar">
+    <span class="t">Console</span>
+    <span class="run" id="running"></span>
+    <span class="spacer"></span>
+    <button id="btn-stop">Ferma</button>
+    <button id="btn-copy" title="Copia tutta la console negli appunti">Copia</button>
+    <button id="btn-clear">Pulisci</button>
+  </div>
+  <pre id="log"></pre>
+</footer>
 
 <script>
-const logEl = document.getElementById('log');
-const inbar = document.getElementById('inbar');
-const inField = document.getElementById('inField');
-let askMethod = null, askKey = null;
+const API = "__GM_API_BASE__";
+let CATALOG = [], current = null, openCmd = null;
 
-// The backend injects its own absolute address here at serve time, so fetch
-// works no matter how this page was loaded (http origin OR a file:// window).
-const API_BASE = "__GM_API_BASE__";
-const API = (API_BASE.indexOf("http") === 0) ? API_BASE : "";
-
-// Single transport: the backend serves this page over http and dispatches
-// POST /api/<method>. The pywebview window and the browser both load the same
-// http origin, so a plain relative fetch always works.
-async function call(method, args){
-  const payload = (args === undefined) ? undefined : JSON.stringify(args);
-  try{
-    const res = await fetch(API + '/api/' + method, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: payload ?? ''});
-    return await res.json();
-  }catch(e){ append([{line:'[ui] '+e, tag:'err'}]); return {error:String(e)}; }
-}
-
-function copyLog(){
-  const txt = logEl.innerText;
-  const done = () => append([{line:'[ui] log copied ('+txt.length+' chars).', tag:'dim'}]);
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
-  } else { fallbackCopy(txt, done); }
-}
-function fallbackCopy(txt, cb){
-  const ta = document.createElement('textarea');
-  ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
-  document.body.appendChild(ta); ta.select();
-  try{ document.execCommand('copy'); }catch(e){}
-  document.body.removeChild(ta); if(cb) cb();
-}
-
-function append(lines){
-  for(const it of lines){
-    const div = document.createElement('div');
-    if(it.tag) div.className = it.tag;
-    div.textContent = it.line;
-    logEl.appendChild(div);
+async function call(method, payload){
+  // pywebview espone l'Api direttamente; in browser si passa da HTTP.
+  if (window.pywebview && window.pywebview.api && window.pywebview.api[method]){
+    return await window.pywebview.api[method](payload ? JSON.stringify(payload) : "");
   }
-  logEl.scrollTop = logEl.scrollHeight;
+  const r = await fetch(API + "/api/" + method, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: payload ? JSON.stringify(payload) : ""
+  });
+  return await r.json();
 }
 
-async function drain(){
-  const lines = await call('poll_log');
-  if(Array.isArray(lines) && lines.length) append(lines);
+function el(tag, attrs = {}, ...kids){
+  const n = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)){
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) n.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c !== null && c !== undefined)
+    n.append(c.nodeType ? c : document.createTextNode(c));
+  return n;
 }
 
-function ask(method, key, label){
-  askMethod = method; askKey = key;
-  document.getElementById('inTag').textContent = label;
-  inbar.style.display = 'flex';
-  inField.value = ''; inField.focus();
-}
-function hideAsk(){ inbar.style.display = 'none'; askMethod = null; }
-function submitAsk(){
-  const v = inField.value.trim();
-  if(!v){ hideAsk(); return; }
-  const args = {}; args[askKey] = v;
-  call(askMethod, args);
-  hideAsk();
-}
-
-function setDot(id, cls){ document.getElementById(id).className = 'dot' + (cls?(' '+cls):''); }
-
-function showStatus(s){
-  if(!s || !s.running){
-    setDot('gmDot','err'); document.getElementById('gmTxt').textContent = 'not running';
+async function loadCatalog(){
+  let res;
+  try{
+    res = await call("catalog");
+  }catch(e){
+    // Mai pagina bianca: si dice cosa succede e si riprova da soli.
+    document.getElementById("body").replaceChildren(
+      el("div", {class:"empty"}, "Non raggiungo il backend (" + e + ") — riprovo…"));
+    setTimeout(loadCatalog, 1500);
     return;
   }
-  setDot('gmDot','ok');
-  const n = (s.servers||[]).length;
-  const iso = (s.servers||[]).filter(x=>!x.collaborative).length;
-  document.getElementById('gmTxt').textContent =
-    'running · ' + n + ' server' + (n===1?'':'s') + (iso?(' · '+iso+' isolated'):'');
+  CATALOG = res.envs || [];
+  // La versione in testata: se qui leggi una versione vecchia, gira un venv
+  // stantio — è LA prima cosa da controllare quando "non funziona".
+  if (res.version)
+    document.querySelector("header .sub").textContent = "Control Center · v" + res.version;
+  if (res.error) append("[!] " + res.error, "err");
+  document.getElementById("pyv").textContent = res.python || "";
+  if (!current){
+    const first = CATALOG.find(e => e.installed);
+    current = first ? first.key : (CATALOG[0] && CATALOG[0].key);
+  }
+  renderNav();
+  render();
 }
 
-async function refreshNet(){
-  const s = await call('net_state');
-  const btn = document.getElementById('netBtn');
-  if(!s) return;
-  if(s.state === 'up'){
-    setDot('nrDot','ok');
-    document.getElementById('nrTxt').textContent = 'tunnel up';
-    btn.textContent = 'Stop network'; btn.className = 'danger';
-  }else if(s.state === 'starting'){
-    setDot('nrDot','warn');
-    document.getElementById('nrTxt').textContent = 'network starting…';
-    btn.textContent = 'Stop network'; btn.className = 'danger';
-  }else{
-    setDot('nrDot','warn');
-    document.getElementById('nrTxt').textContent = 'tunnel off';
-    btn.textContent = 'Start network'; btn.className = 'accent';
+function renderNav(){
+  const nav = document.getElementById("envs");
+  nav.replaceChildren();
+  for (const e of CATALOG){
+    nav.append(el("button", {
+      class: "env" + (e.installed ? "" : " off"),
+      "aria-current": String(current === e.key),
+      onclick: () => { current = e.key; openCmd = null; renderNav(); render(); }
+    },
+      el("div", {class:"name"},
+        el("span", {class:"dot" + (e.installed ? "" : " off")}), e.label),
+      el("div", {class:"meta"},
+        e.installed ? (e.subtitle + (e.version ? " · v" + e.version : ""))
+                    : "non installato")
+    ));
+    if (e.installable)
+      nav.append(el("button", {class:"install", onclick: () => installEnv(e.key)},
+                    "Installa " + e.label));
   }
 }
 
-async function toggleNet(){
-  const s = await call('net_state');
-  if(s && (s.state === 'up' || s.state === 'starting')) await call('net_stop');
-  else await call('net_start');
-  refreshNet();
+function render(){
+  const body = document.getElementById("body");
+  body.replaceChildren();
+  const env = CATALOG.find(e => e.key === current);
+  if (!env) return;
+  if (!env.installed){
+    body.append(el("div", {class:"empty"},
+      env.label + " non è installato — usa il pulsante nella barra a sinistra."));
+    return;
+  }
+  if (env.error){
+    body.append(el("div", {class:"empty l-err"}, "Catalogo illeggibile: " + env.error));
+    return;
+  }
+  if (!env.groups.length){
+    body.append(el("div", {class:"empty"},
+      env.label + " è installato ma non espone nessun comando: quasi sempre è " +
+      "una versione vecchia nel venv. Rilancia l'installer (install.ps1) e riapri."));
+    return;
+  }
+  const procCard = el("div", {class:"cmds"});
+  procCard.append(el("div", {class:"hint"}, "carico…"));
+  setTimeout(() => processPanel(env, procCard), 50);
+  body.append(el("div", {class:"grp"}, el("h3", {}, "Processi"), procCard));
+  for (const g of env.groups){
+    const cards = el("div", {class:"cmds"});
+    for (const c of g.commands) cards.append(commandCard(env, c));
+    body.append(el("div", {class:"grp"}, el("h3", {}, g.label), cards));
+  }
 }
 
-async function togglePrefs(){
-  const f = document.getElementById('prefsForm');
-  if(f.style.display !== 'none'){ f.style.display = 'none'; return; }
-  const r = await call('setup_prefs_get');
-  if(!r || !r.prefs){ return; }
-  const box = document.getElementById('prefsRows');
-  box.innerHTML = '';
-  for(const [k, v] of Object.entries(r.prefs)){
-    const row = document.createElement('div'); row.className = 'trow';
-    const lab = document.createElement('label'); lab.textContent = k;
-    row.appendChild(lab);
-    let inp;
-    if(typeof v === 'boolean'){
-      inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = v;
-    }else{
-      inp = document.createElement('input'); inp.type = 'text'; inp.value = v;
-      inp.autocomplete = 'off'; inp.spellcheck = false;
+function commandCard(env, c){
+  const id = env.key + ":" + c.name;
+  const open = openCmd === id;
+  const card = el("div", {
+    class:"cmd", "aria-expanded": String(open),
+    onclick: (ev) => {
+      if (ev.target.closest(".form")) return;   // click dentro il form: non richiudere
+      openCmd = open ? null : id; render();
     }
-    inp.id = 'pref_' + k; inp.dataset.key = k;
-    inp.dataset.kind = typeof v;
-    row.appendChild(inp);
-    box.appendChild(row);
+  }, el("div", {class:"n"}, c.name), el("div", {class:"h"}, c.help || ""));
+
+  if (!open) return card;
+
+  // `config` non è un comando come gli altri: è il pannello Impostazioni.
+  // Invece del form generico action/key/value, disegna una card di knob
+  // (toggle/select/campi) che si salvano subito — vale per ogni ambiente che
+  // espone un config (Gray Matter e NeuRAG), zero elenchi a mano.
+  if (c.name === "config"){
+    const panel = el("div", {class:"form"});
+    const knobs = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      "Impostazioni — ogni modifica si salva subito (persistente)."), knobs);
+    configPanel(env, knobs);
+    card.append(panel);
+    return card;
   }
-  f.style.display = '';
-}
 
-async function prefsSave(){
-  const prefs = {};
-  for(const inp of document.querySelectorAll('#prefsRows input')){
-    prefs[inp.dataset.key] = (inp.dataset.kind === 'boolean') ? inp.checked : inp.value;
+  // `repair` = reinstall pulito: pannello dedicato con la scelta di COSA
+  // cancellare (il resto resta) e conferma a due click (i webview bloccano confirm()).
+  if (c.name === "repair"){
+    const panel = el("div", {class:"form"});
+    const box = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      "Reinstall pulito. Di default NON cancella nulla: le caselle partono "
+      + "spente. Spunta SOLO ciò che vuoi rimuovere — tutto il resto viene "
+      + "tenuto. Poi reinstalla forzato (bypassa il check versione)."),
+      box);
+    repairPanel(env, box);
+    card.append(panel);
+    return card;
   }
-  const r = await call('setup_prefs_set', {prefs});
-  if(r && r.ok) togglePrefs();
-}
 
-async function setupRun(dry){
-  const comps = [];
-  if(document.getElementById('setNeuron').checked) comps.push('neuron');
-  if(document.getElementById('setNeurag').checked) comps.push('neurag');
-  await call('setup_run', {components: comps, dry_run: !!dry});
-}
+  if (c.name === "uninstall"){
+    const panel = el("div", {class:"form"});
+    const box = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      "Disinstalla questo componente. I dati vengono rimossi solo se selezionati. "
+      + "Conferma a due click — la verifica finale accerta che sia davvero rimosso."),
+      box);
+    uninstallPanel(env, box);
+    card.append(panel);
+    return card;
+  }
 
-async function refreshSetup(){
-  const s = await call('setup_state');
-  if(!s || !s.peers) return;
-  const inst = s.peers.filter(p => p.installed).length;
-  setDot('setDot', s.manifest ? 'ok' : 'warn');
-  document.getElementById('setTxt').textContent =
-    inst + '/' + s.peers.length + ' tools · ' +
-    (s.manifest ? 'gateway installed' : 'not installed yet') +
-    (s.clients && s.clients.length ? ' · ' + s.clients.length + ' clients' : '');
-}
+  if (c.name === "link"){
+    const panel = el("div", {class:"form"});
+    const box = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      "Ri-aggancia al gateway i tool che erano usciti come standalone. "
+      + "GM torna a gestirli — l'entry MCP diretta del tool sparisce dai client."),
+      box);
+    linkPanel(env, box);
+    card.append(panel);
+    return card;
+  }
 
-async function refreshEco(){
-  const r = await call('eco_status');
-  const box = document.getElementById('ecoBox');
-  if(!r || !r.peers || !box) return;
-  box.innerHTML = '';
-  for(const p of r.peers){
-    const row = document.createElement('div');
-    row.className = 'ecorow';
-    const name = document.createElement('span');
-    name.textContent = p.label;
-    row.appendChild(name);
-    if(p.installed){
-      const ok = document.createElement('span');
-      ok.className = 'eco-ok'; ok.textContent = 'installed';
-      row.appendChild(ok);
-    }else{
-      const b = document.createElement('button');
-      b.textContent = p.sibling ? 'Install' : 'Clone + install';
-      b.onclick = () => ecoInstall(p.key);
-      row.appendChild(b);
+  const form = el("div", {class:"form"});
+  const inputs = {};
+  const fieldRow = (a) => {
+    let field;
+    if (a.is_flag){
+      field = el("input", {type:"checkbox", id:"f_"+a.dest});
+    } else if (a.choices && a.choices.length){
+      field = el("select", {id:"f_"+a.dest},
+                 ...(a.required ? [] : [el("option", {value:""}, "— (lascia vuoto)")]),
+                 ...a.choices.map(o => el("option", {value:o}, o)));
+    } else {
+      field = el("input", {type:"text", id:"f_"+a.dest,
+                           placeholder: a.required ? "obbligatorio" : "facoltativo"});
     }
-    box.appendChild(row);
+    inputs[a.dest] = {field, spec:a};
+    return el("div", {class:"row"},
+      el("label", {for:"f_"+a.dest}, a.dest.replace(/_/g,"-"),
+         a.required ? el("span",{class:"req"}," *") : ""),
+      el("div", {}, field,
+         a.help ? el("div", {class:"hint"}, a.help) : ""));
+  };
+
+  const required = c.args.filter(a => a.required);
+  const optional = c.args.filter(a => !a.required);
+  for (const a of required) form.append(fieldRow(a));
+
+  // Le opzioni facoltative e il campo libero stanno ripiegati: il caso comune
+  // è "premi Esegui e basta" — nessun parametro misterioso in faccia.
+  const extra = el("input", {type:"text",
+    placeholder:"argomenti extra da riga di comando (per esperti)"});
+  const adv = el("details", {},
+    el("summary", {class:"hint"}, "Opzioni avanzate (facoltative)"),
+    ...optional.map(fieldRow),
+    el("div", {class:"row"}, el("label", {}, "extra"), extra));
+  if (optional.length || !required.length) form.append(adv);
+
+  if (c.interactive)
+    form.append(el("div", {class:"hint"},
+      "⧉ Questo comando fa domande: si aprirà in una finestra di terminale."));
+  else if (!required.length)
+    form.append(el("div", {class:"hint"},
+      "Nessun parametro necessario: premi Esegui e guarda la console qui sotto."));
+
+  form.append(el("button", {class:"go",
+    onclick: () => runCmd(env.key, c, inputs, extra.value)}, "Esegui"));
+  card.append(form);
+  return card;
+}
+
+// --- pannello Ripara (reinstall pulito) ---------------------------------
+async function repairPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, "carico…"));
+  let r;
+  try { r = await call("repair_state", {scope: env.key}); }
+  catch(e){ container.replaceChildren(el("div", {class:"hint"}, "repair non raggiungibile: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || "repair non disponibile"));
+    return;
+  }
+  container.append(el("div", {class:"hint"},
+    "Ambito: " + (r.scope || env.key) + " — reinstall: " + (r.reinstall || "?")));
+  const checks = {};
+  for (const t of (r.targets || [])){
+    const cb = el("input", {type:"checkbox", id:"w_"+t.key});
+    cb.disabled = !t.exists;
+    checks[t.key] = cb;
+    container.append(el("div", {class:"row"},
+      el("label", {for:"w_"+t.key}, t.label,
+         t.exists ? "" : el("span", {class:"hint"}, " (assente)")),
+      el("div", {}, cb, el("div", {class:"hint"}, t.path))));
+  }
+  if (!r.installer)
+    container.append(el("div", {class:"hint", style:"color:var(--warn)"},
+      "⚠ Installer non raggiungibile da qui: farò `pip --force-reinstall` dai sorgenti (se presenti)."));
+  let armed = false;
+  const btn = el("button", {class:"go"}, "Ripara");
+  btn.addEventListener("click", async () => {
+    const wipe = Object.entries(checks)
+      .filter(([k, cb]) => cb.checked && !cb.disabled).map(([k]) => k);
+    if (!armed){
+      armed = true;
+      btn.textContent = wipe.length
+        ? ("Conferma: cancella " + wipe.length + " + reinstall")
+        : "Conferma reinstall (nessuna cancellazione)";
+      btn.style.background = "var(--err)";
+      setTimeout(() => { armed = false; btn.textContent = "Ripara"; btn.style.background = ""; }, 4000);
+      return;
+    }
+    armed = false; btn.textContent = "Ripara"; btn.style.background = "";
+    const rr = await call("repair_run", {scope: env.key, wipe});
+    if (rr && rr.error) append("[!] " + rr.error, "err");
+  });
+  container.append(btn);
+}
+
+// --- pannello Disinstalla ------------------------------------------------
+async function uninstallPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, "carico…"));
+  let r;
+  try { r = await call("uninstall_state", {scope: env.key}); }
+  catch(e){ container.replaceChildren(el("div", {class:"hint"}, "uninstall non raggiungibile: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || "uninstall non disponibile"));
+    return;
+  }
+  container.append(el("div", {class:"hint"}, "Ambito: " + (r.scope || env.key)));
+  const checks = {};
+  for (const t of (r.targets || [])){
+    const cb = el("input", {type:"checkbox", id:"ut_"+t.key});
+    checks[t.key] = cb;
+    container.append(el("div", {class:"row"},
+      el("label", {for:"ut_"+t.key}, t.label,
+         t.exists ? "" : el("span", {class:"hint"}, " (assente)")),
+      el("div", {}, cb, el("div", {class:"hint"}, t.path))));
+  }
+  const dataChecks = {};
+  for (const d of (r.data || [])){
+    const cb = el("input", {type:"checkbox", id:"ud_"+d.key});
+    cb.disabled = !d.exists;
+    dataChecks[d.key] = cb;
+    container.append(el("div", {class:"row"},
+      el("label", {for:"ud_"+d.key}, d.name,
+         d.exists ? "" : el("span", {class:"hint"}, " (assente)")),
+      el("div", {}, cb, el("div", {class:"hint"}, d.path))));
+  }
+  const purgeCb = el("input", {type:"checkbox", id:"upurge"});
+  container.append(el("div", {class:"row"},
+    el("label", {for:"upurge"}, "Purge totale"),
+    el("div", {}, purgeCb, el("div", {class:"hint"}, "Rimuovi TUTTI i dati (ignora le scelte sopra)"))));
+  const resultBox = el("div", {});
+  let armed = false;
+  const btn = el("button", {class:"go"}, "Disinstalla");
+  btn.addEventListener("click", async () => {
+    if (!armed){
+      armed = true;
+      btn.textContent = "Conferma: disinstalla " + (r.scope || env.key);
+      btn.style.background = "var(--err)";
+      setTimeout(() => { armed = false; btn.textContent = "Disinstalla"; btn.style.background = ""; }, 4000);
+      return;
+    }
+    armed = false; btn.textContent = "Disinstalla"; btn.style.background = "";
+    btn.disabled = true;
+    const purge = purgeCb.checked;
+    resultBox.replaceChildren(el("div", {class:"hint"}, "Disinstallazione in corso…"));
+    const rr = await call("uninstall_run", {scope: env.key, purge_data: purge});
+    btn.disabled = false;
+    resultBox.replaceChildren();
+    if (rr && rr.error){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--err)"}, "Errore: " + rr.error));
+      return;
+    }
+    const v = (rr && rr.verification) || {};
+    if (v.ok){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--ok)"},
+        "✓ Disinstallato e verificato."));
+    } else {
+      const failed = Object.entries(v.checks || {}).filter(([,ok]) => !ok).map(([k]) => k);
+      resultBox.append(el("div", {class:"hint", style:"color:var(--err)"},
+        "✗ Verifica fallita: " + (failed.join(", ") || "sconosciuto")));
+    }
+  });
+  container.append(btn, resultBox);
+}
+
+// --- pannello Link (gm_link) --------------------------------------------
+
+async function linkPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, "carico…"));
+  let r;
+  try { r = await call("link_state", {}); }
+  catch(e){ container.replaceChildren(el("div", {class:"hint"}, "link non raggiungibile: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || "stato non disponibile"));
+    return;
+  }
+  const tools = r.tools || [];
+  if (!tools.length){
+    container.append(el("div", {class:"hint"}, "Nessun tool installato."));
+    return;
+  }
+  const anyStandalone = tools.some(t => t.standalone);
+  const checks = {};
+  for (const t of tools){
+    const label = t.label || t.key;
+    let statusText, statusColor;
+    if (!t.installed){ statusText = "non installato"; statusColor = "var(--dim)"; }
+    else if (t.standalone){ statusText = "standalone — ricollegabile"; statusColor = "var(--warn)"; }
+    else { statusText = "già gestito da GM"; statusColor = "var(--ok)"; }
+    if (t.standalone){
+      const cb = el("input", {type:"checkbox", id:"lk_"+t.key, checked: true});
+      checks[t.key] = cb;
+      container.append(el("div", {class:"row"},
+        el("label", {for:"lk_"+t.key}, label),
+        el("div", {}, cb, el("span", {class:"hint", style:"color:"+statusColor}, " " + statusText))));
+    } else {
+      container.append(el("div", {class:"row"},
+        el("label", {}, label),
+        el("div", {}, el("span", {class:"hint", style:"color:"+statusColor}, statusText))));
+    }
+  }
+  const resultBox = el("div", {});
+  if (!anyStandalone){
+    resultBox.append(el("div", {class:"hint"}, "Nessun tool standalone da ricollegare."));
+    container.append(resultBox);
+    return;
+  }
+  let armed = false;
+  const btn = el("button", {class:"go"}, "Ricollega al gateway");
+  btn.addEventListener("click", async () => {
+    if (!armed){
+      armed = true;
+      btn.textContent = "Conferma: ricollega";
+      btn.style.background = "var(--warn)";
+      setTimeout(() => { armed = false; btn.textContent = "Ricollega al gateway"; btn.style.background = ""; }, 4000);
+      return;
+    }
+    armed = false; btn.textContent = "Ricollega al gateway"; btn.style.background = "";
+    btn.disabled = true;
+    const selected = Object.entries(checks).filter(([,cb]) => cb.checked).map(([k]) => k);
+    if (!selected.length){
+      resultBox.replaceChildren(el("div", {class:"hint"}, "Nessun tool selezionato."));
+      btn.disabled = false;
+      return;
+    }
+    resultBox.replaceChildren(el("div", {class:"hint"}, "Ricollegamento in corso…"));
+    const rr = await call("link_run", {tools: selected});
+    btn.disabled = false;
+    resultBox.replaceChildren();
+    if (rr && rr.error){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--err)"}, "Errore: " + rr.error));
+      return;
+    }
+    if (rr && rr.ok){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--ok)"},
+        "✓ Ricollegati: " + (rr.linked || []).join(", ") + ". Riavvia le app AI."));
+    } else {
+      const why = (rr.skipped || []).map(s => s.tool + ": " + s.reason).join("; ");
+      resultBox.append(el("div", {class:"hint", style:"color:var(--warn)"},
+        "Nessun tool ricollegato" + (why ? " (" + why + ")" : "") + "."));
+    }
+  });
+  container.append(btn, resultBox);
+}
+
+// --- pannello Processi ---------------------------------------------------
+async function processPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, "carico…"));
+  let r;
+  try { r = await call("process_list", {scope: env.key}); }
+  catch(e){ container.replaceChildren(el("div", {class:"hint"}, "processi non raggiungibili: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || "nessun processo"));
+    return;
+  }
+  const procs = r.processes || [];
+  if (!procs.length){
+    container.append(el("div", {class:"hint"}, "Nessun processo attivo per " + env.label));
+    return;
+  }
+  for (const p of procs){
+    const stopBtn = el("button", {class:"go", style:"padding:3px 10px;font-size:11px"}, "Ferma");
+    stopBtn.addEventListener("click", async () => {
+      stopBtn.disabled = true;
+      await call("process_stop", {pid: p.pid, scope: env.key});
+      processPanel(env, container);
+    });
+    container.append(el("div", {class:"row"},
+      el("label", {}, p.name + " (PID " + p.pid + ")"),
+      el("div", {}, el("span", {class:"hint"}, p.source), stopBtn)));
+  }
+  const stopAllBtn = el("button", {class:"go", style:"padding:3px 10px;font-size:11px;background:var(--err)"},
+    "Ferma tutti");
+  stopAllBtn.addEventListener("click", async () => {
+    stopAllBtn.disabled = true;
+    await call("process_stop", {scope: env.key});
+    processPanel(env, container);
+  });
+  container.append(el("div", {class:"row"}, el("label", {}), stopAllBtn));
+}
+
+// --- pannello Impostazioni (knob) ---------------------------------------
+async function configPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, "carico…"));
+  let r;
+  try { r = await call("config_knobs", {tool: env.key}); }
+  catch(e){ container.replaceChildren(el("div", {class:"hint"}, "config non raggiungibile: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || "config non disponibile"));
+    return;
+  }
+  if (r.note) container.append(el("div", {class:"hint"}, "ℹ " + r.note));
+  for (const k of (r.knobs || [])) container.append(knobRow(env, k));
+}
+
+function knobRow(env, k){
+  const status = el("span", {class:"hint kstat"}, "");
+  const save = (value) => saveKnob(env, k, value, status, badge);
+  let control;
+  if (k.type === "bool"){
+    control = el("input", {type:"checkbox", id:"k_"+k.key});
+    control.checked = !!k.value;
+    control.addEventListener("change", () => save(control.checked));
+  } else if (k.suggest && k.suggest.length){
+    const cur = k.value == null ? "" : String(k.value);
+    const opts = k.suggest.map(String);
+    if (!opts.includes(cur)) opts.push(cur);
+    control = el("select", {id:"k_"+k.key},
+      ...opts.map(o => {
+        const opt = el("option", {value:o}, o === "" ? "(default)" : o);
+        if (o === cur) opt.selected = true;
+        return opt;
+      }));
+    control.addEventListener("change", () => save(control.value));
+  } else {
+    control = el("input", {
+      type: (k.type === "int" || k.type === "float") ? "number" : "text",
+      id:"k_"+k.key, value: k.value == null ? "" : String(k.value)});
+    control.addEventListener("keydown", (e) => {
+      if (e.key === "Enter"){ e.preventDefault(); save(control.value); }});
+    control.addEventListener("blur", () => save(control.value));
+  }
+  const badge = el("span", {class:"pill", style: k.value !== k.default ? "" : "display:none"},
+                   "modificato");
+  return el("div", {class:"row"},
+    el("label", {for:"k_"+k.key}, k.key.replace(/_/g,"-"), " ", badge),
+    el("div", {}, control,
+       k.help ? el("div", {class:"hint"}, k.help) : "", status));
+}
+
+async function saveKnob(env, k, value, status, badge){
+  status.textContent = " salvo…"; status.style.color = "";
+  let r;
+  try { r = await call("config_set", {tool: env.key, key: k.key, value}); }
+  catch(e){ status.textContent = " ✗ " + e; status.style.color = "var(--err)"; return; }
+  if (r && r.ok){
+    k.value = r.value;
+    status.textContent = " ✓"; status.style.color = "var(--ok)";
+    badge.style.display = (r.value !== k.default) ? "" : "none";
+    setTimeout(() => { status.textContent = ""; }, 1400);
+  } else {
+    status.textContent = " ✗ " + ((r && r.error) || "errore");
+    status.style.color = "var(--err)";
   }
 }
-async function ecoInstall(key){
-  await call('eco_install', {key});
-  setTimeout(refreshEco, 4000);
+
+async function runCmd(tool, c, inputs, extra){
+  const args = {};
+  for (const [dest, o] of Object.entries(inputs))
+    args[dest] = o.spec.is_flag ? o.field.checked : o.field.value;
+  const r = await call("run", {tool, command:c.name, args, extra});
+  if (r && r.error) append("[!] " + r.error, "err");
 }
 
-async function wizRegister(){ await call('wiz_register'); }
-
-function toggleTurso(){
-  const f = document.getElementById('tursoForm');
-  f.style.display = (f.style.display === 'none') ? 'block' : 'none';
-}
-function tVals(){
-  return {url: document.getElementById('tUrl').value.trim(),
-          token: document.getElementById('tTok').value.trim()};
-}
-async function tursoTest(){
-  const st = document.getElementById('tStatus');
-  st.textContent = 'Testing…'; st.style.color = 'var(--yellow)';
-  const r = await call('turso_test', tVals());
-  const save = document.getElementById('tSave');
-  if(r && r.ok){
-    st.textContent = 'Verified' + (r.scheme ? ' via '+r.scheme : '') + (r.detail ? ': '+r.detail : '');
-    st.style.color = 'var(--green)'; save.disabled = false;
-  }else{
-    st.textContent = 'Failed: ' + ((r && (r.error || r.detail)) || '?');
-    st.style.color = 'var(--red)'; save.disabled = true;
-  }
-}
-async function tursoSave(){
-  const r = await call('turso_save', tVals());
-  const st = document.getElementById('tStatus');
-  if(r && r.ok){ st.textContent = 'Saved. Restart Neuron to apply.'; st.style.color = 'var(--green)'; }
-  else{ st.textContent = 'Save failed: ' + ((r && r.error) || '?'); st.style.color = 'var(--red)'; }
+async function installEnv(key){
+  const r = await call("install_env", {key});
+  if (r && r.error) append("[!] " + r.error, "err");
+  setTimeout(loadCatalog, 4000);   // a install finita il catalogo si riallinea
 }
 
-async function refresh(){
-  const s = await call('gm_status');
-  showStatus(s);
-  await refreshNet();
-  await refreshEco();
-  await refreshSetup();
-  const anyOk = s && s.running;
-  setDot('hdrDot', anyOk ? 'ok' : 'warn');
-  document.getElementById('hdrTxt').textContent = anyOk ? 'orchestrator online' : 'orchestrator offline';
+function append(line, tag){
+  const log = document.getElementById("log");
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.append(el("div", {class: tag ? "l-" + tag : ""}, line));
+  while (log.childElementCount > 4000) log.firstElementChild.remove();
+  if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
-setInterval(drain, 250);
-setInterval(refreshNet, 3000);
-append([{line:'[ui] control center ready.', tag:'dim'}]);
-append([{line:'[ui] api base: '+(API || '(NOT injected — an old webgui.py is '+
-  'running; reinstall editable: pip install -e ".[gui]")'),
-  tag: API ? 'dim' : 'err'}]);
-refresh();
+document.getElementById("btn-stop").addEventListener("click", () => call("stop", {}));
+document.getElementById("btn-clear").addEventListener("click", async () => {
+  await call("clear_log");
+  document.getElementById("log").replaceChildren();
+});
 
-// Guard: only a raw .html opened with no backend at all (no injected API base
-// and not an http origin) is truly dead — say so clearly.
-if(!API && location.protocol !== 'http:' && location.protocol !== 'https:'){
-  append([{line:'[ui] no backend reachable — start with `gray-matter gui`, '+
-    'do not open the .html directly.', tag:'err'}]);
+// Copia tutta la console: serve per mandare la trace di un errore. WebView2/
+// pywebview a volte non danno navigator.clipboard → fallback textarea+execCommand,
+// e come ultima rete un metodo Api lato Python che scrive negli appunti.
+document.getElementById("btn-copy").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-copy");
+  const text = document.getElementById("log").innerText || "";
+  const done = (ok) => {
+    btn.textContent = ok ? "Copiato!" : "Copia fallita";
+    setTimeout(() => { btn.textContent = "Copia"; }, 1500);
+  };
+  if (!text.trim()){ done(false); return; }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(text); done(true); return;
+    }
+  } catch(e){ /* cade nel fallback */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed"; ta.style.top = "-1000px";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok){ done(true); return; }
+  } catch(e){ /* ultima rete: Python */ }
+  try {
+    const r = await call("copy_clipboard", {text});
+    done(!!(r && r.ok));
+  } catch(e){ done(false); }
+});
+
+async function poll(){
+  try{
+    const r = await call("poll_log");
+    for (const l of (r.lines || [])) append(l.line, l.tag);
+    const running = Object.values(r.running || {});
+    document.getElementById("running").textContent =
+      running.length ? "▶ " + running.join(", ") : "";
+  }catch(e){ /* finestra in chiusura */ }
+  setTimeout(poll, 400);
 }
+
+loadCatalog();
+poll();
 </script>
 </body>
 </html>

@@ -4,7 +4,7 @@
 
 <div align="center">
 
-<!-- <img src="assets/gray-matter-logo.png" alt="Gray Matter logo" width="360"> -->
+<img src="assets/gray-matter-logo.png" alt="Gray Matter logo" width="360">
 
 <h1>⚡ Gray Matter</h1>
 
@@ -20,7 +20,7 @@ bridges, and serendipitous flash recall.
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-0.1.0-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-1.0.0-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -118,7 +118,13 @@ Idle bridges decay. This means the two memories learn to cooperate over time.
 
 ### Install
 
+**Click and go** — this repo bundles Neuron + NeuRAG, the zip is
+self-contained. Double-click **`install.cmd`** (Windows) or
+**`install.command`** (macOS/Linux): Python bootstrapped if missing, one
+venv, gateway registered, hooks deployed, GUI shortcut on the Desktop.
+
 ```bash
+# terminal / dev alternative:
 pip install -e .
 gray-matter install --dry-run   # preview: reap orphans, register gateway, deploy hooks
 gray-matter install             # idempotent, .bak backups, manifest
@@ -150,7 +156,7 @@ gray-matter uninstall              # interactive: asks about memory retention
 gray-matter uninstall --purge-data # wipes everything, no questions
 ```
 
-📖 AI agents: see [`INSTALL-AI.md`](../INSTALL-AI.md). Spec: [`INSTALLER-UX.md`](../INSTALLER-UX.md).
+📖 AI agents: see [`INSTALL-AI.md`](INSTALL-AI.md).
 
 ---
 

@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent.parent
-ASSETS = REPO / "Neuron" / "clients"
+# Handshake assets now live inside the neuron package (SSOT); legacy repo-root
+# path kept as a fallback for older checkouts.
+ASSETS = REPO / "neuron" / "src" / "neuron" / "clients"
+if not (ASSETS / "claude-code-hook").exists():
+    ASSETS = REPO / "neuron" / "clients"
 
 
 @pytest.fixture
@@ -56,7 +60,7 @@ def test_deploy_hook_claude_code(env):
     home = env / "home"
     (home / ".claude").mkdir()
     (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
-    res = _run_install({"installed": [], "gm_present": True,
+    res = _run_install({"installed": ["neuron"], "gm_present": True,
                         "clients": ["claude-code"]})
     hook = [r for r in res if r["action"] == "deploy_hook"][0]
     assert hook["ok"], hook
@@ -66,7 +70,7 @@ def test_deploy_hook_claude_code(env):
     cmds = [h["command"] for g in cfg["hooks"]["SessionStart"] for h in g["hooks"]]
     assert any("neuron_sessionstart_hook" in c for c in cmds)
     # idempotent: second run doesn't duplicate the entry
-    _run_install({"installed": [], "gm_present": True, "clients": ["claude-code"]})
+    _run_install({"installed": ["neuron"], "gm_present": True, "clients": ["claude-code"]})
     cfg2 = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert len(cfg2["hooks"]["SessionStart"]) == len(cfg["hooks"]["SessionStart"])
     # manifest tracks the deployed path
@@ -77,7 +81,7 @@ def test_deploy_hook_claude_code(env):
 
 def test_deploy_hook_cowork_and_opencode(env):
     home = env / "home"
-    res = _run_install({"installed": [], "gm_present": True,
+    res = _run_install({"installed": ["neuron"], "gm_present": True,
                         "clients": ["cowork", "opencode"]})
     hooks = {r["client"]: r for r in res if r["action"] == "deploy_hook"}
     assert hooks["cowork"]["ok"] and hooks["opencode"]["ok"]

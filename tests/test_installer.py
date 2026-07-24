@@ -2,6 +2,8 @@
 writes the manifest. Stdlib-only."""
 import os
 
+import pytest
+
 from gray_matter import installer as I
 from gray_matter import paths as P
 
@@ -38,8 +40,17 @@ def test_subservers_never_registered():
     assert reg["target"] == "gray_matter"                # neuron/neurag are workers, not connectors
 
 
+def test_no_hooks_without_neuron():
+    # NeuRAG+GM (no Neuron): the handshake assets ship inside the neuron package,
+    # so there is nothing to deploy — planning one produced a bogus "asset missing".
+    plan = I.plan({"installed": ["neurag"], "gm_present": True,
+                   "clients": ["claude-code", "opencode"]})
+    assert "deploy_hook" not in _actions(plan)
+
+
 def test_hooks_deployed_per_client_and_tracked(tmp_path):
-    plan = I.plan({"gm_present": True, "clients": ["claude-code", "cursor", "cowork"]})
+    plan = I.plan({"installed": ["neuron"], "gm_present": True,
+                   "clients": ["claude-code", "cursor", "cowork"]})
     hooks = [a for a in plan if a["action"] == "deploy_hook"]
     assert [h["client"] for h in hooks] == ["claude-code", "cowork"]  # cursor: instructions only
     assert all(h["asset"] for h in hooks)
@@ -53,6 +64,7 @@ def test_hooks_deployed_per_client_and_tracked(tmp_path):
 
 def test_stdio_init_options_build():
     # capabilities is a required field — this crashes if main()'s handshake breaks
+    pytest.importorskip("mcp")  # builds real InitializationOptions; needs MCP (local/CI)
     from gray_matter import server
     opts = server._init_options()
     assert opts.capabilities is not None

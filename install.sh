@@ -15,7 +15,12 @@
 set -eu
 
 ASSUME_YES=0
-for a in "$@"; do case "$a" in -y|--yes) ASSUME_YES=1 ;; esac; done
+FORCE=0
+# --force: repair mode — bypass the version-skip and reinstall the code even at
+# the same version (pip --force-reinstall --no-deps). Used by the GUI "Ripara".
+for a in "$@"; do case "$a" in -y|--yes) ASSUME_YES=1 ;; -f|--force) FORCE=1 ;; esac; done
+FORCE_ARGS=""
+[ "$FORCE" = "1" ] && FORCE_ARGS="--force-reinstall --no-deps"
 ask() {
     [ "$ASSUME_YES" = "1" ] && return 0
     [ -t 0 ] || return 1
@@ -34,40 +39,99 @@ find_python() {
 }
 
 PY=$(find_python || true)
-[ -z "${PY:-}" ] && { echo "ERROR: need Python 3.10+ (install from https://python.org) and re-run."; exit 1; }
+# Click-and-go bootstrap: se Python manca, prova il package manager di sistema
+# (con consenso), poi ricontrolla. Ultimo fallback: pointer a python.org.
+if [ -z "${PY:-}" ]; then
+    echo "Python 3.10+ not found."
+    if command -v brew >/dev/null 2>&1 && ask "Install Python via Homebrew?"; then
+        brew install python@3.12 || true
+    elif command -v apt-get >/dev/null 2>&1 && ask "Install Python via apt (sudo)?"; then
+        sudo apt-get update && sudo apt-get install -y python3 python3-venv python3-pip || true
+    elif command -v dnf >/dev/null 2>&1 && ask "Install Python via dnf (sudo)?"; then
+        sudo dnf install -y python3 || true
+    fi
+    PY=$(find_python || true)
+fi
+[ -z "${PY:-}" ] && { echo "ERROR: need Python 3.10+ — install from https://www.python.org/downloads/ and re-run."; exit 1; }
 echo "Using: $PY ($("$PY" --version 2>&1))"
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
+# Il repo GM (zip GitHub) BUNDLE-A entrambi i tool come sottocartelle: cercali
+# prima DENTRO il repo ($HERE), poi come sibling ($ROOT, checkout multi-repo).
+find_peer() {  # $1 = nome dir del tool → stampa il path se esiste
+    for d in "$HERE/$1" "$ROOT/$1"; do
+        [ -f "$d/pyproject.toml" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+NEURON_DIR=$(find_peer neuron || find_peer Neuron || true)
+NEURAG_DIR=$(find_peer neurag || find_peer Neurag || true)
+# Wheel offline (pyturso non ha wheel win_amd64 su PyPI): si prendono da OGNI
+# vendor presente, non da quella di Neuron. I tre tool sono standalone — dare per
+# scontata neuron/vendor lasciava un install GM+NeuRAG senza wheel. pip accetta
+# --find-links ripetuto: si passano tutte, vince chi ha la wheel giusta.
 FINDLINKS=""
-[ -d "$ROOT/Neuron/vendor" ] && FINDLINKS="--find-links $ROOT/Neuron/vendor"
+for _d in "$HERE" "$NEURON_DIR" "$NEURAG_DIR"; do
+    [ -n "$_d" ] && [ -d "$_d/vendor" ] && FINDLINKS="$FINDLINKS --find-links $_d/vendor"
+done
 
 VENV="${GM_HOME:-$HOME/.local/share/gray-matter}/.venv"
-[ -d "$VENV" ] || "$PY" -m venv "$VENV"
+# venv: Plan A stdlib venv, Plan B virtualenv, else EXIT with guidance.
+if [ ! -d "$VENV" ]; then
+    "$PY" -m venv "$VENV" 2>/dev/null \
+        || "$PY" -m virtualenv "$VENV" 2>/dev/null \
+        || { echo "ERROR: could not create a venv at $VENV — install python3-venv (or 'pip install virtualenv') and re-run."; exit 1; }
+fi
 VPY="$VENV/bin/python"
-"$VPY" -m pip install --upgrade pip >/dev/null
+# pip self-upgrade is non-critical: never let it abort the install.
+"$VPY" -m pip install --upgrade pip >/dev/null 2>&1 || echo "  (pip self-upgrade skipped — continuing)"
 
-echo "Installing Gray-Matter..."
-# shellcheck disable=SC2086
-"$VPY" -m pip install $FINDLINKS "$HERE"
-if [ -z "${GM_NO_NEURON:-}" ] && [ -d "$ROOT/Neuron" ]; then
-    echo "Installing Neuron..."
+# Idempotenza VISIBILE (fix 2026-07-21): se la versione installata è già quella
+# del sorgente, si SALTA il pip install (niente rebuild muto a ogni re-run).
+src_ver() { sed -n 's/^version *= *"\(.*\)".*/\1/p' "$1/pyproject.toml" | head -1; }
+already_installed() {  # $1 = pkg pip, $2 = dir sorgente
+    v=$(src_ver "$2"); [ -n "$v" ] || return 1
+    i=$("$VPY" -c "import importlib.metadata as m;print(m.version('$1'))" 2>/dev/null) || return 1
+    [ "$i" = "$v" ]
+}
+
+if [ "$FORCE" != "1" ] && already_installed gray-matter "$HERE"; then
+    echo "Gray-Matter $(src_ver "$HERE") already installed — skipping."
+else
+    [ "$FORCE" = "1" ] && echo "Repair: reinstalling Gray-Matter (forced)..." || echo "Installing Gray-Matter..."
+    # Plan A: with vendored wheels. Plan B: retry without --find-links (a stale/absent
+    # vendor wheel must not block a source install). Plan C: EXIT — GM is the required
+    # gateway, nothing works without it.
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS "$ROOT/Neuron"
+    "$VPY" -m pip install $FINDLINKS $FORCE_ARGS "$HERE" \
+        || "$VPY" -m pip install $FORCE_ARGS "$HERE" \
+        || { echo "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1; }
 fi
-if [ -z "${GM_NO_NEURAG:-}" ] && [ -d "$ROOT/neurag" ]; then
-    echo "Installing NeuRAG..."
+
+# GM_PEER_DIR set → standalone mode (called from Neuron/install.sh or NeuRAG):
+# install ONLY GM + the specified peer, skip sibling detection entirely.
+install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
+    pkg=$(basename "$1" | tr '[:upper:]' '[:lower:]')
+    if [ "$FORCE" != "1" ] && already_installed "$pkg" "$1"; then
+        echo "$2 $(src_ver "$1") already installed — skipping."
+        return 0
+    fi
+    [ "$FORCE" = "1" ] && echo "Repair: reinstalling $2 (forced)..." || echo "Installing $2 ($1)..."
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS "$ROOT/neurag"
-fi
-# Launched from a standalone tool repo (Neuron-only / NeuRAG-only download):
-# the thin per-repo installer points GM_PEER_DIR at itself — install it too.
+    "$VPY" -m pip install $FINDLINKS $FORCE_ARGS "$1" \
+        || "$VPY" -m pip install $FORCE_ARGS "$1" \
+        || echo "  WARNING: $2 install failed — continuing."
+}
+
 if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
-    echo "Installing $(basename "$GM_PEER_DIR")..."
-    [ -d "$GM_PEER_DIR/Neuron/vendor" ] && FINDLINKS="--find-links $GM_PEER_DIR/Neuron/vendor"
-    [ -d "$GM_PEER_DIR/vendor" ] && FINDLINKS="--find-links $GM_PEER_DIR/vendor"
-    # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS "$GM_PEER_DIR"
+    # Standalone: le wheel del peer si aggiungono a quelle già trovate.
+    [ -d "$GM_PEER_DIR/vendor" ] && FINDLINKS="$FINDLINKS --find-links $GM_PEER_DIR/vendor"
+    install_peer "$GM_PEER_DIR" "$(basename "$GM_PEER_DIR")"
+else
+    # Full suite mode — tools bundled INSIDE the GM repo zip, or siblings.
+    [ -z "${GM_NO_NEURON:-}" ] && [ -n "$NEURON_DIR" ] && install_peer "$NEURON_DIR" "Neuron"
+    [ -z "${GM_NO_NEURAG:-}" ] && [ -n "$NEURAG_DIR" ] && install_peer "$NEURAG_DIR" "NeuRAG"
 fi
 
 # Best-effort turso tier: prova le wheel vendored (Neuron/vendor o vendor del
@@ -80,9 +144,24 @@ if ! "$VPY" -c "import turso" >/dev/null 2>&1; then
         || echo "  pyturso not available here — running on the sqlite3 tier (still fully functional)."
 fi
 
+# Best-effort semantic tier: fastembed = retrieval preciso sul vault
+# multi-disciplinare (meno chunk, meno token). Come pyturso: mai bloccante,
+# senza si degrada al lessicale TF-IDF.
+if ! "$VPY" -c "import fastembed" >/dev/null 2>&1; then
+    echo "Enabling the semantic embedding tier (best-effort)..."
+    "$VPY" -m pip install "fastembed>=0.5.0,<1.0" \
+        || echo "  fastembed not available — lexical ranking only (still functional)."
+fi
+
 # Gateway model (INSTALLER-UX): register ONLY gray-matter, deploy hooks, manifest.
 echo "Installing the gateway (register + hooks + manifest)..."
 "$VPY" -m gray_matter.cli install || "$VPY" -m gray_matter.cli register || true
+
+# Registro path sorgente (SoC): ogni componente registra il PROPRIO sorgente nel
+# proprio registro; GM li scopre chiedendo ai peer. Riscritto a ogni install.
+"$VPY" -m gray_matter.cli record-env --gm "$HERE" >/dev/null 2>&1 || true
+[ -n "$NEURON_DIR" ] && "$VPY" -m neuron record-paths --source "$NEURON_DIR" >/dev/null 2>&1 || true
+[ -n "$NEURAG_DIR" ] && "$VPY" -m neurag.cli record-paths --source "$NEURAG_DIR" >/dev/null 2>&1 || true
 
 # Convenience: put `gray-matter` on PATH if ~/.local/bin exists.
 if [ -x "$VENV/bin/gray-matter" ] && [ -d "$HOME/.local/bin" ]; then

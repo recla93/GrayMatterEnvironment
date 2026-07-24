@@ -27,6 +27,7 @@ def test_register_json_gateway_evicts_neuron(tmp_path):
 
 
 def test_ipc_listener_exits_when_port_taken(monkeypatch):
+    pytest.importorskip("mcp")  # imports gray_matter.server; needs real MCP (local/CI)
     from gray_matter import server
     blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     blocker.bind(("127.0.0.1", 0))

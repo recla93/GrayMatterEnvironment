@@ -36,8 +36,11 @@ from gray_matter import settings as _settings
 # takes effect on the next restart. Missing/unknown keys fall back to defaults.
 _cfg = _settings.load()
 
-GRAY_MATTER_PORT = 9876
-GRAY_MATTER_HOST = "127.0.0.1"
+# SSOT in cli.py: la CLI (e la GUI) devono conoscere host/porta SENZA
+# importare questo modulo, che trascina `mcp` e tutto il server.
+from gray_matter.cli import (GRAY_MATTER_HOST, GRAY_MATTER_PORT,  # noqa: E402
+                             GRAY_MATTER_PORT_SPAN, resolve_port, write_port_file,
+                             clear_port_file, port_is_free, gm_answers)
 HEARTBEAT_INTERVAL = _cfg["heartbeat_interval"]  # seconds
 HEARTBEAT_TIMEOUT = 15.0  # seconds — after 3 missed beats, mark dead
 IDLE_SLEEP_TIMEOUT = _cfg["idle_sleep_timeout"]  # sleep after this long idle
@@ -46,6 +49,17 @@ IDLE_SLEEP_TIMEOUT = _cfg["idle_sleep_timeout"]  # sleep after this long idle
 # IPC helpers (tiny TCP-based protocol for server <-> Gray-Matter)
 # ---------------------------------------------------------------------------
 
+def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Read exactly n bytes from sock, or return b'' on short/failed read."""
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            return b""
+        buf += chunk
+    return buf
+
+
 def _send_ipc(data: dict) -> dict:
     """Send a JSON IPC message to the local Gray-Matter process."""
     payload = json.dumps(data).encode("utf-8")
@@ -53,13 +67,17 @@ def _send_ipc(data: dict) -> dict:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(3.0)
-            s.connect((GRAY_MATTER_HOST, GRAY_MATTER_PORT))
+            s.connect((GRAY_MATTER_HOST, resolve_port()))
             s.sendall(length + payload)
-            resp_len_bytes = s.recv(4)
-            if not resp_len_bytes:
+            hdr = _recv_exact(s, 4)
+            if not hdr:
                 return {"error": "no response"}
-            resp_len = struct.unpack("!I", resp_len_bytes)[0]
-            resp_data = s.recv(resp_len)
+            resp_len = struct.unpack("!I", hdr)[0]
+            if resp_len <= 0 or resp_len > 1_000_000:
+                return {"error": "invalid response length"}
+            resp_data = _recv_exact(s, resp_len)
+            if not resp_data:
+                return {"error": "incomplete response"}
             return json.loads(resp_data.decode("utf-8"))
     except (ConnectionRefusedError, TimeoutError, OSError) as e:
         return {"error": str(e)}
@@ -89,7 +107,7 @@ def _is_gray_matter_running() -> bool:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
-            s.connect((GRAY_MATTER_HOST, GRAY_MATTER_PORT))
+            s.connect((GRAY_MATTER_HOST, resolve_port()))
             s.close()
             return True
     except (ConnectionRefusedError, TimeoutError, OSError):
@@ -117,23 +135,45 @@ def autoregister(name: str, tool_names: list[str]) -> bool:
     return False
 
 
+def daemon_log_path():
+    """Il log del daemon (G2): stdout+stderr del processo finiscono qui."""
+    from gray_matter.paths import logs_dir
+    return logs_dir() / "daemon.log"
+
+
 def _spawn_gray_matter() -> None:
     """Spawn Gray-Matter as a background process."""
     # Use python -m gray_matter.server to run the server module
     # Detach from parent process so it survives parent death
     import sys
-    cmd = [sys.executable, "-m", "gray_matter.server", "--daemon"]
+    cmd = [sys.executable, "-u", "-m", "gray_matter.server", "--daemon"]  # -u: log senza buffering
     creationflags = 0
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
 
-    subprocess.Popen(
-        cmd,
-        creationflags=creationflags,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    # G2: stdout/stderr → logs/daemon.log (append) invece del buco nero — ogni
+    # print e traceback diventa leggibile con `gray-matter logs [--follow]`.
+    # Fallback DEVNULL se il file non è apribile (mai bloccare lo spawn).
+    try:
+        log_path = daemon_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        out = open(log_path, "a", encoding="utf-8", errors="replace")  # noqa: SIM115
+        out.write(f"\n--- spawn {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        out.flush()
+    except OSError:
+        out = None
+    stdout_err = out if out is not None else subprocess.DEVNULL
+    try:
+        subprocess.Popen(
+            cmd,
+            creationflags=creationflags,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_err,
+            stderr=stdout_err,
+        )
+    finally:
+        if out is not None:
+            out.close()  # parent FD closed; child inherited it
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +211,51 @@ _last_topic: str = ""
 _flashed: set = set()          # concepts already flashed this session (cooldown)
 _calls_since_flash: int = 0
 FLASH_MIN_GAP = _cfg["flash_min_gap"]   # min pulses between flashes (anti-spam)
+
+# Stimulus safety-net (design §Decisioni 3): il motore degli stimoli è di Neuron
+# (piggyback 🧠 sui suoi tool); se l'LLM smette di far passare stimoli per N
+# turni-tool, GM lo rilancia LUI sul prossimo pass-through. Toggle/tuning in
+# settings (→ GUI Preferences): stimulus_safety_net / stimulus_safety_gap.
+STIM_SAFETY_NET = _cfg["stimulus_safety_net"]
+STIM_SAFETY_GAP = _cfg["stimulus_safety_gap"]
+_turns_since_stim: int = 0
+
+
+def _stim_seen(text: str) -> None:
+    """Un pulse/risposta che già porta stimoli (🧠/⚡) azzera il contatore."""
+    global _turns_since_stim
+    if "🧠" in text or "⚡" in text:
+        _turns_since_stim = 0
+
+
+async def _safety_net_note(tool_name: str, arguments: dict, result: str) -> str:
+    """Rete di sicurezza: '' quasi sempre; una riga 🧠 quando il piggyback tace
+    da STIM_SAFETY_GAP turni. Best-effort, mai bloccante, anti-recursione (parla
+    col worker Neuron direttamente, non ri-entra in call_tool)."""
+    global _turns_since_stim
+    if not STIM_SAFETY_NET:
+        return ""
+    if "🧠" in result or "⚡" in result:
+        _turns_since_stim = 0                     # lo stimolo è passato: riposa
+        return ""
+    _turns_since_stim += 1
+    if _turns_since_stim < STIM_SAFETY_GAP:
+        return ""
+    neuron = _registry.get_server("neuron")
+    if not neuron or not neuron.is_alive():
+        return ""
+    near = str(arguments.get("topic") or arguments.get("query") or "").strip()
+    try:
+        forgotten = (await _call_server_async(
+            "neuron", "forgotten",
+            {"threshold": 5, "near": near, "top_n": 1})).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+    if not forgotten or forgotten.startswith("["):
+        return ""
+    _turns_since_stim = 0
+    _stats["flashes"] += 1
+    return f"\n\n🧠 (GM safety-net) {forgotten}"
 
 
 _is_sleeping: bool = False
@@ -377,6 +462,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     _stats["bridges_added"] += 1
 
         # Cache + record the real-work latency (this was a miss).
+        _stim_seen(response)          # un pulse con stimoli ricarica il safety-net
         _ctx_cache.set(topic, response)
         _stats["pulse_ms_total"] += (time.monotonic() - _t0) * 1000
 
@@ -409,13 +495,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=f"Tool '{name}' not found in any registered server.")]
 
     result = await _call_server_async(server.name, name, arguments)
-    return [TextContent(type="text", text=result or "(empty)")]
+    # Rete di sicurezza stimoli: se il piggyback di Neuron non passa da troppi
+    # turni (LLM ha "dimenticato" i tool giusti), GM lo rilancia qui.
+    note = await _safety_net_note(name, arguments, result or "")
+    return [TextContent(type="text", text=(result or "(empty)") + note)]
 
 
 # Persistent workers: one long-lived subprocess per server (imported once, model
 # kept warm) instead of a cold-import subprocess per call. See gray_matter/_worker.py.
 _workers: dict = {}          # server_name -> Popen
 _worker_locks: dict = {}     # server_name -> asyncio.Lock (serialize the shared pipe)
+_worker_lat: dict = {}       # server_name -> {calls, ms_total, last_ms} (tempo NEL tool)
 _prewarmed: set = set()      # servers already warmed (D2), so we warm each once
 _neurag_links_built: bool = False  # auto-build links once when links=0 and nodes>1
 
@@ -507,6 +597,13 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict) 
         # vogliamo il traceback intero, non solo str(e)
         tail = f"\n{resp['trace']}" if resp.get("trace") else ""
         return f"[{server_name}] error: {resp.get('error')}{tail}"
+    # Cronometro per server: il worker misura l'esecuzione del tool (modello
+    # già caldo, senza pipe/proxy) — è il numero che dice DOVE va il tempo.
+    if resp.get("ms") is not None:
+        lat = _worker_lat.setdefault(server_name, {"calls": 0, "ms_total": 0.0, "last_ms": 0.0})
+        lat["calls"] += 1
+        lat["ms_total"] += float(resp["ms"])
+        lat["last_ms"] = float(resp["ms"])
     return resp["text"]
 
 
@@ -554,10 +651,21 @@ _SUBSERVER_MODULES = {"neuron": "neuron.server", "neurag": "neurag.server"}
 
 
 def detect_subservers() -> list[str]:
-    """Installed sub-servers importable right now (gateway self-discovery)."""
+    """Installed sub-servers importable right now (gateway self-discovery).
+
+    Un tool andato standalone (`<tool> go-standalone` / `gray-matter deregister
+    --tool ...`) è escluso anche se importabile: ha la sua entry MCP diretta nei
+    client — ri-gestirlo qui duplicherebbe i suoi tool."""
     import importlib.util
+    try:
+        from gray_matter.clients import unmanaged_tools
+        skip = unmanaged_tools()
+    except Exception:  # noqa: BLE001 — mai bloccare il bootstrap
+        skip = set()
     out = []
     for name, mod in _SUBSERVER_MODULES.items():
+        if name in skip:
+            continue
         try:
             if importlib.util.find_spec(mod) is not None:
                 out.append(name)
@@ -640,6 +748,10 @@ def _build_stats() -> dict:
         "bridges_total": len(all_bridges()),
         "avg_miss_ms": round(_stats["pulse_ms_total"] / misses, 1) if misses else 0.0,
         "workers_alive": [n for n, p in _workers.items() if p.poll() is None],
+        "worker_latency": {n: {"calls": v["calls"],
+                               "avg_ms": round(v["ms_total"] / v["calls"], 1) if v["calls"] else 0.0,
+                               "last_ms": v["last_ms"]}
+                           for n, v in _worker_lat.items()},
     }
 
 
@@ -668,6 +780,34 @@ async def _build_doctor() -> dict:
             out["neurag_engine"] = _json.loads(raw).get("engine", "?")
         except Exception:  # noqa: BLE001 — best-effort, il doctor non deve rompersi
             pass
+    # Doctor esteso (passo 5): tier di TUTTI e 3 + se il cross-store è attivo.
+    # Env reale > .env GM (stessa precedenza del runtime); best-effort sempre.
+    try:
+        from gray_matter import bridges as _b, cloud as _cloud
+        saved = _cloud.read_env_file(_cloud.default_env_file())
+
+        def _has(key: str) -> bool:
+            return bool(os.environ.get(key, "").strip() or saved.get(key))
+
+        shared = _has("TURSO_AUTH_TOKEN")
+        out["tiers"] = {
+            "neuron": "Turso (cloud)" if _has("TURSO_DATABASE_URL") and shared
+                      else "local",
+            "neurag": out.get("neurag_engine")
+                      or ("Turso (cloud)" if _has("NEURAG_TURSO_DATABASE_URL")
+                          and (shared or _has("NEURAG_TURSO_AUTH_TOKEN")) else "local"),
+            "gm_bridges": "Turso (cloud)" if _b.REMOTE_TURSO else "SQLite (local)",
+        }
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _collab(name: str) -> bool:
+        s = _registry.get_server(name)
+        return bool(s and s.is_alive() and s.collaborative)
+
+    # Cross-store = i bridge possono lavorare: entrambi gli store vivi e nel
+    # pulse combinato (uno isolato/spento = niente collegamenti, per design).
+    out["cross_store"] = _collab("neuron") and _collab("neurag")
     return out
 
 
@@ -753,21 +893,43 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
     (SystemExit escapes asyncio). A stdio instance (main) must instead keep
     serving MCP without a listener — its managed workers don't need the port."""
     loop = asyncio.get_event_loop()
-    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Singleton guard: on Windows SO_REUSEADDR lets TWO daemons bind :9876 at
-    # once (unlike POSIX), so a spawn race produced real duplicate GMs. Bind
-    # exclusively and let the loser die — every spawn path funnels through here.
-    if os.name == "nt":
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-    else:
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server_sock.bind((GRAY_MATTER_HOST, GRAY_MATTER_PORT))
-    except OSError:
-        # Another GM already owns the port.
+    # Singleton PRESERVATO ma porta DINAMICA: se su una porta candidata risponde
+    # GIÀ un GM (probe `ping`), siamo un duplicato e moriamo. Se la porta è presa
+    # da un processo ESTRANEO, si scala alla prima libera invece di non partire
+    # mai. La porta scelta va nel rendezvous file, così i client la seguono.
+    if gm_answers(GRAY_MATTER_HOST, resolve_port()):
         if exit_on_busy:
-            raise SystemExit(0)   # duplicate daemon: die instead of coordinating
-        return                    # stdio instance: serve MCP without a listener
+            raise SystemExit(0)   # un GM è già vivo: duplicato → muori
+        return                    # istanza stdio: serve MCP senza listener
+    server_sock = None
+    chosen = None
+    for port in range(GRAY_MATTER_PORT, GRAY_MATTER_PORT + GRAY_MATTER_PORT_SPAN):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if os.name == "nt":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((GRAY_MATTER_HOST, port))
+        except OSError:
+            s.close()
+            # occupata: se è un GM è un duplicato (muori), altrimenti prova la prossima
+            if gm_answers(GRAY_MATTER_HOST, port):
+                if exit_on_busy:
+                    raise SystemExit(0)
+                return
+            continue
+        server_sock, chosen = s, port
+        break
+    if server_sock is None:
+        # nessuna porta libera nell'intervallo: non possiamo servire l'IPC
+        if exit_on_busy:
+            raise SystemExit(1)
+        return
+    write_port_file(chosen)       # i client leggono qui la porta reale
+    if chosen != GRAY_MATTER_PORT:
+        print(f"gray-matter: porta preferita {GRAY_MATTER_PORT} occupata → uso {chosen}",
+              file=sys.stderr)
     server_sock.listen(5)
     server_sock.setblocking(False)
 
@@ -782,7 +944,11 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     action = msg.get("action")
                     response = {}
 
-                    if action == "register":
+                    if action == "ping":
+                        # Probe di identità: distingue un GM da un'app estranea
+                        # sulla stessa porta (usato dal singleton + rendezvous).
+                        response = {"status": "ok", "gm": True}
+                    elif action == "register":
                         _registry.register(
                             name=msg["name"],
                             tool_names=msg["tool_names"],

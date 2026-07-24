@@ -14,9 +14,19 @@ Protocol: one JSON request per line on stdin -> one JSON response per line on st
 import asyncio
 import importlib
 import json
+import os
 import sys
+import time
 
 from mcp import types as _mcp_types
+
+# Freshness TTL: prima il graph cache veniva svuotato a OGNI chiamata, cioè
+# grafo interamente riletto dal DB per ogni tool call — con pulse che ne fa
+# 2-3 per turno, e sul tier Turso cloud ogni rilettura passa dalla rete, era
+# QUESTO il collo dei 2-3s, non il calcolo dell'embedding (il modello è già
+# caldo qui). Ora si rilegge al massimo ogni TTL secondi: dentro lo stesso
+# turno il grafo resta in memoria. 0 = comportamento vecchio (clear sempre).
+_FRESH_TTL = float(os.environ.get("GM_WORKER_FRESH_TTL", "5"))
 
 
 def main() -> None:
@@ -24,6 +34,7 @@ def main() -> None:
     app = mod.app
     reg = getattr(mod, "_g", None)               # graph registry (Neuron); NeuRAG has none
     loop = asyncio.new_event_loop()
+    last_clear = 0.0
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -42,11 +53,15 @@ def main() -> None:
                 sys.stdout.write(json.dumps({"ok": True, "tools": tools}) + "\n")
                 sys.stdout.flush()
                 continue
-            if reg is not None and hasattr(reg, "_graphs"):
+            now = time.monotonic()
+            if (reg is not None and hasattr(reg, "_graphs")
+                    and now - last_clear >= _FRESH_TTL):
                 try:
                     reg._graphs.clear()          # freshness: re-read DB, keep model warm
+                    last_clear = now
                 except Exception:
                     pass
+            _t0 = time.monotonic()
             handler = app.request_handlers[_mcp_types.CallToolRequest]
             mcp_req = _mcp_types.CallToolRequest(
                 params=_mcp_types.CallToolRequestParams(
@@ -58,7 +73,9 @@ def main() -> None:
             text = ""
             if hasattr(result, "content") and result.content:
                 text = result.content[0].text if hasattr(result.content[0], "text") else str(result.content[0])
-            sys.stdout.write(json.dumps({"ok": True, "text": text}) + "\n")
+            sys.stdout.write(json.dumps({
+                "ok": True, "text": text,
+                "ms": round((time.monotonic() - _t0) * 1000, 1)}) + "\n")
         except Exception as e:  # noqa: BLE001
             import traceback
             sys.stdout.write(json.dumps({"ok": False, "error": str(e),

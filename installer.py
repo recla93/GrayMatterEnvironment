@@ -50,10 +50,15 @@ def plan(state: dict) -> list[dict]:
         actions.append({"action": "register", "target": GATEWAY,
                         "clients": sorted(set(clients))})
     # Handshake layer (§8b): deploy the per-client hook/plugin where one exists.
-    for c in sorted(set(clients)):
-        if c in HOOK_ASSETS:
-            actions.append({"action": "deploy_hook", "client": c,
-                            "asset": HOOK_ASSETS[c]})
+    # Only when Neuron is part of the install: the assets ship INSIDE the neuron
+    # package and the hook injects Neuron's pre_turn/store_turn loop. On a
+    # NeuRAG+GM install there is nothing to deploy — emitting the action anyway
+    # produced a bogus "asset missing" error on a perfectly valid setup.
+    if "neuron" in (state.get("installed") or []):
+        for c in sorted(set(clients)):
+            if c in HOOK_ASSETS:
+                actions.append({"action": "deploy_hook", "client": c,
+                                "asset": HOOK_ASSETS[c]})
     actions.append({"action": "write_manifest"})
     return actions
 

@@ -12,11 +12,16 @@ from pathlib import Path
 
 DEFAULTS = {
     "flash_min_gap": 3,           # pulses between flashes (anti-spam)
+    "stimulus_safety_net": True,  # GM re-launches the stimulus if Neuron's piggyback goes silent
+    "stimulus_safety_gap": 5,     # tool turns without 🧠/⚡ before the safety net fires
     "cache_ttl_seconds": 60,      # context cache TTL
     "cache_max_size": 100,        # context cache LRU cap
     "prewarm": True,              # pre-warm workers at start (D2)
     "heartbeat_interval": 5.0,    # server liveness ping (s)
     "idle_sleep_timeout": 600.0,  # idle before sleep (s)
+    # Tool usciti dal gateway (go-standalone): csv fra "neuron","neurag". GM non
+    # li spawna né li ripubblica finché stanno qui; `register --gateway` azzera.
+    "unmanaged": "",
 }
 
 
