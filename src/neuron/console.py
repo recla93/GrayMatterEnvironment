@@ -5,7 +5,7 @@ Usage:
     python scripts/neuron_console.py --watch  # refresh every 5s
     python scripts/neuron_console.py --watch=2  # refresh every 2s
 """
-import os, sys, time, json, struct
+import os, sys, time
 from datetime import datetime
 
 # Make Unicode output safe on legacy Windows consoles (cp1252): reconfigure

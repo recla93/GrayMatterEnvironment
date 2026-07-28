@@ -43,6 +43,15 @@ class GraphRegistry:
         self._graphs: dict[str, Graph] = {}
         self._cross_links: list[CrossLink] = []
         self._active: str = "default"
+        self._active_file = os.path.join(graphs_dir, "_active_context.txt")
+        # Restore last active context from disk
+        try:
+            if os.path.isfile(self._active_file):
+                saved = open(self._active_file, encoding="utf-8").read().strip()
+                if saved and os.path.isfile(self._db_path(saved)):
+                    self._active = saved
+        except Exception:
+            pass
         self._cross_db = os.path.join(graphs_dir, "_cross_links.json")
         self._load_cross_links()
         # seed path: prefer the DB bundled inside the installed package
@@ -84,7 +93,7 @@ class GraphRegistry:
         """
         p = self._seed_path
         try:
-            if not os.path.isfile(p) or os.path.getsize(p) < 512:
+            if not os.path.isfile(p) or os.path.getsize(p) < _db.SQLITE_MIN_VALID_SIZE:
                 return False
             with open(p, "rb") as f:
                 return f.read(16) == b"SQLite format 3\x00"
@@ -181,6 +190,12 @@ class GraphRegistry:
                 break
         self.get(ctx)
         self._active = ctx
+        # Persist active context to disk
+        try:
+            with open(self._active_file, "w", encoding="utf-8") as f:
+                f.write(ctx)
+        except Exception:
+            pass
         return self._active
 
     def list_contexts(self, parent: str | None = None) -> list[dict[str, Any]]:
@@ -282,19 +297,44 @@ class GraphRegistry:
     # Reset
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _unlink_db(db: str) -> None:
+        """Remove a SQLite DB and its WAL sidecars (Windows-safe).
+
+        Order matters on Windows: ``-shm`` and ``-wal`` may hold memory-mapped
+        locks on the parent ``.db`` — remove them *before* the main file.
+
+        On Windows, concurrent processes or WAL sidecars can briefly hold a
+        sharing lock even after Python's ``close()``.  We retry a few times
+        with a short backoff before giving up."""
+        import time as _time
+        for suffix in ("-shm", "-wal", ""):
+            path = db + suffix
+            for attempt in range(4):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                    break
+                except PermissionError:
+                    if attempt < 3:
+                        _time.sleep(0.05 * (attempt + 1))
+                    # else: give up — caller can still proceed
+                except FileNotFoundError:
+                    break
+
     def reset(self, context: str | None = None) -> None:
         if context:
             ctx = context.lower().strip("/")
             db  = self._db_path(ctx)
             if os.path.exists(db):
-                os.remove(db)
+                self._unlink_db(db)
             self._graphs.pop(ctx, None)
             self._seed_loaded.discard(ctx)
         else:
             for ctx in list(self._graphs):
                 db = self._db_path(ctx)
                 if os.path.exists(db):
-                    os.remove(db)
+                    self._unlink_db(db)
             self._graphs.clear()
             self._cross_links.clear()
             self._active = "default"

@@ -128,10 +128,29 @@ class TestRegister(unittest.TestCase):
         """Route the 'cursor' client into a temp HOME."""
         return mock.patch.dict(os.environ, {"HOME": td, "USERPROFILE": td})
 
-    def test_register_creates_and_merges(self):
+    def test_register_skips_a_client_that_is_not_installed(self):
+        """No config file = the app is not there = write nothing.
+
+        `create_if_missing` used to be True for cursor/opencode/codex, and on a
+        real machine that made the installer write ~/.cursor/mcp.json and
+        ~/.config/opencode/opencode.json for apps that were NOT installed. Once
+        the file exists, executor.detect_state() counts the client as present
+        forever and keeps deploying hooks into it."""
         with tempfile.TemporaryDirectory() as td, self._cursor_env(td):
             with mock.patch("os.path.expanduser",
                             side_effect=lambda p: p.replace("~", td)):
+                r = C.register("cursor", "neuron", PY, install_dir=td)
+                self.assertEqual(r.action, "skipped", r.line())
+                self.assertFalse(os.path.exists(os.path.join(td, ".cursor", "mcp.json")))
+
+    def test_register_merges_into_an_existing_config(self):
+        with tempfile.TemporaryDirectory() as td, self._cursor_env(td):
+            with mock.patch("os.path.expanduser",
+                            side_effect=lambda p: p.replace("~", td)):
+                # the app IS installed: its config already exists
+                os.makedirs(os.path.join(td, ".cursor"), exist_ok=True)
+                with open(os.path.join(td, ".cursor", "mcp.json"), "w") as fh:
+                    fh.write("{}")
                 r = C.register("cursor", "neuron", PY, install_dir=td)
                 self.assertTrue(r.ok, r.line())
                 cfg = json.load(open(os.path.join(td, ".cursor", "mcp.json")))

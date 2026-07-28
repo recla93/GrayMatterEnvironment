@@ -37,7 +37,6 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Any, Literal, Protocol
 
 from neuron import db as _db

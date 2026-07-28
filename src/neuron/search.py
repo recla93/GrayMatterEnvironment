@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import logging
 import weakref
-from typing import Any
 
 from neuron.extraction import DOMAIN_ALIASES
 
 log = logging.getLogger("neuron.search")
+from neuron.db import SQLITE_MIN_VALID_SIZE
 from neuron.models import pack_vector
 
 
@@ -41,7 +41,9 @@ def _get_embedder():
     """Lazy-load the embedding model on first use (avoids slow startup)."""
     s = _S()
     if s._embedder is None:
-        s._embedder = s.TextEmbedding(s.NS_EMBED_MODEL)
+        # ponytail: see neurag/embedder.py for the measured rationale (~4%
+        # lower resident memory, no latency cost) — keep the two in sync.
+        s._embedder = s.TextEmbedding(s.NS_EMBED_MODEL, threads=2, enable_cpu_mem_arena=False)
     return s._embedder
 
 
@@ -100,7 +102,7 @@ def _seed_usable(path: "str | None") -> bool:
     Mirrors GraphRegistry._seed_is_loadable."""
     import os
     try:
-        if not path or not os.path.isfile(path) or os.path.getsize(path) < 512:
+        if not path or not os.path.isfile(path) or os.path.getsize(path) < SQLITE_MIN_VALID_SIZE:
             return False
         with open(path, "rb") as f:
             return f.read(16) == b"SQLite format 3\x00"

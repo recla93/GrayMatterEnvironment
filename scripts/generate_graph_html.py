@@ -26,7 +26,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths (single source of truth, same logic as _neuron_paths.ps1)
 # ---------------------------------------------------------------------------
-SLUG = os.environ.get("NEURON_SLUG", "neuron5")
+SLUG = os.environ.get("NEURON_SLUG", "neuron")
 
 def _default_graphs_dir() -> str:
     if os.name == "nt":

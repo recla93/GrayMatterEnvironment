@@ -216,7 +216,13 @@ CLIENTS: dict[str, dict[str, Any]] = {
         "keys": ["mcpServers"],
         "entry": lambda py: {"command": py, "args": ["-m", "neuron"]},
         "format": "json",
-        "create_if_missing": True,
+        # False like every other client: creating a config for an app that is
+        # not installed litters the disk and — worse — makes detect_state()
+        # report that client as present forever after, so GM keeps deploying
+        # hooks into it. Verified on a real machine: Cursor and OpenCode were
+        # NOT installed and the installer wrote ~/.cursor/mcp.json and
+        # ~/.config/opencode/opencode.json anyway.
+        "create_if_missing": False,
     },
     "vscode": {
         "label": "VS Code",
@@ -238,7 +244,7 @@ CLIENTS: dict[str, dict[str, Any]] = {
         "keys": ["mcp"],
         "entry": lambda py: {"command": [py, "-m", "neuron"], "type": "local"},
         "format": "json",
-        "create_if_missing": True,
+        "create_if_missing": False,
     },
     "zed": {
         "label": "Zed",
@@ -257,7 +263,7 @@ CLIENTS: dict[str, dict[str, Any]] = {
         "keys": ["mcp_servers"],
         "entry": lambda py: {"command": py, "args": ["-m", "neuron"]},
         "format": "toml",
-        "create_if_missing": True,
+        "create_if_missing": False,
     },
 }
 

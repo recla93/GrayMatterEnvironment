@@ -53,7 +53,7 @@
 [CmdletBinding()]
 param(
     [string]$Dest,                # default computed from -Slug below (with LOCALAPPDATA fallback)
-    [string]$Slug = 'neuron5',    # install identity (v5 "Synapse"); use 'neuron' for the v4 line
+    [string]$Slug = 'neuron',     # install identity. 'neuron5' was the retired v5 key
     [switch]$DryRun,
     [switch]$RunTests,
     [switch]$Force,

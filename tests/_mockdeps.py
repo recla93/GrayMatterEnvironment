@@ -42,7 +42,7 @@ def install_mock_deps() -> None:
 
     Idempotent-enough for a test session: overwrites sys.modules entries.
     """
-    sys.modules["turso"] = None  # force sqlite3 / Python-fallback tier
+    sys.modules["turso"] = None  # force sqlite3 / Python-fallback tier for THIS import
 
     _fe = types.ModuleType("fastembed")
     _fe.TextEmbedding = FakeEmbed
@@ -71,3 +71,26 @@ def install_mock_deps() -> None:
     typ.ToolsCapability       = type("TsCap", (), {})
     typ.Resource              = type("Resource", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
     hlp.ReadResourceContents  = type("ReadResourceContents", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
+
+
+def unpoison_turso() -> None:
+    """Undo the ``sys.modules["turso"] = None`` sentinel from install_mock_deps().
+
+    Call this right after the ``neuron`` imports that needed the fake-missing
+    ``turso`` are done. ``sys.modules[name] = None`` is a process-global CPython
+    import-cache entry, not a per-test-file thing: it makes every subsequent
+    ``import turso`` anywhere in this interpreter raise ImportError immediately,
+    for the rest of the process. In a single combined test run across neuron +
+    gray_matter + neurag (one pytest process, one collection phase), pytest
+    IMPORTS every test file up front before running any fixture — so this file
+    poisons ``turso`` during collection, and neurag's db.py (imported when
+    neurag's own test files are collected right after) computes its
+    module-level TURSO_AVAILABLE=False from that poisoned entry and never
+    recovers, since it's only computed once at import time. neurag's conftest.py
+    tries to purge the sentinel, but as an autouse fixture it only runs at
+    first TEST EXECUTION — after collection (and the poisoning) already
+    happened. Popping here, right after the imports that need it, keeps the
+    fake-missing window scoped to just this module's own import instead of
+    leaking into every test file collected afterward in the same process.
+    """
+    sys.modules.pop("turso", None)

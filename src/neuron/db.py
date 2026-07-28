@@ -87,6 +87,10 @@ _REMOTE_NOOP_PRAGMAS = ("journal_mode", "synchronous", "foreign_keys")
 # their rows right away — e.g. reconcile's "which rows exist" SELECT).
 _WRITE_PREFIXES = ("insert", "update", "delete", "replace", "create", "alter", "drop")
 
+# Minimum file size in bytes for a SQLite file to be considered valid.
+# Used by search.py and registry.py to skip corrupt/empty files.
+SQLITE_MIN_VALID_SIZE = 512
+
 
 def _is_write_sql(sql: str) -> bool:
     head = sql.lstrip()
@@ -304,6 +308,44 @@ def _ensure_parent_dir(path: str) -> None:
             pass
 
 
+# ponytail: permanent process-level cache, mirrors neurag/db.py
+# _turso_conn_cache. pyturso 0.6.1 does not release its OS file lock on
+# close() (confirmed in neurag/db.py), yet every call site here opens a
+# fresh connection per operation (models.py alone: ~15 call sites) and
+# closes it when done. Each of those "closes" leaks a native handle. Over
+# a long-running process (daemon) or a large test run (271+ tests, many
+# hitting the same context file repeatedly) that exhausted pyturso's
+# native connection table — turso.connect() started failing everywhere in
+# the process, including in unrelated packages (neurag) sharing the same
+# pytest run. Caching by path and no-op'ing close() cuts total native
+# opens from "one per operation" to "one per unique file". Upgrade path:
+# drop this once pyturso actually releases handles on close().
+_local_conn_cache: dict[str, object] = {}
+
+
+class _CachedLocalConn:
+    """Transparent proxy over a cached local Turso connection.
+
+    ``close()`` only drops our reference — the real connection stays alive
+    in ``_local_conn_cache`` for the next caller on the same path. Every
+    other attribute/method (execute, executemany, commit, rollback, ...)
+    passes straight through.
+    """
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+
+    def close(self) -> None:
+        pass  # cached connection stays open — see _open_local_engine
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_conn"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_conn"), name, value)
+
+
 def _open_local_engine(path: str):
     """Open the local pyturso engine, resilient to the L2 concurrent-open race.
 
@@ -316,10 +358,20 @@ def _open_local_engine(path: str):
     ``store_turn`` falls back to the sqlite tier for that connection instead of
     crashing. Losing native vector-SQL for one call beats losing the write.
     """
+    cached = _local_conn_cache.get(path)
+    if cached is not None:
+        try:
+            cached._conn.execute("SELECT 1")
+            return cached
+        except Exception:  # noqa: BLE001 — stale/dead cached connection
+            _local_conn_cache.pop(path, None)
+
     last: Exception | None = None
     for attempt in range(3):
         try:
-            return _local_turso.connect(path)
+            conn = _CachedLocalConn(_local_turso.connect(path))
+            _local_conn_cache[path] = conn
+            return conn
         except Exception as e:  # noqa: BLE001 — transient concurrent-open race
             last = e
             _time.sleep(0.05 * (attempt + 1))

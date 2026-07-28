@@ -1,7 +1,7 @@
 # neuron-guard
 
 Correct-usage guard for the [Neuron](https://github.com/) semantic memory MCP
-server (v5 "Synapse", server key `neuron5`).
+server (server key `neuron`).
 
 ## What it does
 
@@ -18,7 +18,7 @@ server (v5 "Synapse", server key `neuron5`).
 
 ## Requirements
 
-- Neuron installed and registered as an MCP server under the key `neuron5`
+- Neuron installed and registered as an MCP server under the key `neuron`
   (use the Neuron installer / `neuron register`). The plugin does NOT bundle
   the server; if Neuron is not connected, the hook text tells the model to
   ignore itself, so the plugin is harmless.

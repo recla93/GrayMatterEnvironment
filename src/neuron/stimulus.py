@@ -16,6 +16,22 @@ from neuron.models import Link
 # Cap on auto-links created per turn (P1 #9, configurable).
 MAX_AUTO_LINKS = _env_int("NEURON_MAX_AUTO_LINKS", 8)
 
+# Auto-link similarity thresholds
+AUTO_LINK_MIN_SIM    = 0.30   # below this: skip (too noisy)
+AUTO_LINK_MEDIUM_SIM = 0.45   # above this: medium weight
+AUTO_LINK_STRONG_SIM = 0.65   # above this: strong weight
+
+# Flash thresholds
+FLASH_MIN_TURN       = 3      # turns before flashes activate
+DORMANT_MIN_SLEEP    = 4      # min sleep threshold for dormant pulse
+DORMANT_MIN_SALIENCE = 2      # min salience for dormant node to flash
+DORMANT_MIN_SIM      = 0.38   # min similarity for dormant pulse candidate
+CROSS_DOMAIN_MIN_SIM = 0.48   # min similarity for cross-domain spark
+MAX_FLASH_CANDIDATES = 2      # top-N flash candidates shown
+# L3: Memory recall from graveyard
+MEMORY_RECALL_MIN_SIM = 0.40  # min similarity for graveyard reactivation
+MEMORY_RECALL_BASE_SALIENCE = 3  # base salience when reactivated
+
 
 def _S():
     """The server module = the shared state/config namespace."""
@@ -54,7 +70,7 @@ def _auto_link(new_kw: list[str], turn: int, graph=None) -> list[Link]:
         for candidate_kw, sim in candidates:
             if candidate_kw == kw or candidate_kw in new_kw:
                 continue
-            if sim < 0.30:          # raised from 0.15 — cuts tangential noise
+            if sim < AUTO_LINK_MIN_SIM:
                 continue
             pair = (kw, candidate_kw)
             rev_pair = (candidate_kw, kw)
@@ -65,7 +81,7 @@ def _auto_link(new_kw: list[str], turn: int, graph=None) -> list[Link]:
                    (lk.source == candidate_kw and lk.target == kw)
                    for lk in g.links):
                 continue
-            weight = "strong" if sim > 0.65 else "medium" if sim > 0.45 else "tangential"
+            weight = "strong" if sim > AUTO_LINK_STRONG_SIM else "medium" if sim > AUTO_LINK_MEDIUM_SIM else "tangential"
             links.append(Link(
                 source=kw, target=candidate_kw,
                 link_type="analogy",
@@ -123,18 +139,18 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
     # NOTE (future, "Option B"): make spreading_activation the PRIMARY generator —
     # the highest-activation non-obvious node IS the stimulus, with dormant/leap as
     # emergent properties — a bolder reshape kept as a maybe, to revisit on real data.
-    if s.flash_enabled and turn > 3:
+    if s.flash_enabled and turn > FLASH_MIN_TURN:
         active_kws = set(extraction.keywords)
         act_map = dict(g.spreading_activation(list(active_kws), k=2))
         max_act = max(act_map.values(), default=1.0) or 1.0
         candidates: list[tuple[float, str]] = []   # (score ~0..1, text)
 
         # 1. Dormant pulse: salient node silent for ≥ threshold, close to the query
-        sleep_threshold = max(s.TANGENTIAL_EXPIRY_TURNS, 4)
+        sleep_threshold = max(s.TANGENTIAL_EXPIRY_TURNS, DORMANT_MIN_SLEEP)
         dormant = [
             nd for nd in g.nodes
             if (turn - nd.turn) >= sleep_threshold
-            and nd.salience >= 2
+            and nd.salience >= DORMANT_MIN_SALIENCE
             and nd.keyword not in active_kws
         ]
         if dormant:
@@ -145,7 +161,7 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
                 sims = [(nd.keyword, 0.5) for nd in sorted(dormant, key=lambda n: -n.salience)]
             dormant_set = {nd.keyword for nd in dormant}
             for kw, sim in sims:
-                if kw in dormant_set and sim > 0.38:
+                if kw in dormant_set and sim > DORMANT_MIN_SIM:
                     nd = g.get_node(kw)
                     dormant_since = turn - nd.turn if nd else "?"
                     score = max(act_map.get(kw, 0.0) / max_act, sim)
@@ -163,7 +179,7 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
                     continue
                 cross = s._search_embeddings(extraction.keywords, top_n=2, graph=other_g)
                 for kw, sim in cross:
-                    if sim > 0.48 and kw not in active_kws:
+                    if sim > CROSS_DOMAIN_MIN_SIM and kw not in active_kws:
                         nd = other_g.get_node(kw)
                         dom = nd.domain if nd else other_ctx
                         candidates.append((sim,
@@ -204,10 +220,41 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
         if leap:
             candidates.append(leap)
 
+        # 4. Memory recall: surface archived graveyard nodes (L3 long-term memory)
+        #    These are nodes that were consolidated/dropped but remain semantically
+        #    close to the current query — "I knew this but wasn't thinking about it".
+        try:
+            _path = s._g._db_path(s._g.active)  # type: ignore[attr-defined]
+            _ctx  = s._g.active  # type: ignore[attr-defined]
+            if _path:
+                graveyard = g.load_graveyard(_path, _ctx)
+                if graveyard:
+                    # Direct cosine similarity: query embedding vs graveyard keywords
+                    # Skip salience=0 ("forgotten" L4 nodes — only recall tool can revive)
+                    q_vec = s._get_embedding(" ".join(extraction.keywords))
+                    for entry in graveyard[:15]:
+                        if entry.get("salience", 0) <= 0:
+                            continue
+                        kw = entry["keyword"]
+                        if kw in active_kws:
+                            continue
+                        kw_vec = s._get_embedding(kw)
+                        # cosine similarity via dot product (vectors are normalized)
+                        sim = sum(a * b for a, b in zip(q_vec, kw_vec))
+                        if sim > MEMORY_RECALL_MIN_SIM:
+                            reason = entry.get("reason", "archived")
+                            turns_ago = turn - entry.get("turn", turn)
+                            candidates.append((sim * 0.9,  # slight penalty vs active
+                                f"💡 Memory recall: '{kw}' (sim={sim:.2f}, "
+                                f"archived {turns_ago}t ago, {reason})"))
+                            break  # one recall is enough
+        except Exception:
+            pass  # graveyard is best-effort, never block the main stimulus
+
         if candidates:
             candidates.sort(key=lambda x: -x[0])
             parts.append("\nFlash semantici:")
-            for _score, fl in candidates[:2]:   # top-2 by activation (E2.4)
+            for _score, fl in candidates[:MAX_FLASH_CANDIDATES]:   # top-2 by activation (E2.4)
                 parts.append(f"  {fl}")
 
     return "\n".join(parts) if parts else ""

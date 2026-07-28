@@ -12,7 +12,7 @@ import tempfile
 import os
 
 # ── Mock heavy deps before any neuron import (shared with test_fivefix.py) ──
-from tests._mockdeps import install_mock_deps
+from tests._mockdeps import install_mock_deps, unpoison_turso
 install_mock_deps()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -32,6 +32,7 @@ from neuron.server import (
     validate_turn_input,
     _build_context_window, ExtractionResult,
 )
+unpoison_turso()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

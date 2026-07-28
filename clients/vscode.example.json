@@ -2,7 +2,7 @@
   "_comment": "VS Code (GitHub Copilot) — merge into .vscode/settings.json or user settings",
   "_path": ".vscode/settings.json",
   "github.copilot.mcpServers": {
-    "neuron5": {
+    "neuron": {
       "command": "python.exe",
       "args": ["-m", "neuron"]
     }
@@ -10,7 +10,7 @@
   "_comment_global": "Or for user-level (Ctrl+Shift+P → 'Open User Settings JSON'):",
   "mcp": {
     "servers": {
-      "neuron5": {
+      "neuron": {
         "type": "stdio",
         "command": "python.exe",
         "args": ["-m", "neuron"]

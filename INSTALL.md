@@ -51,19 +51,24 @@ sh install.sh          # macOS / Linux
 What the unified installer does, in order:
 
 1. Verifies Python 3.10–3.14 (prefers the `py` launcher on Windows).
-2. Creates ONE shared venv (`%LOCALAPPDATA%\gray-matter\.venv` /
+2. **Mode selector** (interactive only, Enter = Full suite):
+   - **Full suite** (default) — GM + Neuron + NeuRAG
+   - **Solo Neuron** — standalone, registers directly in clients
+   - **Details** — shows what you lose without GM, then asks again
+3. Creates ONE shared venv (`%LOCALAPPDATA%\gray-matter\.venv` /
    `~/.local/share/gray-matter/.venv`).
-3. Installs Gray Matter + every tool found next to it (this repo via
+4. Installs Gray Matter + every tool found next to it (this repo via
    `GM_PEER_DIR`; Neuron/NeuRAG siblings in a full-suite checkout). `pyturso`
    comes from the **pre-built wheels** in `vendor/` via `--find-links` — no
    C/Rust compiler needed.
-4. Runs `gray-matter install`: registers ONLY the gateway in your MCP clients
+5. Runs `gray-matter install`: registers ONLY the gateway in your MCP clients
    (`.bak` backup next to each config), deploys session hooks/plugins, writes
    the install manifest.
-5. Creates the **Gray Matter GUI** desktop shortcut and opens the control
+6. Creates the **Gray Matter GUI** desktop shortcut and opens the control
    center, where you manage tools, registration, tests and maintenance.
 
-Opt-outs: `GM_NO_NEURON=1` / `GM_NO_NEURAG=1` (env vars) skip a peer.
+Opt-outs: `--no-gm` or `GM_OPTIN=0` skip the mode selector and install
+standalone. `GM_NO_NEURON=1` / `GM_NO_NEURAG=1` skip a peer.
 
 > **Why a vendored pyturso wheel?** PyPI ships `pyturso` wheels for macOS and
 > Linux but **not** for Windows (`win_amd64`). Without the vendored wheel, a

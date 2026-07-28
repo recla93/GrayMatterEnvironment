@@ -3,7 +3,7 @@
   "_path_windows": "%APPDATA%\\Zed\\settings.json",
   "_path_macos": "~/.config/zed/settings.json",
   "context_servers": {
-    "neuron5": {
+    "neuron": {
       "command": "python.exe",
       "args": ["-m", "neuron"]
     }

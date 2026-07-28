@@ -77,34 +77,34 @@ _OLD_SLUG = "neuron5"
 
 
 def migrate_graphs(dry_run: bool = False) -> dict:
-    """Migrate graph data from the old ``neuron5`` slug to the current ``neuron`` slug.
+    """Move graph files from the old ``neuron5`` slug to the current ``neuron`` one.
 
-    Called automatically on first startup after upgrade, or manually via CLI.
-    Idempotent: safe to run multiple times.
+    Per FILE, not per directory. The original moved the whole folder with a single
+    ``shutil.move`` and bailed out with "New path already has data" the moment the
+    new location held anything at all — which it does as soon as Neuron has run
+    once under the new slug. On a real machine that meant five graphs (default,
+    architecture, backend, general, gray-matter) stranded in ``neuron5`` with a
+    migration that would refuse forever, and no way out short of moving files by
+    hand. Moving file by file migrates everything that does not collide.
 
-    Returns a dict with:
-      - migrated: True if migration happened
-      - old_path: path of the old data
-      - new_path: path of the new data
-      - error: error message if migration failed
+    A name present on BOTH sides is left untouched and reported in ``collisions``:
+    two graph DBs for the same context are two different memories, and merging
+    them is a decision only the user can make. Nothing is ever overwritten.
 
-    Safety:
-      - Skips if NEURON_SLUG env var is set to neuron5 (user chose old slug)
-      - Skips if old path doesn't exist
-      - Skips if new path already has data (don't overwrite)
-      - Uses shutil.move for atomic rename when possible
+    Returns ``migrated`` (list of moved names), ``collisions``, ``old_path``,
+    ``new_path``, ``error``. Idempotent.
     """
     import os
     import shutil
     from pathlib import Path
 
-    result = {"migrated": False, "old_path": "", "new_path": "", "error": ""}
+    result: dict = {"migrated": [], "collisions": [], "old_path": "",
+                    "new_path": "", "error": ""}
 
-    # If user explicitly chose neuron5, skip migration
+    # The user explicitly pinned the old slug: leave their data where they put it.
     if os.environ.get("NEURON_SLUG") == _OLD_SLUG:
         return result
 
-    # Build old and new paths
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     else:
@@ -112,41 +112,52 @@ def migrate_graphs(dry_run: bool = False) -> dict:
             os.path.expanduser("~"), ".local", "share")
 
     old_path = Path(base) / _OLD_SLUG / "graphs"
-    new_path = Path(graphs_dir())  # Uses current slug (neuron)
+    new_path = Path(graphs_dir())
+    result["old_path"], result["new_path"] = str(old_path), str(new_path)
 
-    result["old_path"] = str(old_path)
-    result["new_path"] = str(new_path)
-
-    # Skip if old path doesn't exist
-    if not old_path.exists():
-        return result
-
-    # Skip if new path already has data (don't overwrite)
-    if new_path.exists() and any(new_path.iterdir()):
-        result["error"] = f"New path already has data: {new_path}"
-        return result
-
-    if dry_run:
-        result["migrated"] = True
+    if not old_path.exists() or old_path.resolve() == new_path.resolve():
         return result
 
     try:
-        # Create parent directory if needed
-        new_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Move old data to new location
-        shutil.move(str(old_path), str(new_path))
-
-        # Try to remove old parent directory if empty
-        try:
-            old_parent = old_path.parent
-            if old_parent.exists() and not any(old_parent.iterdir()):
-                old_parent.rmdir()
-        except OSError:
-            pass  # Not empty or other error, ignore
-
-        result["migrated"] = True
-    except Exception as exc:  # noqa: BLE001
+        entries = sorted(p for p in old_path.iterdir() if p.is_file())
+    except OSError as exc:
         result["error"] = str(exc)
+        return result
+
+    for src_file in entries:
+        dest = new_path / src_file.name
+        if dest.exists():
+            result["collisions"].append(src_file.name)
+            continue
+        if dry_run:
+            result["migrated"].append(src_file.name)
+            continue
+        try:
+            new_path.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src_file), str(dest))
+            result["migrated"].append(src_file.name)
+        except OSError as exc:
+            result["error"] = f"{src_file.name}: {exc}"
+            return result          # stop at the first failure, report what moved
+
+    # Drop the old tree only when nothing of the user's is left behind.
+    # `paths.json` is the slug's self-registration (which source dir Neuron was
+    # installed from), not user data: once the graphs have moved and the CURRENT
+    # slug has its own, the old copy is a fossil that keeps the retired
+    # `neuron5` folder alive — and the legacy scan keeps reporting it forever.
+    if not dry_run and not result["collisions"]:
+        stale = old_path.parent / "paths.json"
+        if stale.is_file() and (Path(graphs_dir()).parent / "paths.json").is_file():
+            try:
+                stale.unlink()
+                result["migrated"].append("paths.json (fossile dello slug)")
+            except OSError:
+                pass
+        for d in (old_path, old_path.parent):
+            try:
+                if d.exists() and not any(d.iterdir()):
+                    d.rmdir()
+            except OSError:
+                pass
 
     return result

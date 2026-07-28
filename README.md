@@ -19,7 +19,7 @@ you discussed yesterday, connects ideas across topics, and gets smarter the more
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-6.0.0-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-6.1.2-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -100,27 +100,48 @@ literally matches.
 
 ## ⚡ Quickstart
 
-### 🪟 Windows
+### Option A — One-click installer (recommended)
 
-Double-click **`install.cmd`** (or run `.\install.ps1` from a terminal).
-No Python? The installer bootstraps it via winget (official python.org build).
+The installer sets up **Gray Matter + Neuron** in a single venv, registers the
+gateway in your MCP clients, and creates a Desktop shortcut to the control center.
 
-A thin launcher for the **unified Gray Matter installer**: installs GM + Neuron
-into one venv (pre-built `pyturso` wheel from `vendor/`, no C/Rust compiler),
-registers the gateway in your MCP clients, deploys session hooks and creates the
-**Gray Matter GUI** shortcut on the Desktop — the single front door for setup,
-registration, maintenance and logs. No terminal needed for normal use.
+| Platform | Action |
+|---|---|
+| **Windows** | Double-click **`install.cmd`** (or `.\install.ps1` from a terminal) |
+| **macOS** | Double-click **`install.command`** (or `sh install.sh` from a terminal) |
+| **Linux** | `sh install.sh` from a terminal |
 
-### 🍎 macOS / 🐧 Linux
+No Python? The installer bootstraps it (winget on Windows, brew/apt on Linux/macOS).
+Pre-built `pyturso` wheels are bundled — no C/Rust compiler needed.
 
-Double-click **`install.command`** (or `sh install.sh` from a terminal).
-No Python? The installer offers brew/apt/dnf.
+### Option B — pip (source checkout)
 
-Same unified installer as Windows (thin launcher → `gray_matter/install.sh`):
-one venv, gateway registered, hooks deployed, **Gray Matter GUI** shortcut on
-the Desktop. `pyturso` ships prebuilt wheels on PyPI for macOS/Linux.
+```bash
+git clone https://github.com/recla93/Neuron.git
+cd Neuron
+pip install -e ".[dev]"        # editable install with test deps
+pip install "neuron[cloud]"    # optional: Turso Cloud support
+```
 
-From a source checkout: `pip install ".[dev]"`.
+### Option C — Standalone MCP (no gateway)
+
+If you prefer Neuron without Gray Matter:
+
+```json
+// ~/.config/opencode/opencode.json  (or your client's MCP config)
+{
+  "mcp": {
+    "neuron": { "command": ["python", "-m", "neuron"], "type": "local" }
+  }
+}
+```
+
+Or register across all clients at once:
+
+```bash
+neuron register                # registers in Claude Desktop, Cursor, VS Code, etc.
+neuron doctor                  # verify registrations, fix stale entries
+```
 
 📖 Full instructions, the manual path and troubleshooting live in **[INSTALL.md](INSTALL.md)**.
 
@@ -224,12 +245,60 @@ that animates your memory growing turn by turn · and an Obsidian-style 🎨 app
 
 ---
 
+## 🏗️ Architecture
+
+```
+neuron/
+├── src/neuron/
+│   ├── server.py        # MCP server: ~22 tools, handshakes, skill delivery
+│   ├── models.py        # Dataclasses: Node, Link, Graph
+│   ├── db.py            # 3-tier DB: Turso Cloud → pyturso → sqlite3
+│   ├── registry.py      # Multi-context graph registry (java/spring, python/django)
+│   ├── extraction.py    # SemanticExtractor: keyword/topic/domain (0 LLM tokens)
+│   ├── search.py        # Hybrid vector search (cosine + salience + recency)
+│   ├── stimulus.py      # Spreading activation, flash, auto-link
+│   ├── curation.py      # Quality gate: drops verbs, paths, phrases at write time
+│   ├── funnel.py        # Skill delivery: signpost + packaged skill files
+│   ├── clients.py       # MCP client registration (7 clients, TOML/JSON/JSONC)
+│   ├── connect.py       # Turso Cloud onboarding (connect → probe → save)
+│   ├── config.py        # Centralized paths & slug (SSOT, no circular imports)
+│   ├── console.py       # Dev Console: one-shot or watch mode graph snapshot
+│   └── skills/          # Packaged skill files (playbook, curated memory)
+├── tests/               # Test suite (unit tests, mocked — no network)
+└── knowledge/           # Seed knowledge DB (base_knowledge.db)
+```
+
+**Key design decisions:**
+
+- **Multi-context graph**: contexts form a tree (`java` → `java/spring`) with inheritance.
+- **Curation gate**: bad keywords (verbs, paths, phrases) are dropped or remapped at write time.
+- **3-tier DB**: Turso Cloud → pyturso (native vector SQL) → sqlite3 (stdlib fallback).
+- **0-token extraction**: keyword/topic/domain extraction via regex + heuristics, no LLM calls.
+- **Spreading activation**: BFS on the graph to propagate importance from seed nodes.
+
+---
+
 ## 🛠️ Development
 
 ```bash
 pip install -e ".[dev]"
 python -m pytest tests/ -v        # unit tests (fastembed/mcp/turso mocked — no network)
 python -m build                   # wheel + sdist (CI verifies this on every push)
+```
+
+**Self-checks** (no install needed):
+
+```bash
+python -c "from neuron.embedder import demo; demo()"; echo "OK"   # embedder routing
+python scripts/neuron_console.py                                    # graph health snapshot
+python scripts/neuron_console.py --watch                           # live monitoring
+```
+
+**Environment tuning** (for dev/experiments):
+
+```bash
+NS_GRAPHS_DIR=/tmp/neuron-test python -m neuron   # isolated store
+NEURON_SLUG=neuron5 python -m neuron               # side-by-side with another install
 ```
 
 Architecture, the DB layer, per-client config and cloud/bridge internals are documented in
@@ -247,7 +316,9 @@ Architecture, the DB layer, per-client config and cloud/bridge internals are doc
 | **[docs/DEVELOPER.md](docs/DEVELOPER.md)** | Architecture, memory dynamics, DB layer, per-client config |
 | **[docs/TEAM.md](docs/TEAM.md)** | Running a shared team brain on Turso Cloud |
 | **[docs/BRIDGE.md](docs/BRIDGE.md)** | Exposing Neuron over HTTP for ChatGPT / remote connectors |
+| **[docs/CORE_AUDIT.md](docs/CORE_AUDIT.md)** | Core audit: module boundaries, hot paths, what the graph costs |
 | **[CHANGELOG.md](CHANGELOG.md)** | The full v5 "Synapse" story, release by release |
+| **[DOCTOOLUPDATE.md](DOCTOOLUPDATE.md)** | Complete tool documentation with real code examples |
 
 ---
 

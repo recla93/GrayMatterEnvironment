@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import sys
 
-from tests._mockdeps import install_mock_deps
+from tests._mockdeps import install_mock_deps, unpoison_turso
 install_mock_deps()  # sqlite tier (turso=None), fake fastembed/mcp
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -23,6 +23,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from neuron import db as _db            # noqa: E402
 from neuron.registry import GraphRegistry  # noqa: E402
 from neuron.models import Node          # noqa: E402
+unpoison_turso()  # neuron.db's own LOCAL_TURSO_ENGINE flag is already baked in
+                   # above (that's this file's whole point) — only the global
+                   # sys.modules sentinel needs to stop leaking into files
+                   # collected after this one in the same pytest session.
 
 
 def test_store_new_context_missing_dir(tmp_path):

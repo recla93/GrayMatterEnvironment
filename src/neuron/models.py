@@ -22,6 +22,8 @@ __all__ = [
     "Node", "Link", "Graph", "compute_health",
     "register_embed_fn", "pack_vector", "unpack_vector",
     "WEIGHT_ORDER", "VECTOR_DIM", "MAX_NODES", "TANGENTIAL_EXPIRY_TURNS",
+    "CONSOLIDATE_SIM_THRESHOLD", "ORPHAN_SALIENCE", "ORPHAN_INACTIVE_TURNS",
+    "MAX_REFERENCES",
 ]
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,14 @@ VECTOR_DIM               = int(os.environ.get("NS_EMBED_DIM", "384"))
 # store: vettori di modelli diversi non sono confrontabili — vedi load_sqlite).
 EMBED_MODEL              = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
 MAX_NODES                = _env_int("NEURON_MAX_NODES", 500)   # evict lowest-salience nodes beyond this cap
+# Consolidation (E1.2): merge near-duplicate nodes
+CONSOLIDATE_SIM_THRESHOLD = 0.85   # cosine similarity above which nodes merge
+ORPHAN_SALIENCE          = 2       # nodes below this salience are droppable
+ORPHAN_INACTIVE_TURNS    = 10      # inactive turns before an orphan is pruned
+MAX_REFERENCES           = 20      # cap per node on loaded references
+# L1 session cache — working memory
+SESSION_CACHE_TURNS      = _env_int("NEURON_SESSION_CACHE_TURNS", 10)  # TTL in turns
+SESSION_CACHE_MAX        = _env_int("NEURON_SESSION_CACHE_MAX", 8)     # max entries
 
 # ---------------------------------------------------------------------------
 # Embedding callback — registered by server.py at startup (lazy, avoids circ.)
@@ -287,6 +297,10 @@ class Graph:
     # Archived nodes (merged near-duplicates / dropped orphans) — recoverable,
     # flushed to the _graveyard table on save, then cleared. (E1.2/E1.3)
     _graveyard: list = field(default_factory=list)
+    # L1: Session cache — "working memory" of important keywords from this session.
+    # Persisted in meta table, survives restarts. Entries expire after
+    # SESSION_CACHE_TURNS turns without being mentioned/confirmed.
+    _session_cache: dict = field(default_factory=dict)   # {keyword: {"turn": int, "score": float}}
     # Save mode for the next write:
     #   _needs_full_write  — upsert EVERY in-memory row (not just the dirty delta),
     #     additively (no deletes). Needed when the store may be missing rows we
@@ -301,7 +315,13 @@ class Graph:
     # Schema DDL (CREATE/ALTER/index migrations) only needs to run once per
     # process per store — gate it so per-turn saves don't re-probe the schema
     # (important on remote Turso where every statement is an HTTP round-trip).
-    _schema_ready:  bool = field(default=False)
+    # Path whose schema this graph has already created, "" if none. It used to be
+    # a bool, which could not tell WHICH file was ready: a graph warm-started
+    # from the seed carried _schema_ready=True into a brand-new context, its
+    # first save skipped schema creation, and `SELECT ... FROM meta` blew up with
+    # "no such table: meta" on a 0-byte file. load_sqlite already guards the same
+    # hazard on the read path (T64); the write path did not.
+    _schema_ready:  str = field(default="")
     # Per-node salience snapshot at the last load/save. The incremental save
     # persists ``salience - baseline`` as an atomic relative delta (T11 Fase 2b)
     # so concurrent writers on the same node don't lose each other's increments.
@@ -395,6 +415,44 @@ class Graph:
         self._removed_links.add(key)
         self._dirty_links.discard(key)
         self._dirty = True
+
+    # ------------------------------------------------------------------
+    # L1: Session cache — working memory
+    # ------------------------------------------------------------------
+
+    def cache_add(self, keyword: str, score: float = 1.0) -> None:
+        """Add or refresh a keyword in the session cache."""
+        kw = self._norm(keyword)
+        self._session_cache[kw] = {"turn": self.turn_count, "score": max(0.0, min(1.0, score))}
+        # Evict oldest if over cap
+        if len(self._session_cache) > SESSION_CACHE_MAX:
+            oldest = min(self._session_cache, key=lambda k: self._session_cache[k]["turn"])
+            del self._session_cache[oldest]
+        self._dirty = True
+
+    def cache_remove(self, keyword: str) -> None:
+        """Remove a keyword from the session cache."""
+        kw = self._norm(keyword)
+        self._session_cache.pop(kw, None)
+        self._dirty = True
+
+    def cache_expire(self) -> list[str]:
+        """Remove entries older than SESSION_CACHE_TURNS. Returns expired keywords."""
+        expired = []
+        for kw, entry in list(self._session_cache.items()):
+            if (self.turn_count - entry["turn"]) > SESSION_CACHE_TURNS:
+                expired.append(kw)
+                del self._session_cache[kw]
+        if expired:
+            self._dirty = True
+        return expired
+
+    def cache_get_all(self) -> list[tuple[str, float, int]]:
+        """Return all cache entries as (keyword, score, turns_since_add)."""
+        return [
+            (kw, entry["score"], self.turn_count - entry["turn"])
+            for kw, entry in self._session_cache.items()
+        ]
 
     def _reset_tracking(self) -> None:
         """Clear all pending state → the next save is a plain incremental delta."""
@@ -971,12 +1029,12 @@ class Graph:
     # Consolidation (E1.2) — merge near-duplicates, archive to _graveyard
     # ------------------------------------------------------------------
 
-    def consolidate(self, sim_threshold: float = 0.85,
+    def consolidate(self, sim_threshold: float = CONSOLIDATE_SIM_THRESHOLD,
                     protect_salience: "int | None" = None,
                     turn: "int | None" = None,
                     drop_orphans: bool = False,
-                    orphan_salience: int = 2,
-                    orphan_inactive: int = 10) -> list[dict]:
+                    orphan_salience: int = ORPHAN_SALIENCE,
+                    orphan_inactive: int = ORPHAN_INACTIVE_TURNS) -> list[dict]:
         """Merge near-duplicate nodes (cosine > sim_threshold) into a survivor.
 
         Survivor = shorter keyword (tie -> higher salience). Salience is summed,
@@ -1089,6 +1147,69 @@ class Graph:
         self.links = [lk for lk in self.links if lk.source not in drop and lk.target not in drop]
         self.nodes = [nd for nd in self.nodes if nd.keyword not in drop]
         self._rebuild_node_map()
+
+    # ------------------------------------------------------------------
+    # L3: Graveyard — long-term memory (reactivation + decay)
+    # ------------------------------------------------------------------
+
+    def load_graveyard(self, path: str, context: str) -> list[dict]:
+        """Load graveyard entries from DB for this context."""
+        conn = _db.connect(path)
+        try:
+            rows = conn.execute(
+                "SELECT keyword, salience, domain, reason, turn "
+                "FROM _graveyard WHERE context=? ORDER BY salience DESC",
+                (context,)).fetchall()
+        except Exception:
+            return []
+        finally:
+            conn.close()
+        return [{"keyword": r[0], "salience": r[1], "domain": r[2],
+                 "reason": r[3], "turn": r[4]} for r in rows]
+
+    def reactivate_from_graveyard(self, keyword: str, path: str, context: str,
+                                  base_salience: int = 3) -> "Node | None":
+        """Re-add a graveyard node to the active graph with base salience.
+        Returns the new Node, or None if keyword not found in graveyard."""
+        entries = self.load_graveyard(path, context)
+        entry = next((e for e in entries if e["keyword"] == keyword), None)
+        if not entry:
+            return None
+        # Check if already in active graph
+        existing = self.get_node(keyword)
+        if existing:
+            existing.salience = max(existing.salience, base_salience)
+            self.mark_node_dirty(keyword)
+            return existing
+        # Create new node from graveyard data
+        from neuron.models import Node as _Node
+        nd = _Node(keyword=keyword, turn=self.turn_count,
+                   domain=entry.get("domain", "general"),
+                   topic="", sentiment="neutral", salience=base_salience)
+        self.add_node(nd)
+        # Remove from graveyard
+        conn = _db.connect(path)
+        try:
+            conn.execute("DELETE FROM _graveyard WHERE context=? AND keyword=?",
+                         (context, keyword))
+            conn.commit()
+        finally:
+            conn.close()
+        return nd
+
+    def decay_graveyard(self, path: str, context: str, amount: int = 1) -> int:
+        """Decay salience of all graveyard entries by `amount`. Returns count of entries pruned (salience hit 0)."""
+        conn = _db.connect(path)
+        try:
+            conn.execute("UPDATE _graveyard SET salience = MAX(0, salience - ?) "
+                         "WHERE context=?", (amount, context))
+            pruned = conn.execute(
+                "DELETE FROM _graveyard WHERE context=? AND salience <= 0",
+                (context,)).rowcount
+            conn.commit()
+            return pruned
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # Per-user session-state sidecar (T11 P1)
@@ -1231,17 +1352,37 @@ class Graph:
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
-            if not self._schema_ready:
+            # Keyed by path, not a bare flag — see the field's note. Still once
+            # per file per process: _create_store_schema is CREATE ... IF NOT
+            # EXISTS throughout, so a repeat is cheap and safe.
+            if self._schema_ready != path:
                 self._create_store_schema(conn, context)
-                self._schema_ready = True
+                self._schema_ready = path
 
             # P5 — embed-model write guard. Vectors from different embedding models
             # live in different spaces, so on a SHARED store they must never mix. If
             # the store already declares a different model, keep writing the
             # model-agnostic nodes/links but SKIP vectors, and don't overwrite the
             # store's model declaration.
-            _stored_model_row = conn.execute(
-                "SELECT value FROM meta WHERE key='embed_model'").fetchone()
+            try:
+                _stored_model_row = conn.execute(
+                    "SELECT value FROM meta WHERE key='embed_model'").fetchone()
+            except Exception as e:  # noqa: BLE001 — narrowed below
+                # Self-heal: `_schema_ready` says this path already has the
+                # schema, but the file disagrees (observed live: a 0-byte
+                # graph_<ctx>.db with an equally-empty -wal, `_schema_ready`
+                # still pointing at this exact path from an earlier save that
+                # never actually landed on disk — a worker crash/restart or a
+                # concurrent writer on the same file mid-creation, same bug
+                # class as test_schema_ready_per_path.py, different trigger).
+                # Recreating is safe (CREATE ... IF NOT EXISTS throughout);
+                # anything else re-raises rather than masking a real failure.
+                if "no such table" not in str(e).lower():
+                    raise
+                self._create_store_schema(conn, context)
+                self._schema_ready = path
+                _stored_model_row = conn.execute(
+                    "SELECT value FROM meta WHERE key='embed_model'").fetchone()
             _stored_model = _stored_model_row[0] if _stored_model_row else None
             write_vectors = (not _stored_model) or (_stored_model == EMBED_MODEL)
             if not write_vectors:
@@ -1285,6 +1426,7 @@ class Graph:
                 ("last_active_timestamp", str(time.time())),           # E3.3
                 ("staged_stimulus",       self.staged_stimulus or ""),  # E3.4
                 ("staged_ts",             str(self._staged_ts or "")),
+                ("session_cache",         json.dumps(self._session_cache)),  # L1
             ]
             if _db.REMOTE_TURSO:
                 self._save_session_sidecar(path, context, dict(session_meta))
@@ -1510,6 +1652,11 @@ class Graph:
             self._loaded_ts      = _as_float(smeta.get("last_active_timestamp"))
             self.staged_stimulus = smeta.get("staged_stimulus") or None
             self._staged_ts      = _as_float(smeta.get("staged_ts"))
+            # L1: Session cache (working memory)
+            try:
+                self._session_cache = json.loads(smeta.get("session_cache", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                self._session_cache = {}
 
             # Guard modello<->store: i vettori salvati con un modello diverso vivono
             # in uno spazio diverso e NON sono confrontabili col modello attivo. Se
@@ -1583,7 +1730,7 @@ class Graph:
                     merged = list(nd.references or [])
                     merged += [r for r in extra
                                if (r["path"], r["project_id"], r["by"]) not in seen]
-                    nd.references = merged[:20]
+                    nd.references = merged[:MAX_REFERENCES]
 
             # Load vectors (scoped by context when available)
             vec_map: dict[str, list[float]] = {}

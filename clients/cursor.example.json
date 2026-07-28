@@ -3,7 +3,7 @@
   "_path_windows": "%USERPROFILE%\\.cursor\\mcp.json",
   "_path_macos": "~/.cursor/mcp.json",
   "mcpServers": {
-    "neuron5": {
+    "neuron": {
       "command": "python.exe",
       "args": ["-m", "neuron"]
     }

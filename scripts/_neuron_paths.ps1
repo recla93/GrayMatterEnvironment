@@ -10,7 +10,8 @@
   so the summary looked in the wrong place and uninstall orphaned all user data.
   Keep this resolution in lockstep with _default_graphs_dir().
 
-  Identity/slug: v5 "Synapse" is "neuron5"; the classic v4 line is "neuron".
+  Identity/slug: "neuron". The codename (v5 "Synapse", ...) lives in the GUI,
+GitHub and docs only — never in a path or a server key.
   Override with $env:NEURON_SLUG. Store dir can be overridden with $env:NS_GRAPHS_DIR
   (same env the server honors).
 #>
@@ -180,7 +181,7 @@ function Get-ClaudeDesktopConfigPath {
 
 function Get-NeuronPaths {
     param([string]$Slug)
-    if (-not $Slug) { if ($env:NEURON_SLUG) { $Slug = $env:NEURON_SLUG } else { $Slug = 'neuron5' } }
+    if (-not $Slug) { if ($env:NEURON_SLUG) { $Slug = $env:NEURON_SLUG } else { $Slug = 'neuron' } }
     $local = Get-LocalAppData
 
     if ($env:NS_GRAPHS_DIR) { $store = $env:NS_GRAPHS_DIR }

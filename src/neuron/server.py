@@ -12,7 +12,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import weakref
 from typing import Any
 
@@ -25,8 +24,6 @@ __all__ = [
     "CONSOLIDATE_EVERY", "TOPIC_SHIFT_THRESHOLD", "STIMULUS_MIN_ACTIVATION",
     "STIMULUS_MAX_CHARS", "NS_EMBED_MODEL",
 ]
-
-import sqlite3
 
 from fastembed import TextEmbedding
 
@@ -48,7 +45,7 @@ from mcp.server.lowlevel import NotificationOptions
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent, ServerCapabilities, ToolsCapability, Resource
+from mcp.types import Tool, TextContent, Resource
 
 # ---------------------------------------------------------------------------
 # Imports from models (breaks circular import with registry.py)
@@ -59,6 +56,7 @@ from neuron.models import (
     Weight, LinkType, Domain, Sentiment, Intent,
     WEIGHT_ORDER, TANGENTIAL_EXPIRY_TURNS,
     SALIENCE_DECAY_THRESHOLD, SALIENCE_DECAY_AMOUNT,
+    CONSOLIDATE_SIM_THRESHOLD,
     VECTOR_DIM, pack_vector, unpack_vector, register_embed_fn,
 )
 
@@ -71,7 +69,6 @@ INTENT_SALIENCE = {"exploration": 3, "task": 3, "clarification": 2, "question": 
 # Path/slug resolution lives in neuron.config (single source of truth, P0 #3).
 # Thin module-level aliases keep the historical names importable/monkeypatchable.
 from neuron.config import resolve_slug as _resolve_slug
-from neuron.config import default_graphs_dir as _default_graphs_dir
 from neuron import config as _config
 
 
@@ -83,13 +80,36 @@ _g: "GraphRegistry" = None  # initialized after GraphRegistry import
 # neuron.extraction (T57) and are re-imported above.
 RATIONALE_MAX_LENGTH = 200
 
+# Validation limits (store_turn input bounds)
+MAX_KEYWORDS_PER_TURN  = 8
+MAX_ENTITIES_PER_TURN  = 15
+MAX_TAGS_PER_TURN      = 10
+MAX_REFERENCES_PER_TURN = 20
+
+# Approximate chars per token for budget calculations
+CHARS_PER_TOKEN = 4
+
+# Link type abbreviations for compact output
+LINK_TYPE_ABBR = {
+    "deepening":    "+d",
+    "analogy":      "~",
+    "evolution":    "->",
+    "contrast":     "!",
+    "cause-effect": "=>",
+    "instance-of":  "is",
+}
+RATIONALE_MAX_LEN = 40  # truncate rationale in full format
+
+# Semantic dedup: cosine similarity threshold to treat new keyword as existing
+SEMANTIC_DEDUP_THRESHOLD = 0.90
+
 
 
 def validate_turn_input(keywords: list[str], topic: str, links: list[dict],
                         entities: list[str] | None = None,
                         tags: list[str] | None = None,
                         references: list[dict] | None = None) -> str | None:
-    if not keywords or len(keywords) > 8:
+    if not keywords or len(keywords) > MAX_KEYWORDS_PER_TURN:
         return "keywords: da 1 a 8"
     if not topic or len(topic) > TOPIC_MAX_LENGTH:
         return f"topic: max {TOPIC_MAX_LENGTH} caratteri"
@@ -98,11 +118,11 @@ def validate_turn_input(keywords: list[str], topic: str, links: list[dict],
             return f"keywords[{i}]: max {KEYWORD_MAX_LENGTH} caratteri"
         if not KEYWORD_PATTERN.match(kw):
             return f"keywords[{i}]: caratteri non consentiti (usa lettere, numeri, spazi, -_.:+)"
-    if entities and len(entities) > 15:
+    if entities and len(entities) > MAX_ENTITIES_PER_TURN:
         return "entities: max 15"
-    if tags and len(tags) > 10:
+    if tags and len(tags) > MAX_TAGS_PER_TURN:
         return "tags: max 10"
-    if references and len(references) > 20:
+    if references and len(references) > MAX_REFERENCES_PER_TURN:
         return "references: max 20"
     for j, ld in enumerate(links):
         src, tgt = ld.get("source", ""), ld.get("target", "")
@@ -461,9 +481,9 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "topic": {"type": "string", "description": "Topic of the turn (3-5 words)"},
                     "keywords": {"type": "array", "items": {"type": "string"}, "description": "Abstract keywords (3-5)"},
-                    "domain": {"type": "string", "description": "Free-form topic label. Common values: AI, backend, frontend, gaming, architecture, general — but ANY label works (e.g. biology, finance, music, devops). Use 'general' if unsure."},
-                    "intent": {"type": "string", "enum": ["question", "task", "exploration", "clarification", "feedback"]},
-                    "sentiment": {"type": "string", "enum": ["neutral", "positive", "critical", "urgent"]},
+                    "domain": {"type": "string", "description": "Optional, defaults to 'general'. Free-form topic label. Common values: AI, backend, frontend, gaming, architecture, general — but ANY label works (e.g. biology, finance, music, devops).", "default": "general"},
+                    "intent": {"type": "string", "enum": ["question", "task", "exploration", "clarification", "feedback"], "description": "Optional, defaults to 'exploration'.", "default": "exploration"},
+                    "sentiment": {"type": "string", "enum": ["neutral", "positive", "critical", "urgent"], "description": "Optional, defaults to 'neutral'.", "default": "neutral"},
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                     "episode": {
                         "type": "string",
@@ -509,7 +529,12 @@ async def list_tools() -> list[Tool]:
                         "description": "Links between current keywords and previous keywords",
                     },
                 },
-                "required": ["topic", "keywords", "domain", "intent", "sentiment"],
+                # Solo topic e keywords sono davvero indispensabili: sono i due
+                # che la guidance iniettata in ogni sessione chiede sempre.
+                # domain/intent/sentiment restano nello schema (un modello che
+                # li sa li manda, e il grafo ne guadagna) ma hanno un default
+                # lato server — vedi _tool_store_turn.
+                "required": ["topic", "keywords"],
             },
         ),
         Tool(
@@ -582,6 +607,61 @@ async def list_tools() -> list[Tool]:
                     "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
                 },
                 "required": ["keywords"],
+            },
+        ),
+        Tool(
+            name="dismiss",
+            description=(
+                "Negative feedback signal: suppress associations that were misleading, "
+                "irrelevant, or noisy. Lowers salience and trust so the node surfaces "
+                "less in future retrieval. Use when retrieved context was wrong or "
+                "unhelpful — this teaches the graph what NOT to surface."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Keywords to suppress (nodes that were misleading/noisy)",
+                    },
+                    "penalty": {
+                        "type": "integer",
+                        "description": "Salience penalty amount (default 3, max 5). Applied as negative.",
+                        "default": 3,
+                    },
+                    "trust_penalty": {
+                        "type": "number",
+                        "description": "Trust penalty (default 0.5). Added to trust (floor 0).",
+                        "default": 0.5,
+                    },
+                    "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
+                },
+                "required": ["keywords"],
+            },
+        ),
+        Tool(
+            name="recall",
+            description=(
+                "Long-term memory recall: re-add an archived (graveyard) node to the active "
+                "graph. Use when a dormant/memory-recall stimulus surfaces a relevant archived "
+                "concept that you want to bring back into working memory."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "Keyword to recall from graveyard",
+                    },
+                    "base_salience": {
+                        "type": "integer",
+                        "description": "Starting salience for recalled node (default 3)",
+                        "default": 3,
+                    },
+                    "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
+                },
+                "required": ["keyword"],
             },
         ),
         Tool(
@@ -967,6 +1047,40 @@ def _resolve_context(
                               + RANK_WEIGHTS["trust"] * (nd.trust / max_trust))
     top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
 
+    # FASE 5.6: MMR diversification at depth>=2 — avoid returning near-duplicate
+    # nodes that all point to the same concept. λ=0.7 favors relevance.
+    if depth >= 2 and len(top_nodes) > 3:
+        try:
+            from neuron.search import _get_embedding as _emb
+            MMR_LAMBDA = 0.7
+            selected: list[tuple[str, float]] = []
+            candidates = list(top_nodes)
+            # Pre-compute embeddings for all candidates
+            _node_vecs: dict[str, list[float]] = {}
+            for kw, _ in candidates[:15]:  # cap at 15 to avoid O(n²) blowup
+                _node_vecs[kw] = _emb(kw)
+            while candidates and len(selected) < 8:
+                best_idx, best_mmr = 0, -float("inf")
+                for i, (kw, score) in enumerate(candidates[:15]):
+                    if kw not in _node_vecs:
+                        continue
+                    # Max similarity to already-selected nodes
+                    max_sim = 0.0
+                    for sel_kw, _ in selected:
+                        if sel_kw in _node_vecs:
+                            vec_a, vec_b = _node_vecs[kw], _node_vecs[sel_kw]
+                            sim = sum(a * b for a, b in zip(vec_a, vec_b))
+                            if sim > max_sim:
+                                max_sim = sim
+                    mmr = MMR_LAMBDA * score - (1 - MMR_LAMBDA) * max_sim
+                    if mmr > best_mmr:
+                        best_mmr = mmr
+                        best_idx = i
+                selected.append(candidates.pop(best_idx))
+            top_nodes = selected + candidates[:max(0, 8 - len(selected))]
+        except Exception:
+            pass  # MMR is best-effort, fall back to original ranking
+
     return related_links_sorted, top_nodes, used_fallback, inherited_ctx, g
 
 
@@ -1069,8 +1183,17 @@ def _current_user() -> str:
 async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     topic = arguments["topic"]
     keywords = arguments["keywords"]
-    domain = _normalize_domain(str(arguments["domain"]))
-    intent = arguments["intent"]
+    # domain/intent/sentiment con default. La guidance che la suite inietta in
+    # OGNI sessione AI (hook Claude Code, plugin OpenCode, playbook, funnel,
+    # e la coda dello stesso pre_turn) dice `store_turn(topic, keywords,
+    # links)` — tre campi, non sei. Chiederli come obbligatori significava che
+    # un modello che segue le NOSTRE istruzioni alla lettera prendeva un
+    # KeyError sullo STEP 2 del loop principale: o il client validava lo schema
+    # e la chiamata non partiva, o passava e il turno andava perso con un
+    # traceback in faccia al modello. Il default vale più della precisione qui:
+    # un turno salvato come "general" è infinitamente meglio di un turno perso.
+    domain = _normalize_domain(str(arguments.get("domain") or "general"))
+    intent = arguments.get("intent") or "exploration"
     # T65: feed the domain-hysteresis switch from the CURATED path too —
     # unless the caller pinned an explicit context (explicit always wins).
     _ctx_switched, _pend_dom, _pend_n = False, None, 0
@@ -1091,7 +1214,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             "Validation error: no usable keywords after curation."
             + _cur.curation_note(_cur_notes)
             + "\nUse 3-5 singular concept NOUNS (entities/tech/ideas)."))]
-    sentiment = arguments["sentiment"]   # domain/intent already read above (T65)
+    sentiment = arguments.get("sentiment") or "neutral"  # domain/intent letti sopra (T65)
     entities = arguments.get("entities", [])
     tags = arguments.get("tags", [])
     references = arguments.get("references", [])
@@ -1104,6 +1227,18 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _canon = lambda e: _final_keys.get(_cur._dup_key(e)) or _existing_map.get(_cur._dup_key(e))
     _vetted_links = []
     for ld in new_links_data:
+        # `links` arriva da JSON generato da un modello: la forma sbagliata è
+        # una questione di quando, non di se. Prima un elemento non-dict
+        # (`["a","b"]` invece di `{"source":..,"target":..}`) sollevava
+        # AttributeError e faceva perdere l'INTERO turno — topic e keywords
+        # compresi — per un campo che è solo arricchimento facoltativo.
+        # Si scarta il link e si tiene il turno, come già si fa per gli
+        # endpoint che non sopravvivono alla curation.
+        if not isinstance(ld, dict):
+            _cur_notes.append(
+                f"dropped malformed link {ld!r}: expected an object with "
+                "'source' and 'target'")
+            continue
         cs, ct = _canon(ld.get("source", "")), _canon(ld.get("target", ""))
         if cs and ct and cs != ct:
             ld = dict(ld, source=cs, target=ct)
@@ -1136,10 +1271,36 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 existing.references = _project.merge_refs(existing.references, references)
             g.mark_node_dirty(existing.keyword)   # in-place change: track it
         else:
-            g.add_node(Node(keyword=kw, turn=turn, topic=topic,
-                            domain=domain, sentiment=sentiment,
-                            entities=entities, tags=tags,
-                            references=references))
+            # Semantic dedup: check if a similar multi-word keyword already exists
+            _merged = False
+            if dedup_enabled and len(kw.split()) > 1:
+                try:
+                    from neuron.search import _get_embedding as _emb
+                    new_vec = _emb(kw)
+                    for nd in g.nodes:
+                        if len(nd.keyword.split()) <= 1:
+                            continue  # skip single-word nodes (too many false positives)
+                        old_vec = _emb(nd.keyword)
+                        sim = sum(a * b for a, b in zip(new_vec, old_vec))
+                        if sim > SEMANTIC_DEDUP_THRESHOLD:
+                            # Merge: boost existing, skip creating new node
+                            nd.salience += 1
+                            nd.turn = turn
+                            nd.topic = topic
+                            nd.domain = domain
+                            nd.sentiment = sentiment
+                            if references:
+                                nd.references = _project.merge_refs(nd.references, references)
+                            g.mark_node_dirty(nd.keyword)
+                            _merged = True
+                            break
+                except Exception:
+                    pass  # embedding failure → fall through to create new node
+            if not _merged:
+                g.add_node(Node(keyword=kw, turn=turn, topic=topic,
+                                domain=domain, sentiment=sentiment,
+                                entities=entities, tags=tags,
+                                references=references))
 
     # T56: one compact fact sentence for this turn, attached to the first
     # (most salient) keyword — nodes carry decisions, not just themes.
@@ -1172,11 +1333,23 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     g.last_keywords = keywords
     g.reinforce_coactivation(keywords)   # Hebbian: co-active links wire together (E2.1)
     g.increment_inactivity(set(keywords))
+    # L1: newly stored keywords enter session cache (score proportional to salience)
+    for nd in g.nodes:
+        if nd.keyword in {g._norm(kw) for kw in keywords} and nd.salience >= 3:
+            g.cache_add(nd.keyword, score=min(1.0, nd.salience / 10.0))
     removed = g.prune_tangential()
     _g.save(ctx or None)
     if consolidate_auto and g.turn_count % CONSOLIDATE_EVERY == 0:
         # E2.2: protect high-salience nodes from being merged away.
         g.consolidate(drop_orphans=True, protect_salience=CONSOLIDATE_PROTECT_SALIENCE)
+        # L3: decay graveyard entries every consolidation cycle
+        try:
+            _path = _g._db_path(ctx or _g.active)
+            _ctx  = ctx or _g.active
+            if _path:
+                pruned = g.decay_graveyard(_path, _ctx, amount=1)
+        except Exception:
+            pass
         _g.save(ctx or None)
 
     return [TextContent(type="text", text=(
@@ -1204,7 +1377,7 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
     depth = min(arguments.get("depth", 1), 3)
     fmt        = arguments.get("format", "full")
     max_tokens = int(arguments.get("max_tokens", 400))
-    char_budget = max_tokens * 4
+    char_budget = max_tokens * CHARS_PER_TOKEN
 
     related_links_sorted, top_nodes, used_fallback, inherited_ctx, g = \
         _resolve_context(search_kws, depth, g, ctx)
@@ -1213,12 +1386,17 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
     if fmt == "compact":
         # Single-line summary — ideal for system-prompt injection
         parts = []
+        active_ctx = ctx or _g.active
         if related_links_sorted:
-            link_strs = [
-                f"{lk.source}-[{lk.weight[0]}]->{lk.target}"
-                + (f"@{lk.target_context}" if lk.link_type == "drift" else "")
-                for lk in related_links_sorted[:6]
-            ]
+            link_strs = []
+            for lk in related_links_sorted[:6]:
+                tgt = lk.target
+                if lk.link_type == "drift" and lk.target_context:
+                    tgt_ctx = lk.target_context.rstrip("/")
+                    if tgt_ctx != active_ctx:
+                        tgt = f"{lk.target}@{tgt_ctx}"
+                abbr = LINK_TYPE_ABBR.get(lk.link_type, lk.link_type[:4])
+                link_strs.append(f"{lk.source}-[{abbr}:{lk.weight[0]}]->{tgt}")
             parts.append("links:" + "|".join(link_strs))
         if top_nodes:
             node_strs = [f"{kw}({sc:.0f})" for kw, sc in top_nodes[:5]]
@@ -1235,16 +1413,22 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
     if used_fallback:
         _ctx_suffix = " (vector fallback)"
     elif inherited_ctx:
-        _ctx_suffix = f" (inherited from: {inherited_ctx})"
+        _ctx_suffix = f" (from: {inherited_ctx})"
     lines = [f"Context{_ctx_suffix}:"]
     if related_links_sorted:
-        lines.append("Links (by weight):")
+        lines.append("Links:")
         for lk in related_links_sorted[:10]:
             tgt = (f"{lk.target}@{lk.target_context}"
                    if lk.link_type == "drift" else lk.target)
+            abbr = LINK_TYPE_ABBR.get(lk.link_type, lk.link_type[:4])
+            rationale = ""
+            if lk.rationale:
+                r = lk.rationale[:RATIONALE_MAX_LEN]
+                if len(lk.rationale) > RATIONALE_MAX_LEN:
+                    r += "..."
+                rationale = f"  #{r}"
             lines.append(
-                f"  [{lk.weight:10s}] {lk.source} ->({lk.link_type})-> {tgt}"
-                + (f"  # {lk.rationale}" if lk.rationale else "")
+                f"  [{lk.weight:4s}] {lk.source} -({abbr})-> {tgt}{rationale}"
             )
     elif used_fallback:
         lines.append("  (similar nodes exist but no links yet)")
@@ -1423,7 +1607,7 @@ async def _tool_prune(arguments: dict, ctx: str, g) -> list[TextContent]:
 async def _tool_consolidate(arguments: dict, ctx: str, g) -> list[TextContent]:
     do_merge = arguments.get("merge", True)
     report = g.consolidate(
-        sim_threshold=float(arguments.get("sim_threshold", 0.85)) if do_merge else 2.0,
+        sim_threshold=float(arguments.get("sim_threshold", CONSOLIDATE_SIM_THRESHOLD)) if do_merge else 2.0,
         drop_orphans=arguments.get("drop_orphans", True),
     )
     _g.save(ctx or None)
@@ -1569,23 +1753,46 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
             existing.sentiment = extraction.sentiment
             g.mark_node_dirty(existing.keyword)   # in-place change: track it
         else:
-            g.add_node(Node(
-                keyword=kw, turn=turn, topic=extraction.topic,
-                domain=extraction.domain, sentiment=extraction.sentiment,
-                entities=extraction.entities, tags=extraction.tags,
-            ))
-            # cross-context dedup: link to identical keywords in other contexts
-            for alt_name, alt_g in list(_g._graphs.items()):
-                if alt_name == _g.active:
-                    continue
-                alt_nd = alt_g.get_node(kw)
-                if alt_nd:
-                    g.add_link(Link(
-                        source=kw, target=kw, link_type="analogy",
-                        weight="strong",
-                        rationale=f"cross-context dedup ({_g.active} <-> {alt_name})",
-                        created_turn=turn, last_active_turn=turn,
-                    ))
+            # Semantic dedup (FASE 5.5): check similar multi-word keywords
+            _merged = False
+            if dedup_enabled and len(kw.split()) > 1:
+                try:
+                    from neuron.search import _get_embedding as _emb
+                    new_vec = _emb(kw)
+                    for nd in g.nodes:
+                        if len(nd.keyword.split()) <= 1:
+                            continue
+                        old_vec = _emb(nd.keyword)
+                        sim = sum(a * b for a, b in zip(new_vec, old_vec))
+                        if sim > SEMANTIC_DEDUP_THRESHOLD:
+                            nd.salience += salience_boost
+                            nd.turn = turn
+                            nd.topic = extraction.topic
+                            nd.domain = extraction.domain
+                            nd.sentiment = extraction.sentiment
+                            g.mark_node_dirty(nd.keyword)
+                            _merged = True
+                            break
+                except Exception:
+                    pass
+            if not _merged:
+                g.add_node(Node(
+                    keyword=kw, turn=turn, topic=extraction.topic,
+                    domain=extraction.domain, sentiment=extraction.sentiment,
+                    entities=extraction.entities, tags=extraction.tags,
+                ))
+                # cross-context dedup: link to identical keywords in other contexts
+                for alt_name, alt_g in list(_g._graphs.items()):
+                    if alt_name == _g.active:
+                        continue
+                    alt_nd = alt_g.get_node(kw)
+                    if alt_nd:
+                        g.add_link(Link(
+                            source=kw, target=kw, link_type="analogy",
+                            weight="strong",
+                            rationale=f"cross-context dedup ({_g.active} <-> {alt_name})",
+                            created_turn=turn, last_active_turn=turn,
+                        ))
 
     for lk in new_links:
         src = g.get_node(lk.source)
@@ -1652,7 +1859,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     topic_pt = arguments.get("topic", "")
     extra_kws_pt = arguments.get("keywords", [])
     max_tokens_pt = int(arguments.get("max_tokens", 200))
-    char_budget_pt = max_tokens_pt * 4
+    char_budget_pt = max_tokens_pt * CHARS_PER_TOKEN
     # Status line
     g_pt = _g.get()
     ctx_label = _g.active
@@ -1691,6 +1898,14 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if inh_pt:
         parts_pt.append(f"(from:{inh_pt})")
     ctx_text_pt = " | ".join(parts_pt) if parts_pt else "no context"
+    # L1: expire old cache entries, then show working memory
+    g_pt.cache_expire()
+    cache_entries = g_pt.cache_get_all()
+    if cache_entries:
+        cache_str = " | ".join(
+            f"{kw}({'↑' if turns < 3 else '·'})" for kw, _score, turns in cache_entries
+        )
+        ctx_text_pt = f"cache: {cache_str} | {ctx_text_pt}"
     out_pt = f"{status_line}\n{ctx_text_pt}"
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
@@ -1728,6 +1943,9 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
             nd.trust = max(0.0, nd.trust + confidence)
             g.mark_node_dirty(nd.keyword)
             confirmed.append(kw)
+            # L1: confirmed keywords enter session cache
+            if confidence >= 0:
+                g.cache_add(kw, score=min(1.0, confidence * 0.8 + 0.2))
         else:
             skipped.append(kw)
     if confirmed:
@@ -1738,6 +1956,55 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
         "confidence": confidence,
         "skipped": skipped,
     }, ensure_ascii=False))]
+
+
+async def _tool_dismiss(arguments: dict, ctx: str, g) -> list[TextContent]:
+    """Suppress noisy/misleading nodes: lower salience and trust."""
+    keywords    = [str(k) for k in arguments.get("keywords", [])]
+    penalty     = min(int(arguments.get("penalty", 3)), 5)
+    trust_panel = float(arguments.get("trust_penalty", 0.5))
+    dismissed: list[str] = []
+    skipped:   list[str] = []
+    for kw in keywords:
+        nd = g.get_node(kw)
+        if nd:
+            nd.salience = max(0, nd.salience - penalty)
+            nd.trust    = max(0.0, nd.trust - trust_panel)
+            g.mark_node_dirty(nd.keyword)
+            g.cache_remove(kw)   # L1: dismiss also clears from session cache
+            dismissed.append(kw)
+        else:
+            skipped.append(kw)
+    if dismissed:
+        _g.save(ctx or None)
+    return [TextContent(type="text", text=json.dumps({
+        "dismissed": dismissed,
+        "penalty": -penalty,
+        "trust_penalty": -trust_panel,
+        "skipped": skipped,
+    }, ensure_ascii=False))]
+
+
+async def _tool_recall(arguments: dict, ctx: str, g) -> list[TextContent]:
+    """Re-add an archived graveyard node to the active graph (L3 long-term memory)."""
+    keyword = str(arguments.get("keyword", "")).strip()
+    base_sal = int(arguments.get("base_salience", 3))
+    if not keyword:
+        return [TextContent(type="text", text=json.dumps({"error": "keyword required"}))]
+    _path = _g._db_path(ctx or _g.active)
+    _ctx  = ctx or _g.active
+    if not _path:
+        return [TextContent(type="text", text=json.dumps({"error": "no store path"}))]
+    nd = g.reactivate_from_graveyard(keyword, _path, _ctx, base_salience=base_sal)
+    if nd:
+        _g.save(ctx or None)
+        return [TextContent(type="text", text=json.dumps({
+            "recalled": keyword,
+            "salience": nd.salience,
+            "domain": nd.domain,
+        }, ensure_ascii=False))]
+    return [TextContent(type="text", text=json.dumps({
+        "recalled": None, "error": f"'{keyword}' not found in graveyard"}))]
 
 
 async def _tool_merge(arguments: dict, ctx: str, g) -> list[TextContent]:
@@ -1821,6 +2088,8 @@ _HANDLERS = {
     "list_contexts": _tool_list_contexts,
     "pre_turn": _tool_pre_turn,
     "confirm": _tool_confirm,
+    "dismiss": _tool_dismiss,
+    "recall": _tool_recall,
     "merge": _tool_merge,
 }
 
@@ -1891,7 +2160,13 @@ async def main() -> None:
         except Exception:
             pass
     warm_task = asyncio.ensure_future(_prewarm())
-    warm_task.add_done_callback(lambda t: t.exception())  # never "unretrieved"
+    # `t.exception()` su un task CANCELLATO ri-solleva CancelledError invece di
+    # restituirla, e CancelledError deriva da BaseException — quindi scappava
+    # anche all'`except Exception` qui sopra. Risultato: ogni chiusura pulita
+    # (il client stacca lo stdio mentre il modello sta ancora caricando)
+    # stampava un traceback asyncio come se fosse un crash. `t.cancelled()`
+    # corto-circuita quel caso; il resto resta "recuperato" e non più unretrieved.
+    warm_task.add_done_callback(lambda t: t.cancelled() or t.exception())
     async with stdio_server() as (read_stream, write_stream):
         await app.run(
             read_stream,

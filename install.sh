@@ -1,63 +1,90 @@
 #!/usr/bin/env sh
-# Neuron installer (macOS/Linux) — installs Neuron standalone.
-# Gray Matter is RECOMMENDED (not required): with consent it installs
-# the GM control center + Neuron, registers the gateway, deploys hooks and opens
-# the GUI — one logic, defined once in gray_matter/install.sh. If GM is absent
-# it bootstraps it (safest source first). Decline GM (--no-gm / GM_OPTIN=0 /
-# answer 'n') → Neuron installs STANDALONE and registers itself. §6 opt-out.
+# Neuron installer (macOS/Linux) — click-and-go, default: Neuron + Gray Matter
+# (gateway). One shared venv, registers the gateway, deploys hooks, opens GUI.
+#
+# Modes:
+#   default           → install Neuron + GM (recommended, click-and-go)
+#   --no-gm           → standalone (Neuron only, registers directly in clients)
+#   -f / --force      → repair mode (pip --force-reinstall --no-deps)
+#   -c / --clear      → last resort: delete the venv and rebuild (implies --force).
+#                       CODE only — graphs/knowledge.db/bridges are never touched.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-# 0) GM choice (informed consent). The deficit without GM: you LOSE only the
-#    cross-store links (bridges) and the neighbor auto-surface; you KEEP memory,
-#    knowledge, and every native stimulus (piggyback, flash, spreading).
-# --force: repair mode — reinstall forzato del PROPRIO pacchetto anche a
-# versione invariata (pip --force-reinstall --no-deps); "$@" lo inoltra anche
-# al GM installer che ha lo stesso pattern (keep-in-sync con gray_matter/install.sh).
-WANT_GM=1; ASSUME_YES=0; FORCE=0
+# 0) Parse flags. Default: install with GM (gateway mode). --no-gm = standalone.
+WANT_GM=1; FORCE=0; CLEAR=0; MODE="gateway"
 for a in "$@"; do case "$a" in
-    --no-gm) WANT_GM=0 ;;
-    -y|--yes) ASSUME_YES=1 ;;
+    --no-gm) WANT_GM=0; MODE="standalone" ;;
     -f|--force) FORCE=1 ;;
+    -c|--clear) CLEAR=1; FORCE=1 ;;   # clear is a stronger force
 esac; done
 FORCE_ARGS=""
 [ "$FORCE" = "1" ] && FORCE_ARGS="--force-reinstall --no-deps"
-[ "${GM_OPTIN:-1}" = "0" ] && WANT_GM=0
-if [ "$WANT_GM" = "1" ] && [ "$ASSUME_YES" = "0" ] && [ -t 0 ]; then
+[ "${GM_OPTIN:-1}" = "0" ] && WANT_GM=0 && MODE="standalone"
+
+# Mode selector: click-and-go (Enter = full suite) or explicit --no-gm.
+# Only shows in interactive terminals; non-interactive defaults to gateway.
+if [ "$WANT_GM" = "1" ] && [ -t 0 ] && [ "$FORCE" != "1" ]; then
     echo ""
-    echo "Neuron works standalone; Gray Matter adds cross-store links"
-    echo "and neighbor auto-surface. Without GM you keep memory and"
-    echo "all native stimuli. Recommended: install it."
+    echo "  Installation mode:"
+    echo "    [F] Full suite — GM + Neuron + NeuRAG (recommended)"
+    echo "    [N] Solo Neuron — standalone (registers directly in clients)"
+    echo "    [D] Details — what you lose without GM"
     echo ""
-    echo "  [S]i — install Neuron + Gray Matter (gateway)"
-    echo "  [N]o — standalone (checks if GM is already installed)"
-    echo "  [D]etails — what you lose without GM"
-    printf "Choice: "; read -r ans
+    printf "  Choice [F]: "; read -r ans
     case "$ans" in
+        n|N|no|standalone) WANT_GM=0; MODE="standalone" ;;
         d|D|details|DETAILS)
             echo ""
-            echo "Without GM you lose:"
-            echo "  - Cross-store bridges (Neuron <-> NeuRAG)"
-            echo "  - Neighbor auto-surface"
-            echo "  - Unified GUI control center"
-            echo "  - Auto-registration in MCP clients"
-            printf "Install GM? [S/n] "; read -r ans2
-            case "$ans2" in n|N|no|NO) WANT_GM=0 ;; esac
+            echo "  Without GM you lose:"
+            echo "    - Cross-store bridges (Neuron <-> NeuRAG)"
+            echo "    - Neighbor auto-surface"
+            echo "    - Unified GUI control center"
+            echo "    - Auto-registration in MCP clients"
+            echo ""
+            printf "  Install Full suite? [Y/n] "; read -r ans2
+            case "$ans2" in n|N|no|NO) WANT_GM=0; MODE="standalone" ;; esac
             ;;
-        n|N|no|NO) WANT_GM=0 ;;
     esac
 fi
 
 # STANDALONE: only Neuron, its own venv, registers itself in the clients.
 # Reversible: re-run without --no-gm and GM takes over (gateway + bridges).
 # Also the safety net when GM cannot be obtained (§6: degrade, don't exit).
+# Un venv "c'e'" solo se il suo interprete PARTE. `[ -d ]` sulla cartella non e'
+# quel test: una rimozione interrotta lascia lib/ e bin/ senza pyvenv.cfg, la
+# creazione viene saltata e il primo pip muore con "failed to locate pyvenv.cfg".
+# Stessa guardia di Test-VenvHealthy in install.ps1.
+venv_healthy() {  # $1 = venv
+    [ -f "$1/pyvenv.cfg" ] || return 1
+    [ -x "$1/bin/python" ] || return 1
+    "$1/bin/python" -c "import sys" >/dev/null 2>&1
+}
+
 standalone_install() {
     echo "Installing Neuron STANDALONE (no Gray Matter — add it any time by re-running)."
     PY=$(command -v python3 || command -v python || true)
     [ -z "$PY" ] && { echo "ERROR: need Python 3.10+ — https://www.python.org/downloads/"; exit 1; }
     VENV="${NEURON_HOME:-$HOME/.local/share/neuron}/.venv"
-    [ -d "$VENV" ] || "$PY" -m venv "$VENV" \
-        || { echo "ERROR: could not create a venv at $VENV — check disk space and permissions"; exit 1; }
+    # INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
+    # POSIX unlinks mapped files happily, so this is not the Windows lock, but a
+    # stale server writing to the same store during an upgrade is its own hazard.
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -f "$VENV" 2>/dev/null || true
+        sleep 1
+    fi
+    if [ "$CLEAR" = "1" ] && [ -d "$VENV" ]; then
+        echo "Clear: removing the venv and rebuilding from scratch ($VENV)"
+        echo "  (user memory is NOT touched — it lives outside the venv)"
+        rm -rf "$VENV"
+        [ -d "$VENV" ] && { echo "ERROR: could not remove $VENV — stop any running Neuron process and re-run."; exit 1; }
+    fi
+    if [ -d "$VENV" ] && ! venv_healthy "$VENV"; then
+        echo "Damaged venv detected (pyvenv.cfg missing or interpreter dead) - rebuilding"
+        rm -rf "$VENV"
+    fi
+    [ -d "$VENV" ] || "$PY" -m venv "$VENV" 2>/dev/null || true
+    venv_healthy "$VENV" || { echo "ERROR: could not create a working venv at $VENV - check disk space and permissions"; exit 1; }
     VPY="$VENV/bin/python"
     "$VPY" -m pip install --upgrade pip >/dev/null 2>&1 || true
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling Neuron (forced)..."
@@ -67,6 +94,14 @@ standalone_install() {
         || { echo "ERROR: Neuron install failed — check network, or try: pip install --upgrade pip"; exit 1; }
     "$VENV/bin/neuron" register --client all || true
     "$VENV/bin/neuron" doctor 2>/dev/null || true
+    
+    # --- GME Registry ---
+    # One line instead of ~35 of hand-written JSON: gray_matter/gme.py is the
+    # single writer (and the reader). Six shell copies in two languages is what
+    # let the PowerShell BOM and the macOS path divergence ship unnoticed.
+    # Best-effort — standalone means Gray Matter may be absent.
+    "$VPY" -m gray_matter.gme register "$HERE" 2>/dev/null || true
+    
     # Desktop icon "Neuron" → apre il control center (bootstrappa GM al 1° click).
     "$VPY" -m neuron gui --shortcut-only 2>/dev/null || true
     NEURON_VER=$("$VENV/bin/neuron" --version 2>/dev/null || echo "?")

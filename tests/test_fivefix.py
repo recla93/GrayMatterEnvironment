@@ -18,7 +18,7 @@ import json
 import tempfile
 
 # ── Mock heavy deps before importing neuron (shared with test_core.py) ────────
-from tests._mockdeps import install_mock_deps
+from tests._mockdeps import install_mock_deps, unpoison_turso
 install_mock_deps()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -27,6 +27,7 @@ from neuron.models import Node, Graph          # noqa: E402
 import neuron.server as _srv                    # noqa: E402
 from neuron.server import SemanticExtractor, _fold_accents  # noqa: E402
 from neuron import _env                          # noqa: E402
+unpoison_turso()
 
 
 class _Fake384:
@@ -75,12 +76,16 @@ class _RecordConn:
     def close(self): pass
 
 
-def _dirty_graph():
-    """A minimal graph with one node+vector, schema pre-marked, ready to save."""
+def _dirty_graph(path: str = ""):
+    """A minimal graph with one node+vector, schema pre-marked, ready to save.
+
+    ``path`` marks the schema as already created FOR THAT FILE, which is how you
+    skip DDL now that _schema_ready records a path instead of a bool (a bool
+    could not tell which file was ready — see test_schema_ready_per_path)."""
     g = Graph(turn_count=1)
     g.add_node(Node(keyword="alpha", turn=1, topic="t", domain="backend",
                     sentiment="neutral"))
-    g._schema_ready = True
+    g._schema_ready = path
     g._needs_full_write = True
     g._dirty = True
     return g
@@ -294,7 +299,7 @@ class TestSessionSidecar:
             g = Graph(turn_count=7)
             g.session_id = "sess-A"
             g.staged_stimulus = "redis (act=0.80)"
-            g._schema_ready = True          # skip DDL against the fake conn
+            g._schema_ready = path          # skip DDL against the fake conn
             g._needs_full_write = False
             g._dirty = True                 # force the write path
             g.save_sqlite(path, context="default")
@@ -396,8 +401,9 @@ class TestRetryAndModelGuard:
         monkeypatch.setattr(_srv._db, "REMOTE_TURSO", True)
         monkeypatch.setattr(_srv._db, "connect", lambda p: conn)
         with tempfile.TemporaryDirectory() as d:
-            g = _dirty_graph()
-            g.save_sqlite(os.path.join(d, "graph_default.db"), context="default")
+            db = os.path.join(d, "graph_default.db")
+            g = _dirty_graph(db)
+            g.save_sqlite(db, context="default")
         sqls = [sql for sql, _ in conn.many]
         assert not any("node_vectors" in s for s in sqls)       # vectors skipped
         assert any("nodes" in s and "INSERT" in s.upper() for s in sqls)  # nodes still written
@@ -411,8 +417,9 @@ class TestRetryAndModelGuard:
         monkeypatch.setattr(_srv._db, "REMOTE_TURSO", True)
         monkeypatch.setattr(_srv._db, "connect", lambda p: conn)
         with tempfile.TemporaryDirectory() as d:
-            g = _dirty_graph()
-            g.save_sqlite(os.path.join(d, "graph_default.db"), context="default")
+            db = os.path.join(d, "graph_default.db")
+            g = _dirty_graph(db)
+            g.save_sqlite(db, context="default")
         assert any("node_vectors" in sql for sql, _ in conn.many)
 
 
@@ -427,9 +434,10 @@ class TestSharedReconcileGuard:
         had = os.environ.pop("NS_ALLOW_SHARED_RECONCILE", None)
         try:
             with tempfile.TemporaryDirectory() as d:
-                g = _dirty_graph()
+                db = os.path.join(d, "graph_default.db")
+                g = _dirty_graph(db)
                 g._needs_diff_delete = True          # a merge asked for reconcile
-                g.save_sqlite(os.path.join(d, "graph_default.db"), context="default")
+                g.save_sqlite(db, context="default")
         finally:
             if had is not None:
                 os.environ["NS_ALLOW_SHARED_RECONCILE"] = had

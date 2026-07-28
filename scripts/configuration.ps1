@@ -15,7 +15,7 @@
 .NOTES
     Kept as a compatibility wrapper for older installs; the GUI is the primary entry point.
 #>
-param([string]$Slug = 'neuron5')
+param([string]$Slug = 'neuron')
 
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'

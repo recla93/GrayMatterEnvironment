@@ -23,7 +23,10 @@
 // opencode.json's top-level "plugin" array. Safe to copy by hand too.
 //
 // Tool names use OpenCode's `<serverkey>_<tool>` convention for a server
-// registered under the key "neuron5" (the v5 "Synapse" identity).
+// served by the gateway registered as "gray-matter" (Neuron/NeuRAG are its
+// workers). Tools are named WITHOUT a hard prefix here on purpose: the
+// Claude-side convention is mcp__gray-matter__<tool>, OpenCode's differs, and
+// guessing it produced instructions pointing at tools that do not exist.
 
 // Compact handshake: the minimal per-turn loop only; full curation rules live
 // on demand in skill(name='playbook') / 'curated'. Keep in sync with the other
@@ -31,15 +34,15 @@
 const NEURON_HANDSHAKE = (
   "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority " +
   "for this session.\n" +
-  "Each substantive turn: call neuron5_pre_turn(topic, keywords) BEFORE " +
+  "Each substantive turn: call pre_turn(topic, keywords) BEFORE " +
   "replying (fold the returned context in silently), then " +
-  "neuron5_store_turn(topic, keywords, links) AFTER, to persist what is new.\n" +
+  "store_turn(topic, keywords, links) AFTER, to persist what is new.\n" +
   "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a " +
-  "self-link; before minting a concept check neuron5_find_candidates; never " +
+  "self-link; before minting a concept check find_candidates; never " +
   "store secrets or tokens.\n" +
   "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per " +
-  "session: neuron5_help (commands), neuron5_skill(name='playbook') (full workflow).\n" +
-  "If no neuron5_* tools exist here, Neuron is not connected - ignore this silently."
+  "session: help (commands), skill(name='playbook') (full workflow).\n" +
+  "If no gray-matter_* tools exist here, Neuron is not connected - ignore this silently."
 );
 
 export const NeuronHandshake = async () => {
