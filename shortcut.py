@@ -1,13 +1,13 @@
 """Icona desktop per il control center — cross-OS, best-effort, idempotente.
 
-Copia tool-local (keep-in-sync con gray_matter/shortcut.py e neuron/.../shortcut.py):
+Copia tool-local (keep-in-sync con gray_matter/shortcut.py e neuron/shortcut.py):
 serve a NeuRAG STANDALONE, quando Gray Matter non è installato e quindi
 `gray_matter.shortcut` non è importabile — l'installer standalone e `neurag gui
 --shortcut-only` creano comunque l'icona. L'icona punta a `neurag gui`, che
 bootstrappa GM al primo click.
 
-Non solleva mai: un fallimento non deve impedire l'apertura della GUI. Idempotente
-via un marker nel venv, così non rispawna PowerShell a ogni avvio.
+Se il marker esiste ma il file .lnk/.desktop è stato cancellato, ricrea l'icona.
+Non solleva mai: un fallimento non deve impedire l'apertura della GUI.
 """
 from __future__ import annotations
 
@@ -22,11 +22,13 @@ _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 def ensure_desktop_shortcut(tool: str, label: str, module_args: "list[str]",
                             description: str = "") -> bool:
     """Crea (una volta per installazione) un'icona desktop che apre ``<python>
-    module_args`` (es. ``-m neurag.cli gui``). `tool` è la chiave per il marker.
+    module_args`` (es. ``-m neurag gui``). `tool` è la chiave per il marker.
+    Se il marker esiste ma il file .lnk/.desktop è stato cancellato, ricrea.
     Ritorna True se l'icona c'è o è stata creata; False (silenzioso) altrimenti."""
     try:
         marker = Path(sys.executable).with_name(f".{tool}-gui-shortcut")
-        if marker.exists():
+        shortcut_exists = _shortcut_file_exists(label)
+        if marker.exists() and shortcut_exists:
             return True
         ok = (_windows_lnk(label, module_args, description) if os.name == "nt"
               else _mac_command(label, module_args) if sys.platform == "darwin"
@@ -39,6 +41,19 @@ def ensure_desktop_shortcut(tool: str, label: str, module_args: "list[str]",
         return ok
     except Exception:  # noqa: BLE001 — mai bloccare la GUI per un'icona
         return False
+
+
+def _shortcut_file_exists(label: str) -> bool:
+    """Check if the shortcut file actually exists on disk (not just the marker)."""
+    if os.name == "nt":
+        desk = os.environ.get("USERPROFILE", "") + "\\Desktop"
+        return os.path.isfile(os.path.join(desk, f"{label}.lnk"))
+    elif sys.platform == "darwin":
+        return (Path.home() / "Desktop" / f"{label}.command").is_file()
+    else:
+        return ((Path.home() / ".local" / "share" / "applications"
+                / f"{label.lower().replace(' ', '-')}.desktop").is_file()
+                or (Path.home() / "Desktop" / f"{label}.desktop").is_file())
 
 
 def _windows_lnk(label: str, module_args: "list[str]", description: str) -> bool:

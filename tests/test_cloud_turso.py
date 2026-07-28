@@ -61,9 +61,13 @@ def test_remote_pragma_is_noop(monkeypatch):
     conn.close()
 
 
-def test_http_scheme_normalisation():
-    assert db.RemoteTursoConnection._http("libsql://db.turso.io") == "https://db.turso.io"
-    assert db.RemoteTursoConnection._http("https://db.turso.io") == "https://db.turso.io"
+def test_url_candidates_normalisation():
+    # _url_candidates returns a list: user's URL first, then https fallback
+    assert db._url_candidates("libsql://db.turso.io") == [
+        "libsql://db.turso.io", "https://db.turso.io"]
+    assert db._url_candidates("https://db.turso.io") == ["https://db.turso.io"]
+    assert db._url_candidates("wss://db.turso.io") == [
+        "wss://db.turso.io", "https://db.turso.io"]
 
 
 def test_local_open_degrades_to_none(monkeypatch):

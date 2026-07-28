@@ -45,17 +45,17 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("mapping", help="Path to the YAML mapping file")
 
     ing = sub.add_parser("ingest",
-                         help="Grafizza una cartella: nodi dalla struttura, chunk, embedding, link")
-    ing.add_argument("path", help="Cartella da grafizzare")
+                         help="Graph a folder: nodes from its structure, chunks, embeddings, links")
+    ing.add_argument("path", help="Folder to graph")
     ing.add_argument("--godnode", default=None,
-                     help="Nodo radice da usare/creare (default: nome della cartella)")
+                     help="Root node to use/create (default: the folder name)")
 
-    ren = sub.add_parser("rename-node", help="Rinomina un nodo (aggiorna anche i path dei figli)")
-    ren.add_argument("name", help="Nome attuale del nodo")
-    ren.add_argument("new_name", help="Nuovo nome")
+    ren = sub.add_parser("rename-node", help="Rename a node (also updates the children's paths)")
+    ren.add_argument("name", help="Current node name")
+    ren.add_argument("new_name", help="New name")
 
-    rem = sub.add_parser("remove-node", help="Elimina un nodo e tutto il suo sottoalbero")
-    rem.add_argument("name", help="Nome del nodo da eliminare")
+    rem = sub.add_parser("remove-node", help="Delete a node and its whole subtree")
+    rem.add_argument("name", help="Name of the node to delete")
 
     sub.add_parser("health", help="Structural audit of the vault (integrity check)")
 
@@ -67,36 +67,36 @@ def build_parser() -> argparse.ArgumentParser:
     cfg_p.add_argument("key", nargs="?", default="")
     cfg_p.add_argument("value", nargs="?", default=None)
     cfg_p.add_argument("--json", action="store_true",
-                       help="Output JSON strutturato (usato dal control center)")
+                       help="Structured JSON output (used by the control center)")
 
     rep = sub.add_parser("repair",
-                         help="Reinstall pulito SOLO di NeuRAG (standalone, senza GM): scegli cosa cancellare, poi reinstalla forzato")
-    rep.add_argument("--wipe-knowledge", action="store_true", help="cancella knowledge.db")
-    rep.add_argument("--wipe-config", action="store_true", help="cancella il config NeuRAG (rerank, ...)")
+                         help="Clean reinstall of NeuRAG ONLY (standalone, no GM): choose what to delete, then force-reinstall")
+    rep.add_argument("--wipe-knowledge", action="store_true", help="delete knowledge.db")
+    rep.add_argument("--wipe-config", action="store_true", help="delete the NeuRAG config (rerank, ...)")
     rep.add_argument("--no-reinstall", action="store_true",
-                     help="solo pulizia, non reinstallare il codice")
+                     help="clean only, do not reinstall the code")
     rep.add_argument("--reinstall", action="store_true",
-                     help="lancia subito il PROPRIO installer con --force (dai path registrati)")
-    rep.add_argument("--dry-run", action="store_true", help="mostra, non tocca nulla")
+                     help="run NeuRAG's OWN installer right away with --force (from the recorded paths)")
+    rep.add_argument("--dry-run", action="store_true", help="show what would happen, change nothing")
     rep.add_argument("--json", action="store_true",
-                     help="elenca le superfici cancellabili in JSON (usato dal control center)")
+                     help="list the removable surfaces as JSON (used by the control center)")
 
     rpx = sub.add_parser("record-paths",
-                         help="NeuRAG registra la sua cartella sorgente (usato dall'installer)")
-    rpx.add_argument("--source", default="", help="Cartella sorgente di NeuRAG (repo)")
+                         help="Record NeuRAG's source folder (used by the installer)")
+    rpx.add_argument("--source", default="", help="NeuRAG's source folder (the repo)")
 
     reg = sub.add_parser("register",
-                         help="Registra il server MCP di NeuRAG nei client AI (standalone, senza GM)")
+                         help="Register NeuRAG's MCP server in your AI clients (standalone, no GM)")
     reg.add_argument("--client", default="all",
                      help="claude-desktop|claude-code|cursor|vscode|opencode|all (default: all)")
     reg.add_argument("--python", dest="python_exe", default="",
-                     help="Python del server (default: il venv installato)")
-    reg.add_argument("--dry-run", action="store_true", help="mostra, non scrive nulla")
+                     help="Python for the server (default: the installed venv)")
+    reg.add_argument("--dry-run", action="store_true", help="show what would happen, write nothing")
     reg.add_argument("--force", action="store_true",
-                     help="registra diretto anche se GM ti gestisce ancora (doppia registrazione)")
+                     help="register directly even if GM still manages you (double registration)")
 
     der = sub.add_parser("deregister",
-                         help="Rimuove NeuRAG dai config dei client AI")
+                         help="Remove NeuRAG from your AI clients' configs")
     der.add_argument("--client", default="all",
                      help="claude-desktop|claude-code|cursor|vscode|opencode|all (default: all)")
 
@@ -109,18 +109,18 @@ def build_parser() -> argparse.ArgumentParser:
     uni.add_argument("--yes", action="store_true", help="non-interactive: assume yes for prompts")
 
     gst = sub.add_parser("go-standalone",
-                         help="NeuRAG esce dal gateway GM: si registra come MCP diretto nei client "
-                              "e chiede a GM (se presente) di non gestirlo più. Reversibile con "
+                         help="NeuRAG leaves the GM gateway: it registers as a direct MCP server in your clients "
+                              "and asks GM (if present) to stop managing it. Undo with "
                               "`gray-matter register --gateway`")
-    gst.add_argument("--dry-run", action="store_true", help="mostra, non scrive nulla")
+    gst.add_argument("--dry-run", action="store_true", help="show what would happen, write nothing")
 
     gui_p = sub.add_parser("gui",
-                   help="Apre il control center (GUI condivisa Gray Matter; se GM manca, la installa)")
+                   help="Open the control center (shared Gray Matter GUI; installs GM if missing)")
     gui_p.add_argument("--shortcut-only", action="store_true",
-                       help="crea solo l'icona desktop e esce (usato dall'installer)")
+                       help="only create the desktop icon and exit (used by the installer)")
 
-    sub.add_parser("start", help="Avvia il server NeuRAG in background (MCP stdio)")
-    sub.add_parser("stop", help="Ferma il server NeuRAG")
+    sub.add_parser("start", help="Start the NeuRAG server in the background (MCP stdio)")
+    sub.add_parser("stop", help="Stop the NeuRAG server")
 
     return parser
 
@@ -150,26 +150,44 @@ def _cmd_go_standalone(dry_run: bool = False) -> None:
     for r in _clients.register_all(dry_run=dry_run):
         print(r.line())
     if dry_run:
-        print("  [dry-run] non chiedo a GM di rilasciare NeuRAG.")
+        print("  [dry-run] not asking GM to release NeuRAG.")
         return
     try:
         from gray_matter import clients as _gm_clients
         for line in _gm_clients.release_tool("neurag"):
             print("  " + line)
     except ImportError:
-        print("  Gray Matter non installato: NeuRAG era già standalone.")
-    print("Fatto. Riavvia le app AI. Per tornare al gateway: gray-matter register --gateway")
+        print("  Gray Matter not installed: NeuRAG was already standalone.")
+    print("Done. Restart your AI apps. To go back to the gateway: gray-matter register --gateway")
 
 
 def _cmd_uninstall(purge_data: bool = False, as_json: bool = False, yes: bool = False) -> None:
     """Uninstall NeuRAG: deregister from clients, optionally purge data."""
     from neurag.clients import deregister_all as _dereg_all
     from neurag.clients import SLUG
+    results: list[dict] = []
+    checks: dict[str, bool] = {}
+    data_purged = False
     if as_json:
-        dereg_results = [{"client": r.client, "ok": r.ok, "action": r.action,
-                        "detail": r.detail} for r in _dereg_all(SLUG)]
-        out = {"scope": "neurag", "deregister": dereg_results, "data_purged": False}
-        print(json_mod.dumps(out, ensure_ascii=False))
+        dereg_results = _dereg_all(SLUG)
+        for r in dereg_results:
+            entry = {"name": r.client, "ok": r.ok, "action": r.action, "detail": r.detail}
+            results.append(entry)
+            checks[f"deregistered_{r.client}"] = r.ok
+        if purge_data:
+            from neurag import paths as _p
+            db_dir = _p.data_dir()
+            if db_dir.exists():
+                import shutil
+                shutil.rmtree(db_dir)
+                data_purged = True
+                checks["data_purged"] = True
+            else:
+                checks["data_purged"] = True
+        print(json_mod.dumps({"ok": all(checks.values()), "results": results,
+                              "verification": {"ok": all(checks.values()),
+                                               "checks": checks}},
+                             ensure_ascii=False))
         return
     print("Uninstall NeuRAG:")
     print("  1) Deregister from all AI clients")
@@ -217,7 +235,7 @@ def _cmd_start() -> None:
         try:
             pid = int(pid_file.read_text().strip())
             if _is_alive(pid):
-                print(f"NeuRAG server già in esecuzione (PID {pid}).")
+                print(f"NeuRAG server already running (PID {pid}).")
                 return
         except (ValueError, OSError):
             pass  # PID file corrotto: ignora, sovrascriverà
@@ -225,7 +243,12 @@ def _cmd_start() -> None:
     cmd = [sys.executable, "-m", "neurag.server"]
     flags = 0
     if os.name == "nt":
-        flags = 0x08000000 | 0x00000008  # CREATE_NO_WINDOW | DETACHED_PROCESS
+        # NOT DETACHED_PROCESS: Windows ignores CREATE_NO_WINDOW when combined
+        # with DETACHED_PROCESS (or CREATE_NEW_CONSOLE), and the detached child
+        # allocates its own console -> the empty CMD window this was meant to
+        # avoid. CREATE_NEW_PROCESS_GROUP just keeps it out of this console's
+        # Ctrl-C, same fix already proven in gray_matter/server.py's own spawn.
+        flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     try:
         proc = subprocess.Popen(
             cmd,
@@ -235,7 +258,7 @@ def _cmd_start() -> None:
             creationflags=flags,
         )
     except FileNotFoundError as exc:
-        print(f"Impossibile avviare: {exc}", file=sys.stderr)
+        print(f"Could not start: {exc}", file=sys.stderr)
         sys.exit(1)
 
     pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +298,7 @@ def _cmd_stop() -> None:
 
     pid_file = _paths.data_dir() / "neurag_server.pid"
     if not pid_file.exists():
-        print("NeuRAG server non in esecuzione (nessun file PID).")
+        print("NeuRAG server not running (no PID file).")
         return
     try:
         pid = int(pid_file.read_text().strip())
@@ -284,15 +307,15 @@ def _cmd_stop() -> None:
         pid_file.unlink(missing_ok=True)
         return
     if not _is_alive(pid):
-        print(f"NeuRAG server non attivo (PID {pid} non trovato).")
+        print(f"NeuRAG server not running (PID {pid} not found).")
         pid_file.unlink(missing_ok=True)
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        print(f"Processo {pid} già terminato.")
+        print(f"Process {pid} already exited.")
     except PermissionError:
-        print(f"Permesso negato per PID {pid}.")
+        print(f"Permission denied for PID {pid}.")
         pid_file.unlink(missing_ok=True)
         sys.exit(1)
     for _ in range(10):
@@ -360,7 +383,7 @@ def _bootstrap_gray_matter() -> bool:
         candidates.append(("GitHub", [py, "-m", "pip", "install",
                                       "git+https://github.com/recla93/gray-matter"]))
     for label, argv in candidates:
-        print(f"[gui] Gray Matter non è installato: lo installo ({label})…")
+        print(f"[gui] Gray Matter is not installed: installing it ({label})...")
         try:
             subprocess.call(argv)
         except Exception as exc:  # noqa: BLE001
@@ -396,12 +419,12 @@ def _cmd_gui(shortcut_only: bool = False) -> None:
         from gray_matter.webgui import main as gui_main
     except ImportError:
         if not _bootstrap_gray_matter():
-            print("Installa Gray Matter a mano (install.ps1/install.sh), poi rilancia `neurag gui`.")
+            print("Install Gray Matter manually (install.ps1/install.sh), then run `neurag gui` again.")
             sys.exit(1)
         try:
             from gray_matter.webgui import main as gui_main
         except ImportError as exc:
-            print(f"[gui] Gray Matter installato ma non importabile: {exc}")
+            print(f"[gui] Gray Matter is installed but cannot be imported: {exc}")
             sys.exit(1)
     # GM ora è presente: lascia un'icona desktop "NeuRAG" → doppio click d'ora in
     # poi (punta a `neurag gui`, che riapre il control center condiviso).
@@ -433,9 +456,9 @@ def _cmd_repair(args) -> None:
         targets.append(("knowledge.db", _dbmod._DEFAULT_DB))
     if args.wipe_config:
         targets.append(("config NeuRAG", _settings._config_path()))
-    print("NeuRAG repair — scope: SOLO NeuRAG.")
+    print("NeuRAG repair - scope: NeuRAG ONLY.")
     if not targets:
-        print("  niente da cancellare (usa --wipe-knowledge e/o --wipe-config).")
+        print("  nothing to delete (use --wipe-knowledge and/or --wipe-config).")
     for label, p in targets:
         p = Path(p)
         if args.dry_run:
@@ -448,24 +471,24 @@ def _cmd_repair(args) -> None:
             else:
                 print(f"  {label} assente: {p}")
         except OSError as exc:
-            print(f"[!] impossibile cancellare {p}: {exc}")
+            print(f"[!] could not delete {p}: {exc}")
     if args.no_reinstall:
         return
     # Auto-repair standalone (2026-07-22): NeuRAG conosce i PROPRI path — il
     # comando stampato (o lanciato con --reinstall) punta all'installer VERO.
     inst, argv_inst = _own_installer()
     if inst is None:
-        print("Reinstall forzato del codice (bypassa il check versione):")
+        print("Force-reinstall the code (bypasses the version check):")
         print("  Windows:   install.ps1 -Force        mac/Linux: ./install.sh --force")
-        print("  (sorgente non registrato: lancia `neurag record-paths --source <repo>`)")
+        print("  (source not recorded: run `neurag record-paths --source <repo>`)")
         return
     if args.reinstall and not args.dry_run:
         import subprocess
-        print(f"Reinstall forzato: {inst}")
+        print(f"Force-reinstalling: {inst}")
         sys.exit(subprocess.call(argv_inst))
-    print("Reinstall forzato del codice (bypassa il check versione):")
+    print("Force-reinstall the code (bypasses the version check):")
     print("  " + " ".join(f'"{a}"' if " " in a else a for a in argv_inst))
-    print("  (oppure: neurag repair --reinstall)")
+    print("  (or: neurag repair --reinstall)")
 
 
 def _own_installer():
@@ -564,7 +587,7 @@ def _run_via_gm(tool: str, tool_args: dict) -> bool:
               file=sys.stderr)
         return False
     if "error" in r:
-        print(f"[gm-neurag] {tool} -> errore: {r['error']}", file=sys.stderr)
+        print(f"[gm-neurag] {tool} -> error: {r['error']}", file=sys.stderr)
         sys.exit(1)
     print(r.get("result", ""))
     return True
@@ -573,6 +596,18 @@ def _run_via_gm(tool: str, tool_args: dict) -> bool:
 def main() -> None:
     from neurag.db import KnowledgeGraph
     from neurag.chunker import chunk_file, scan_directory
+
+    # I chunk contengono testo arbitrario (codice, doc, CJK, frecce): su una
+    # console Windows cp1252 il primo carattere fuori tabella faceva morire il
+    # comando con UnicodeEncodeError. Degrada a '?' invece di perdere l'output.
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if not callable(_reconfigure):   # pytest/GUI/pipe: wrapper senza reconfigure
+            continue
+        try:
+            _reconfigure(errors="replace")
+        except (OSError, ValueError):
+            pass
 
     parser = build_parser()
     args = parser.parse_args()
@@ -591,7 +626,7 @@ def main() -> None:
     if args.command == "record-paths":
         from neurag import paths as _paths
         d = _paths.record_self(args.source or None)
-        print(f"NeuRAG paths registrati in {_paths._self_registry()}")
+        print(f"NeuRAG paths recorded in {_paths._self_registry()}")
         print(f"  source: {d.get('source', _paths.source_dir())}")
         return
 
@@ -684,7 +719,7 @@ def main() -> None:
         print(f"Engine: {s['engine']}")
         print(f"DB:     {s['db_path']}")
         if s.get("corrupt"):
-            print(f"Stato:  DB CORROTTO — {s['error']}")
+            print(f"Status: DB CORRUPTED - {s['error']}")
             print(f"        → {s['hint']}")
             sys.exit(1)
         print(f"Nodes:  {s['nodes']}")
@@ -783,7 +818,7 @@ def main() -> None:
     elif args.command == "rename-node":
         node = db.get_node_by_name(args.name)
         if not node:
-            print(f"Nodo '{args.name}' non trovato.", file=sys.stderr)
+            print(f"Node '{args.name}' not found.", file=sys.stderr)
             sys.exit(1)
         db.rename_node(node["id"], args.new_name)
         print(f"[ok] '{args.name}' → '{args.new_name}' (path aggiornati).")
@@ -791,16 +826,16 @@ def main() -> None:
     elif args.command == "remove-node":
         node = db.get_node_by_name(args.name)
         if not node:
-            print(f"Nodo '{args.name}' non trovato.", file=sys.stderr)
+            print(f"Node '{args.name}' not found.", file=sys.stderr)
             sys.exit(1)
         n = db.delete_node(node["id"])
-        print(f"[ok] eliminati {n} nodi (sottoalbero incluso).")
+        print(f"[ok] deleted {n} nodes (subtree included).")
 
     elif args.command == "health":
         h = db.health()
         if h.get("corrupt"):
             print("Vault health: DB CORROTTO")
-            print(f"  errore: {h['error']}")
+            print(f"  error: {h['error']}")
             print(f"  → {h['hint']}")
             sys.exit(1)
         print("Vault health:", "OK" if h["ok"] else f"{h['serious_count']} serious issue(s)")

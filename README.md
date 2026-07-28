@@ -20,7 +20,7 @@ the Gray Matter gateway.
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-1.0.0-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-1.2.2-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -108,28 +108,52 @@ overlap. Links are queried bidirectionally and returned with search results.
 
 ## 🚀 Quickstart
 
-### Install
+### Option A — One-click installer (recommended)
 
-**Click and go**: double-click **`install.cmd`** (Windows) or
-**`install.command`** (macOS/Linux) — bootstraps Python if missing, installs
-NeuRAG + the Gray Matter gateway, registers your MCP clients and opens the
-control center GUI (wizard, Install/Repair, Test, Prefs, Folders).
+The installer sets up **Gray Matter + NeuRAG** in a single venv, registers the
+gateway in your MCP clients, and creates a Desktop shortcut to the control center.
+
+| Platform | Action |
+|---|---|
+| **Windows** | Double-click **`install.cmd`** (or `.\install.ps1` from a terminal) |
+| **macOS** | Double-click **`install.command`** (or `sh install.sh` from a terminal) |
+| **Linux** | `sh install.sh` from a terminal |
+
+No Python? The installer bootstraps it (winget on Windows, brew/apt on Linux/macOS).
+Pre-built `pyturso` wheels are bundled — no C/Rust compiler needed.
+
+### Option B — pip (source checkout)
 
 ```bash
-# terminal / dev alternative:
-pip install -e .
-# recommended: behind the gateway → gray-matter install
-# standalone: python -m neurag.server
+git clone https://github.com/recla93/Neuron.git
+cd Neuron/neurag
+pip install -e ".[dev]"           # editable install with test deps
+pip install -e ".[semantic]"      # optional: FastEmbed 384-dim vectors
+pip install -e ".[cloud]"         # optional: Turso Cloud support
+pip install -e ".[pdf,docx]"      # optional: PDF and Word document support
+```
+
+### Option C — Standalone MCP (no gateway)
+
+```json
+// ~/.config/opencode/opencode.json  (or your client's MCP config)
+{
+  "mcp": {
+    "neurag": { "command": ["python", "-m", "neurag.server"], "type": "local" }
+  }
+}
 ```
 
 ### Index a knowledge base
 
 ```bash
 # Via MCP tools (from your AI client):
-knowledge_index(path="C:/path/to/docs")     # → returns JSON chunks
+knowledge_ingest(path="C:/path/to/docs")       # auto-ingest: scan → nodes → chunks → links
+# OR step by step:
+knowledge_index(path="C:/path/to/docs")         # → returns JSON chunks
 knowledge_add_node(name="Java", node_type="fundamental", parent_name="Root")
-knowledge_add_chunks(node_name="Java", chunks=[...])   # attach the chunks
-knowledge_rebuild_links()                    # build cross-links
+knowledge_add_chunks(node_name="Java", chunks=[...])
+knowledge_rebuild_links()                       # build cross-links
 ```
 
 ### Query
@@ -142,11 +166,60 @@ knowledge_query(query="Spring Boot REST patterns", top_n=5)
 
 ```bash
 knowledge_health    # orphans, broken hierarchy, empty chunks
-knowledge_status    # node count, chunk count, link count
+knowledge_status    # node count, chunk count, link count, engine info
 knowledge_tree      # full hierarchy visualization
 ```
 
 📖 AI agents: see [`INSTALL-AI.md`](INSTALL-AI.md).
+
+---
+
+## ⚡ Auto-ingest
+
+The `knowledge_ingest` tool graficates entire directories **server-side** in a single call —
+no chunks travel through the LLM context:
+
+```
+scan → folder structure → nodes (godnode/fundamental/specialization)
+     → chunk per file (AST-aware for code, heading splits for Markdown)
+     → embeddings (if FastEmbed available)
+     → rebuild links (tag_overlap + cross_ref)
+```
+
+Mapping is automatic:
+- Root folder → godnode
+- First-level subfolders → fundamental
+- Deeper subfolders → specialization (child of parent folder's node)
+- Files → chunks attached to their folder's node
+
+Hidden/build directories (`__pycache__`, `node_modules`, `.venv`, etc.) are skipped.
+
+```bash
+# Via MCP tool:
+knowledge_ingest(path="/path/to/your/docs", godnode="BackEndNotes")
+# Poll progress:
+knowledge_ingest_status()
+```
+
+---
+
+## 🔧 Turso auto-provision
+
+NeuRAG **prefers Turso** for native vector SQL. If pyturso is not installed,
+NeuRAG attempts to install it automatically from bundled wheels (up to `NEURAG_TURSO_ATTEMPTS`
+times). Only after exhausting attempts does it degrade to sqlite3 — with full error logging
+visible via `knowledge_status`.
+
+```bash
+# Auto-provisioning is ON by default. To disable:
+NEURAG_REQUIRE_TURSO=0 python -m neurag.server    # skip auto-install, use sqlite3
+
+# To connect to Turso Cloud (separate DB from Neuron):
+NEURAG_TURSO_DATABASE_URL=libsql://... NEURAG_TURSO_AUTH_TOKEN=... python -m neurag.server
+```
+
+> **Important:** NeuRAG has its **own** Turso database. It must NOT share a URL with Neuron
+> (different `nodes` table schema). Use `NEURAG_TURSO_*` env vars, not `TURSO_*`.
 
 ---
 
@@ -235,12 +308,18 @@ NeuRAG resolves its storage tier automatically:
 
 ```
 neurag/
-├── server.py       # MCP server: tool handlers, Gray-Matter auto-registration
-├── db.py           # SQLite/Turso store: nodes, chunks, links, vector search
-├── chunker.py      # Adaptive chunking: AST (code), Markdown, PDF, DOCX, YAML
-├── embedder.py     # NullEmbedder (lexical) / FastEmbedEmbedder (384-dim)
+├── server.py       # MCP server: 14 tools, Gray-Matter auto-registration
+├── db.py           # KnowledgeGraph: 3-tier DB, vector search, node/chunk CRUD
+├── chunker.py      # Adaptive chunking: AST (Python), definition-aware (Kotlin/Java/TS/JS), Markdown, PDF, DOCX
+├── embedder.py     # NullEmbedder (lexical) / FastEmbedEmbedder (384-dim, shared with Neuron)
+├── reranker.py     # NullReranker (OFF) / FastEmbedReranker (cross-encoder, opt-in)
+├── ingest.py       # Auto-ingest: folder → nodes → chunks → embeddings → links (server-side)
 ├── importer.py     # Bulk YAML import
-├── models.py       # Data classes: Node, Chunk, QueryResult
+├── selfcheck.py    # Deterministic self-tests (no model download)
+├── models.py       # Data classes: Chunk, QueryResult
+├── clients.py      # MCP client registration (shared pattern with Neuron)
+├── settings.py     # Persistent config (rerank toggle, etc.)
+├── shortcut.py     # Desktop shortcut creation (cross-platform)
 └── tests/          # Test suite (24 link tests + executor/settings tests)
 ```
 
@@ -253,6 +332,7 @@ neurag/
   worker with pre-warmed model.
 - **Cross-linking** — tag-based and source-based links enrich search results with
   graph context, connecting related nodes without manual annotation.
+- **Shared embedding space** — same 384-dim model as Neuron, enabling cross-store bridges.
 
 ---
 
@@ -263,7 +343,14 @@ pip install -e ".[dev]"
 python -m pytest tests/ -q     # 24 link tests + settings/executor tests
 ```
 
-Requires **Python 3.10+**. Optional: `fastembed` for semantic search.
+**Self-check** (no install needed, deterministic — no model download):
+
+```bash
+python neurag/selfcheck.py     # embedder routing + lexical search + docx chunker
+```
+
+Requires **Python 3.10+**. Optional: `fastembed` for semantic search, `PyMuPDF` for PDF,
+`python-docx` for Word documents.
 
 ---
 
@@ -277,10 +364,15 @@ when you need different chunk sizes, embedding models, or search behavior.
 
 | Env var | Default | What it controls |
 |---|---|---|
-| `NEURAG_EMBEDDER` | `"auto"` | Embedder selection: `auto` (fastembed if installed) / `fastembed` / `null` (lexical only) |
-| `NEURAG_EMBED_MODEL` | `"sentence-transformers/all-MiniLM-L6-v2"` | FastEmbed model name (384-dim) |
-| `TURSO_DATABASE_URL` | (empty) | Remote Turso DB URL — enables cloud storage |
-| `TURSO_AUTH_TOKEN` | (empty) | Remote Turso auth token |
+| `NEURAG_EMBEDDER` | `"auto"` | Embedder: `auto` (fastembed if installed) / `fastembed` / `null` (lexical only) |
+| `NEURAG_EMBED_MODEL` | `"paraphrase-multilingual-MiniLM-L12-v2"` | FastEmbed model (384-dim, multilingual IT/EN) |
+| `NEURAG_RERANK` | `"off"` | Cross-encoder reranker: `on` / `off` |
+| `NEURAG_RERANK_MODEL` | `"Xenova/ms-marco-MiniLM-L-6-v2"` | Reranker model |
+| `NEURAG_TURSO_DATABASE_URL` | (empty) | Remote Turso DB URL (separate from Neuron!) |
+| `NEURAG_TURSO_AUTH_TOKEN` | (empty) | Remote Turso auth token (falls back to `TURSO_AUTH_TOKEN`) |
+| `NEURAG_REQUIRE_TURSO` | `"1"` | If `"0"`, skip auto-install of pyturso |
+| `NEURAG_TURSO_ATTEMPTS` | `"3"` | Auto-install attempts before sqlite3 fallback |
+| `NEURAG_TURSO_AUTOINSTALL` | `"1"` | If `"0"`, don't attempt `pip install` automatically |
 
 ### Hardcoded constants (edit in source)
 
@@ -328,8 +420,9 @@ when you need different chunk sizes, embedding models, or search behavior.
 |---|---|
 | **[INSTALL-AI.md](INSTALL-AI.md)** | Automated install + register instructions for AI agents |
 | **[DESIGN-CROSSLINKS.md](DESIGN-CROSSLINKS.md)** | Cross-linking design: schema, algorithms, API, tests |
+| **[DOCTOOLUPDATE.md](DOCTOOLUPDATE.md)** | Complete tool documentation with real code examples |
 | **[../gray_matter/README.md](../gray_matter/README.md)** | Gray Matter: MCP gateway/orchestrator |
-| **[../Neuron/README.md](../Neuron/README.md)** | Neuron: semantic memory MCP server |
+| **[../neuron/README.md](../neuron/README.md)** | Neuron: semantic memory MCP server |
 
 ---
 

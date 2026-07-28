@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import math
 import os
-import re as _re
 import re
 import sqlite3
 import struct
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -38,7 +38,7 @@ def _sanitize_credential(value: str) -> str:
     Neuron/_env.py. Il token diventa un header HTTP e lo stack rifiuta un valore
     con CR/LF/NUL dentro: un a-capo nascosto da copia-incolla, o un .env CRLF,
     faceva fallire il cloud senza spiegazione."""
-    return _re.sub(r"[\s\x00-\x1f\x7f]", "", value or "")
+    return re.sub(r"[\s\x00-\x1f\x7f]", "", value or "")
 
 
 TURSO_DATABASE_URL = _sanitize_credential(os.environ.get("NEURAG_TURSO_DATABASE_URL", ""))
@@ -59,6 +59,51 @@ if REMOTE_TURSO:
         REMOTE_TURSO = False
 
 _REMOTE_NOOP_PRAGMAS = ("journal_mode", "synchronous", "foreign_keys")
+_WRITE_PREFIXES = ("insert", "update", "delete", "replace", "create", "alter", "drop")
+
+
+def _is_write_sql(sql: str) -> bool:
+    head = sql.lstrip()
+    if not head:
+        return False
+    return head.split(None, 1)[0].lower() in _WRITE_PREFIXES
+
+
+def _with_retry(fn, *, attempts: int = 4, base_delay: float = 0.4,
+                on_retry=None):
+    """Run *fn* with exponential backoff on transient remote failures (P5).
+
+    Only wraps atomic units (client creation, single batch) so a retry can
+    never double-apply a partially-written save. *on_retry* (T76) recreates
+    a dead client between attempts — without it a dropped WebSocket session
+    made every retry fail on the same corpse."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if i == attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** i))
+            if on_retry is not None:
+                try:
+                    on_retry()
+                except Exception:
+                    pass
+    raise last  # pragma: no cover
+
+
+def _url_candidates(url: str) -> list[str]:
+    """Connection URLs to try, in order (T76). WebSocket schemes keep a
+    long-lived socket that some proxies silently drop; the https:// form
+    is stateless per request. Try the user's URL first, then its HTTP twin."""
+    out = [url]
+    for prefix in ("libsql://", "wss://", "ws://"):
+        if url.startswith(prefix):
+            out.append("https://" + url[len(prefix):])
+            break
+    return out
 
 
 class _RemoteCursor:
@@ -90,21 +135,41 @@ class _RemoteCursor:
 class RemoteTursoConnection:
     """sqlite3-compatible facade over a remote Turso (libSQL cloud) database.
 
-    Per-statement autocommit; bulk writes go through executemany -> batch. Rows
-    come back as _CompatRow so NeuRAG's ``row['col']`` access works unchanged.
+    Retry + URL fallback + transaction support, matching Neuron's
+    RemoteTursoConnection pattern (keep-in-sync). Rows come back as
+    _CompatRow so NeuRAG's ``row['col']`` access works unchanged.
     """
 
     def __init__(self, url: str, auth_token: str):
         self.row_factory = None  # accepted for API parity; rows already named
-        self._client = _libsql.create_client_sync(url=self._http(url), auth_token=auth_token)
+        self._auth_token = auth_token
+        self._urls = _url_candidates(url)
+        self._url_idx = 0
+        self._client = self._create_client()
+        self._tx: list | None = None  # buffered Statements while a tx is open
 
-    @staticmethod
-    def _http(url: str) -> str:
-        # libsql_client's sync client wants an https:// endpoint; normalise the
-        # common libsql:// (WebSocket) URL to its https twin.
-        if url.startswith("libsql://"):
-            return "https://" + url[len("libsql://"):]
-        return url
+    def _create_client(self):
+        """Create the libsql client, falling back across URL transports."""
+        last: Exception | None = None
+        for i in range(self._url_idx, len(self._urls)):
+            try:
+                client = _with_retry(
+                    lambda u=self._urls[i]: _libsql.create_client_sync(
+                        url=u, auth_token=self._auth_token),
+                    attempts=2)
+                self._url_idx = i
+                return client
+            except Exception as e:
+                last = e
+        raise last
+
+    def _reconnect(self) -> None:
+        """Drop dead client and build fresh (T76)."""
+        try:
+            self._client.close()
+        except Exception:
+            pass
+        self._client = self._create_client()
 
     @staticmethod
     def _is_noop_pragma(sql: str) -> bool:
@@ -113,16 +178,40 @@ class RemoteTursoConnection:
                 and any(p in s for p in _REMOTE_NOOP_PRAGMAS)
                 and "table_info" not in s)
 
+    # -- transaction control ------------------------------------------------
+    def begin(self) -> None:
+        self._tx = []
+
+    def rollback(self) -> None:
+        self._tx = None
+
+    def commit(self) -> None:
+        if self._tx is None:
+            return
+        stmts, self._tx = self._tx, None
+        if stmts:
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
+
+    # -- statement execution ------------------------------------------------
     def execute(self, sql: str, params=()):
         if self._is_noop_pragma(sql):
             return _RemoteCursor(None)
-        res = self._client.execute(sql, list(params) if params else None)
-        return _RemoteCursor(res)
+        if self._tx is not None and _is_write_sql(sql):
+            self._tx.append(_libsql.Statement(sql, list(params) if params else None))
+            return _RemoteCursor(None)
+        return _with_retry(
+            lambda: _RemoteCursor(self._client.execute(sql, list(params) if params else None)),
+            on_retry=self._reconnect)
 
     def executemany(self, sql: str, seq_of_params):
         stmts = [_libsql.Statement(sql, list(p)) for p in seq_of_params]
+        if self._tx is not None:
+            self._tx.extend(stmts)
+            return _RemoteCursor(None)
         if stmts:
-            self._client.batch(stmts)   # one atomic batch
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
         return _RemoteCursor(None)
 
     def executescript(self, script: str):
@@ -131,11 +220,11 @@ class RemoteTursoConnection:
             if s:
                 self.execute(s)
 
-    def commit(self):
-        pass  # remote is autocommit / batch-committed
-
     def close(self):
-        self._client.close()
+        try:
+            self._client.close()
+        except Exception:
+            pass
 
 
 def _ensure_parent_dir(path: str) -> None:

@@ -26,3 +26,16 @@ def _purge_fake_modules() -> None:
 def _clean_mockdeps_pollution():
     _purge_fake_modules()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_conn_cache():
+    """Clear the module-level connection cache between tests.
+
+    _turso_conn_cache is process-global and keyed by path string. Tests using
+    ':memory:' share the same key, so without clearing the cache, later tests
+    reuse the connection (and data) from earlier tests.
+    """
+    yield
+    from neurag import db as neurag_db
+    neurag_db._turso_conn_cache.clear()
