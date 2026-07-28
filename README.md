@@ -20,7 +20,7 @@ bridges, and serendipitous flash recall.
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-1.0.0-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-1.1.2-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -116,30 +116,43 @@ Idle bridges decay. This means the two memories learn to cooperate over time.
 
 ## 🚀 Quickstart
 
-### Install
+### Option A — One-click installer (recommended)
 
-**Click and go** — this repo bundles Neuron + NeuRAG, the zip is
-self-contained. Double-click **`install.cmd`** (Windows) or
-**`install.command`** (macOS/Linux): Python bootstrapped if missing, one
-venv, gateway registered, hooks deployed, GUI shortcut on the Desktop.
+This repo bundles Neuron + NeuRAG. Double-click the installer — Python is
+bootstrapped if missing, one venv is created, the gateway is registered in your
+MCP clients, hooks are deployed, and a **Gray Matter GUI** shortcut appears on
+the Desktop.
+
+| Platform | Action |
+|---|---|
+| **Windows** | Double-click **`install.cmd`** (or `.\install.ps1` from a terminal) |
+| **macOS** | Double-click **`install.command`** (or `sh install.sh` from a terminal) |
+| **Linux** | `sh install.sh` from a terminal |
+
+No Python? The installer bootstraps it (winget on Windows, brew/apt on Linux/macOS).
+Pre-built `pyturso` wheels are bundled — no C/Rust compiler needed.
+
+### Option B — pip (source checkout)
 
 ```bash
-# terminal / dev alternative:
-pip install -e .
-gray-matter install --dry-run   # preview: reap orphans, register gateway, deploy hooks
+git clone https://github.com/recla93/Neuron.git
+cd Neuron/gray_matter
+pip install -e ".[dev]"             # editable install with test deps
+pip install -e ".[cloud,rag,gui]"   # optional: Turso, NeuRAG, web GUI
+```
+
+### Register and verify
+
+```bash
+gray-matter install --dry-run   # preview: what would be registered
 gray-matter install             # idempotent, .bak backups, manifest
+gray-matter doctor              # health snapshot: servers, workers, cache, bridges
+gray-matter status              # registered servers with tool lists
+gray-matter stats               # cache hit rate, flashes, bridges, latency
 ```
 
 This registers **only** `gray-matter` in your MCP clients (evicts standalone Neuron/NeuRAG
 entries) and deploys per-client hooks.
-
-### Verify
-
-```bash
-gray-matter doctor     # health snapshot: servers, workers, cache, bridges
-gray-matter status     # registered servers with tool lists
-gray-matter stats      # cache hit rate, flashes, bridges, latency
-```
 
 ### Use
 
@@ -200,26 +213,64 @@ All NeuRAG tools are republished with their original schemas:
 
 ## ⌨️ CLI reference
 
+### Lifecycle
+
 | Command | Description |
 |---|---|
 | `gray-matter install [--dry-run]` | Idempotent gateway install: reap orphans, register GM, deploy hooks |
 | `gray-matter uninstall [--purge-data] [--yes] [--dry-run]` | Remove GM (interactive on memory) |
+| `gray-matter repair` | Clean reinstall: choose what to delete, what to keep |
 | `gray-matter start` | Start the GM daemon |
 | `gray-matter stop` | Stop the GM daemon |
+
+### Diagnostics
+
+| Command | Description |
+|---|---|
 | `gray-matter ping` | Check if GM is running |
 | `gray-matter status` | Show registered servers with tool lists |
 | `gray-matter doctor` | Health snapshot: servers, workers, cache, bridges |
 | `gray-matter stats` | Orchestrator counters: cache hit rate, flashes, latency |
-| `gray-matter bridges` | List persisted cross-store bridges |
+| `gray-matter logs` | Show daemon log (last N lines) |
+
+### Client management
+
+| Command | Description |
+|---|---|
+| `gray-matter register [--gateway]` | Register the gateway in MCP clients |
+| `gray-matter deregister <tool>` | Release a tool from the gateway (standalone mode) |
+| `gray-matter link <tool>` | Re-attach a standalone tool to the gateway |
+
+### Knowledge & bridges
+
+| Command | Description |
+|---|---|
 | `gray-matter knowledge status` | NeuRAG knowledge base status (nodes, chunks, links) |
 | `gray-matter knowledge rebuild-links` | Rebuild cross-links (tag_overlap + cross_ref) |
 | `gray-matter knowledge link-graph` | Show the cross-link graph |
+| `gray-matter bridges` | List persisted cross-store bridges |
+| `gray-matter bridges-transfer` | Move bridges between local and cloud |
+| `gray-matter bridge` | Expose the suite over HTTP for remote connectors |
+
+### Configuration
+
+| Command | Description |
+|---|---|
+| `gray-matter config list` | Show all tunable knobs |
+| `gray-matter config set <key> <value>` | Set a knob |
+| `gray-matter config get <key>` | Get a knob value |
+| `gray-matter cloud` | Connect to Turso Cloud (interactive) |
+| `gray-matter mode <collaborate\|separate>` | Set all servers to collaborate or separate |
 | `gray-matter isolate <name>` | Exclude a server from the combined pulse |
 | `gray-matter collaborate <name>` | Put a server back into the combined pulse |
-| `gray-matter mode <collaborate\|separate>` | Set all servers to collaborate or separate |
-| `gray-matter config <get\|set\|list>` | Get/set tunable knobs |
+
+### Interface
+
+| Command | Description |
+|---|---|
 | `gray-matter gui [--classic]` | Open the web control center |
-| `gray-matter register [--gateway]` | Register servers in MCP clients |
+| `gray-matter gm-neuron <tool> <args>` | Call a Neuron tool via the gateway (testing) |
+| `gray-matter gm-neurag <tool> <args>` | Call a NeuRAG tool via the gateway (testing) |
 
 ---
 
@@ -237,9 +288,14 @@ gray_matter/
 ├── uninstaller.py     # Pure uninstall plan (no side effects)
 ├── clients.py         # MCP client config detection + registration
 ├── settings.py        # Tunable knobs (flash rate, cache TTL, prewarm, ...)
-├── cli.py             # CLI entry point (argparse)
-├── webgui.py          # Web-based control center
+├── catalog.py         # GUI command catalog (introspects argparse, no hardcoded lists)
+├── gme.py             # Tool registry (GME): multi-venv discovery, health tracking
+├── shortcut.py        # Desktop shortcut creation (cross-platform: .lnk/.command/.desktop)
+├── cli.py             # CLI entry point (24+ commands, argparse)
+├── webgui.py          # Web-based control center (pywebview)
 ├── gui.py             # Legacy Tkinter control center
+├── bridge.py          # HTTP bridge for remote connectors (ChatGPT, Perplexity)
+├── _env.py            # Credential sanitization (shared with Neuron/NeuRAG)
 └── tests/             # Test suite (34 tests)
 ```
 
@@ -249,6 +305,10 @@ gray_matter/
 - **stdio instances** survive without a listener — the managed workers don't need the port.
 - **Gateway model**: clients see only `gray-matter`; GM self-bootstraps Neuron and NeuRAG
   as internal workers. `gray-matter register --gateway` evicts standalone entries.
+- **Catalog SSOT**: the GUI reads commands from each tool's argparse — new subcommands
+  appear automatically without touching the GUI code.
+- **GME registry**: each tool writes a JSON file after install; the GUI reads these to find
+  the correct Python for each tool (multi-venv support).
 
 ---
 
@@ -313,9 +373,9 @@ These are not yet exposed via config. Change them in `server.py` / `bridges.py` 
 
 | Doc | What's in it |
 |---|---|
-| **[INSTALL-AI.md](../INSTALL-AI.md)** | Automated install + register instructions for AI agents |
-| **[INSTALLER-UX.md](../INSTALLER-UX.md)** | Full installer/uninstaller spec (SSOT) |
-| **[../Neuron/README.md](../Neuron/README.md)** | Neuron: semantic memory MCP server |
+| **[INSTALL-AI.md](INSTALL-AI.md)** | Automated install + register instructions for AI agents |
+| **[DOCTOOLUPDATE.md](DOCTOOLUPDATE.md)** | Complete tool documentation with real code examples |
+| **[../neuron/README.md](../neuron/README.md)** | Neuron: semantic memory MCP server |
 | **[../neurag/README.md](../neurag/README.md)** | NeuRAG: hierarchical knowledge base MCP server |
 
 ---

@@ -30,6 +30,14 @@ _FRESH_TTL = float(os.environ.get("GM_WORKER_FRESH_TTL", "5"))
 
 
 def main() -> None:
+    # Il worker tiene aperto lo store: se resta indietro quando il daemon muore,
+    # è un writer di troppo sullo stesso DB. Si registra da solo perché il PID
+    # che vede lo spawner è quello del redirector del venv, non il suo.
+    try:
+        from gray_matter import pids as _pids
+        _pids.record_self(f"worker:{sys.argv[1].split('.')[0]}")
+    except Exception:  # noqa: BLE001 — il registro non deve mai bloccare il worker
+        pass
     mod = importlib.import_module(sys.argv[1])   # e.g. "neuron.server"
     app = mod.app
     reg = getattr(mod, "_g", None)               # graph registry (Neuron); NeuRAG has none
@@ -53,14 +61,9 @@ def main() -> None:
                 sys.stdout.write(json.dumps({"ok": True, "tools": tools}) + "\n")
                 sys.stdout.flush()
                 continue
-            now = time.monotonic()
-            if (reg is not None and hasattr(reg, "_graphs")
-                    and now - last_clear >= _FRESH_TTL):
-                try:
-                    reg._graphs.clear()          # freshness: re-read DB, keep model warm
-                    last_clear = now
-                except Exception:
-                    pass
+            # ponytail: removed reg._graphs.clear() — it caused L2 race condition
+            # (multiple workers clearing + reloading the same DB simultaneously).
+            # The Graph reads from SQLite on every query; no in-memory cache to stale.
             _t0 = time.monotonic()
             handler = app.request_handlers[_mcp_types.CallToolRequest]
             mcp_req = _mcp_types.CallToolRequest(

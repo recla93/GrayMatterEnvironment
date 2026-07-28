@@ -1,14 +1,10 @@
 """Icona desktop per il control center — cross-OS, best-effort, idempotente.
 
-SSOT del launcher: la logica vive QUI (gray_matter possiede la GUI), non duplicata
-negli installer dei singoli tool. `neuron gui` / `neurag gui` chiamano
-:func:`ensure_desktop_shortcut` DOPO che ``gray_matter.webgui`` è importabile —
-quindi un tool installato da solo ottiene comunque la sua icona, e l'icona
-(pythonw, nessuna console) non deve mai bootstrappare GM: quando viene creata GM
-è già presente. Scalabile: un tool nuovo = una riga.
+Copia tool-local (keep-in-sync con neuron/shortcut.py e neurag/shortcut.py):
+serve a Gray Matter, che è il tool principale. L'icona punta a `gray-matter gui`.
 
-Non solleva mai: un fallimento non deve impedire l'apertura della GUI. Idempotente
-via un marker nel venv, così non rispawna PowerShell a ogni avvio della GUI.
+Se il marker esiste ma il file .lnk/.desktop è stato cancellato, ricrea l'icona.
+Non solleva mai: un fallimento non deve impedire l'apertura della GUI.
 """
 from __future__ import annotations
 
@@ -23,11 +19,13 @@ _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 def ensure_desktop_shortcut(tool: str, label: str, module_args: "list[str]",
                             description: str = "") -> bool:
     """Crea (una volta per installazione) un'icona desktop che apre ``<python>
-    module_args`` (es. ``-m neuron gui``). `tool` è la chiave per il marker.
+    module_args`` (es. ``-m gray_matter.cli gui``). `tool` è la chiave per il marker.
+    Se il marker esiste ma il file .lnk/.desktop è stato cancellato, ricrea.
     Ritorna True se l'icona c'è o è stata creata; False (silenzioso) altrimenti."""
     try:
         marker = Path(sys.executable).with_name(f".{tool}-gui-shortcut")
-        if marker.exists():
+        shortcut_exists = _shortcut_file_exists(label)
+        if marker.exists() and shortcut_exists:
             return True
         ok = (_windows_lnk(label, module_args, description) if os.name == "nt"
               else _mac_command(label, module_args) if sys.platform == "darwin"
@@ -42,23 +40,31 @@ def ensure_desktop_shortcut(tool: str, label: str, module_args: "list[str]",
         return False
 
 
+def _shortcut_file_exists(label: str) -> bool:
+    """Check if the shortcut file actually exists on disk (not just the marker)."""
+    if os.name == "nt":
+        desk = os.environ.get("USERPROFILE", "") + "\\Desktop"
+        return os.path.isfile(os.path.join(desk, f"{label}.lnk"))
+    elif sys.platform == "darwin":
+        return (Path.home() / "Desktop" / f"{label}.command").is_file()
+    else:
+        return ((Path.home() / ".local" / "share" / "applications"
+                / f"{label.lower().replace(' ', '-')}.desktop").is_file()
+                or (Path.home() / "Desktop" / f"{label}.desktop").is_file())
+
+
 def _windows_lnk(label: str, module_args: "list[str]", description: str) -> bool:
     """.lnk vero via WScript.Shell (stesso approccio dell'installer GM). Target
     pythonw = nessun flash di console. Desktop via GetFolderPath (gestisce
-    OneDrive redirect). Usa gray-matter.ico se disponibile come icona."""
+    OneDrive redirect). If gray-matter.ico exists, it's used as the icon."""
     pyw = Path(sys.executable).with_name("pythonw.exe")
     target = str(pyw if pyw.exists() else Path(sys.executable))
     args = " ".join(module_args)
     workdir = str(Path(sys.executable).parent)
-    # Find the bundled .ico for the shortcut icon
-    ico = ""
-    try:
-        from gray_matter import __file__ as _gm_init
-        _ico_path = Path(_gm_init).parent / "assets" / "gray-matter.ico"
-        if _ico_path.is_file():
-            ico = str(_ico_path)
-    except Exception:  # noqa: BLE001
-        pass
+
+    # Resolve icon: prefer bundled gray-matter.ico, fallback to interpreter icon
+    icon_path = _resolve_icon()
+
     ps = (
         "$d=[Environment]::GetFolderPath('Desktop'); if(-not $d){exit 1}\n"
         "$ws=New-Object -ComObject WScript.Shell\n"
@@ -67,13 +73,33 @@ def _windows_lnk(label: str, module_args: "list[str]", description: str) -> bool
         f"$sc.Arguments='{args}'\n"
         f"$sc.WorkingDirectory='{workdir}'\n"
         f"$sc.Description='{description}'\n"
-        + (f"$sc.IconLocation='{ico}'\n" if ico else "")
-        + "$sc.Save()\n"
     )
+    if icon_path:
+        ps += f"$sc.IconLocation='{icon_path}'\n"
+    ps += "$sc.Save()\n"
     r = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
         capture_output=True, timeout=25, creationflags=_CREATE_NO_WINDOW)
     return r.returncode == 0
+
+
+def _resolve_icon() -> str:
+    """Find gray-matter.ico: look in the package assets dir, return path if found."""
+    try:
+        import gray_matter
+        ico = Path(gray_matter.__file__).parent / "assets" / "gray-matter.ico"
+        if ico.is_file():
+            # Copy to a persistent location out of the user's way
+            app_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "graymatter"
+            app_dir.mkdir(parents=True, exist_ok=True)
+            dest = app_dir / "gray-matter.ico"
+            if not dest.exists():
+                import shutil
+                shutil.copy2(str(ico), str(dest))
+            return str(dest)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
 def _linux_desktop(label: str, module_args: "list[str]", description: str) -> bool:

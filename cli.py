@@ -72,6 +72,25 @@ def port_is_free(host: str, port: int) -> bool:
         s.close()
 
 
+def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Read exactly n bytes from sock, or return b'' on short/failed read.
+
+    recv() returns whatever has ARRIVED, not what was asked for: any response
+    bigger than one TCP segment (~1.4 KB — `status` with the full tool lists,
+    `bridges`, `logs`, every gm-neuron/gm-neurag result) came back truncated
+    and json.loads blew up with a raw traceback. `server.py` grew this loop
+    when the IPC framing was fixed; the CLI side kept the single-recv version.
+    Now there is one copy, here (the IPC SSOT), and server.py imports it.
+    """
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            return b""
+        buf += chunk
+    return buf
+
+
 def gm_answers(host: str, port: int, timeout: float = 0.4) -> bool:
     """True se su (host, port) risponde un Gray-Matter (probe `ping`)."""
     try:
@@ -80,32 +99,47 @@ def gm_answers(host: str, port: int, timeout: float = 0.4) -> bool:
             s.settimeout(timeout)
             s.connect((host, port))
             s.sendall(struct.pack("!I", len(payload)) + payload)
-            hdr = s.recv(4)
+            hdr = _recv_exact(s, 4)
             if not hdr:
                 return False
             (n,) = struct.unpack("!I", hdr)
-            resp = json.loads(s.recv(n).decode("utf-8"))
+            resp = json.loads(_recv_exact(s, n).decode("utf-8"))
             return bool(resp.get("gm"))
     except Exception:  # noqa: BLE001 — refused/timeout/garbage = non è GM
         return False
 
 
-def _send_ipc(data: dict) -> dict:
+# Le risposte a `status`/`bridges`/`logs` sono immediate; una chiamata a un tool
+# (gm-neuron/gm-neurag) passa dal worker e, col modello di embedding freddo,
+# paga i 3-5s del primo caricamento — con il vecchio timeout fisso a 3s il primo
+# gm-neuron falliva SEMPRE con "timed out".
+IPC_TIMEOUT = 3.0
+IPC_TOOL_TIMEOUT = 60.0
+
+
+def _send_ipc(data: dict, timeout: float = IPC_TIMEOUT) -> dict:
+    """Send a JSON IPC message to the local Gray-Matter process."""
     payload = json.dumps(data).encode("utf-8")
     length = struct.pack("!I", len(payload))
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(3.0)
+            s.settimeout(timeout)
             s.connect((GRAY_MATTER_HOST, resolve_port()))
             s.sendall(length + payload)
-            resp_len_bytes = s.recv(4)
-            if not resp_len_bytes:
+            hdr = _recv_exact(s, 4)
+            if not hdr:
                 return {"error": "no response"}
-            resp_len = struct.unpack("!I", resp_len_bytes)[0]
-            resp_data = s.recv(resp_len)
+            resp_len = struct.unpack("!I", hdr)[0]
+            if resp_len <= 0 or resp_len > 1_000_000:
+                return {"error": "invalid response length"}
+            resp_data = _recv_exact(s, resp_len)
+            if not resp_data:
+                return {"error": "incomplete response"}
             return json.loads(resp_data.decode("utf-8"))
     except (ConnectionRefusedError, TimeoutError, OSError) as e:
         return {"error": str(e)}
+    except (struct.error, UnicodeDecodeError, json.JSONDecodeError) as e:
+        return {"error": f"malformed response: {e}"}
 
 
 def cmd_status() -> None:
@@ -162,6 +196,74 @@ def cmd_doctor() -> None:
     if r.get("neurag_engine") == "sqlite":
         print("  [!!] NeuRAG vector tier DEGRADED (sqlite3, Python cosine) — "
               "full tier: pip install neurag[turso]  (wheels in Neuron/vendor)")
+    _report_processes()
+
+
+def _report_processes() -> None:
+    """Processi della suite ancora vivi, e quali hanno perso il genitore.
+
+    Era il buco di INSTALLER-UX §7: il registro dei PID non veniva scritto da
+    nessuno, quindi `doctor` non poteva accorgersi di niente e i server
+    restavano indietro a ogni riavvio di un client — più writer sullo stesso
+    store, che è esattamente il rischio di clobber di L1/L2.
+    """
+    try:
+        from gray_matter import pids as _pids
+        live, orphans = _pids.tracked(), _pids.orphans()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  processes: registry unreadable ({exc})")
+        return
+    if not live:
+        print("  processes: none tracked")
+        return
+    roles: dict = {}
+    for e in live:
+        roles[e.get("role", "?")] = roles.get(e.get("role", "?"), 0) + 1
+    print("  processes: " + ", ".join(f"{n}x {r}" for r, n in sorted(roles.items())))
+    if orphans:
+        print(f"  [!!] {len(orphans)} orphan(s) — the process that launched them "
+              "is gone, but they still hold the store:")
+        for e in orphans:
+            print(f"       pid {e['pid']} ({e.get('role', '?')})")
+        print("       clean them up with:  gray-matter reap")
+
+
+def cmd_reap(dry_run: bool = False, all_procs: bool = False) -> None:
+    """Termina i processi della suite rimasti indietro.
+
+    Default: SOLO gli orfani, cioè quelli il cui genitore non esiste più. I
+    server che stanno servendo un client AI vivo non si toccano — è la
+    differenza fra una pulizia e un piede nella porta. `--all` li prende tutti
+    (ma non se stessi), per quando si vuole davvero ripartire da zero.
+    """
+    import subprocess          # locale come altrove in questo modulo
+    from gray_matter import pids as _pids
+    targets = _pids.tracked() if all_procs else _pids.orphans()
+    targets = [e for e in targets if e["pid"] != os.getpid()]
+    if not targets:
+        print("Nothing to reap: no orphan processes." if not all_procs
+              else "Nothing to reap: no tracked processes.")
+        return
+    for e in targets:
+        label = f"pid {e['pid']} ({e.get('role', '?')})"
+        if dry_run:
+            print(f"  [dry-run] would terminate {label}")
+            continue
+        try:
+            if os.name == "nt":
+                # /T: anche l'albero — il redirector del venv e il processo
+                # vero sono due PID, e uccidere solo il padre lascia in giro
+                # proprio quello che tiene aperto il DB.
+                subprocess.run(["taskkill", "/PID", str(e["pid"]), "/T", "/F"],
+                               capture_output=True, timeout=15,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                os.kill(e["pid"], signal.SIGTERM)
+            _pids.forget(e["pid"])
+            print(f"  terminated {label}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [!] could not terminate {label}: {exc}")
+    print(f"Reaped {len(targets)} process(es).")
 
 
 def _knob_dict(k, cfg, settings) -> dict:
@@ -212,7 +314,6 @@ def cmd_config(action: str, key: str = "", value=None,
 
 
 def cmd_stop() -> None:
-    import json
     result = _send_ipc({"action": "shutdown"})
     if "error" in result:
         print(f"Gray-Matter not running ({result['error']}).")
@@ -315,7 +416,7 @@ def cmd_deregister(tool: str) -> None:
             print("  " + ln)
         for ln in clients.release_tool(t):
             print("  " + ln)
-    print("Done. Riavvia le app AI. Ritorno al gateway: gray-matter register --gateway")
+    print("Done. Restart your AI apps. Back to the gateway: gray-matter register --gateway")
 
 
 # Slug delle entry MCP DIRETTE per tool (da togliere quando torna sotto gateway).
@@ -341,7 +442,7 @@ def cmd_link(tools: "list[str] | None" = None, list_only: bool = False,
         if as_json:
             print(json.dumps({"tools": items}))
             return
-        print("Stato gateway dei tool:")
+        print("Gateway status per tool:")
         for it in items:
             st = ("non installato" if not it["installed"]
                   else "STANDALONE — ricollegabile" if it["standalone"]
@@ -372,14 +473,14 @@ def cmd_link(tools: "list[str] | None" = None, list_only: bool = False,
     prefix = "[dry-run] " if dry_run else ""
     if not linked:
         detail = "; ".join(f"{s['tool']}: {s['reason']}" for s in skipped)
-        print(f"{prefix}Nessun tool ricollegato{(' (' + detail + ')') if detail else ''}.")
+        print(f"{prefix}No tool re-linked{(' (' + detail + ')') if detail else ''}.")
         return
-    print(f"{prefix}Ricollegati al gateway: {', '.join(linked)}")
+    print(f"{prefix}Re-linked to the gateway: {', '.join(linked)}")
     for r in reg + dereg:
         mark = "OK" if r.get("ok") else ("--" if r.get("action") == "skipped" else "!!")
         print(f"  [{mark}] {r.get('client')}: {r.get('action')}")
     if not dry_run:
-        print("Fatto. Riavvia le app AI (il daemon riprende i worker gestiti).")
+        print("Done. Restart your AI apps (the daemon picks the managed workers back up).")
 
 
 def _print_results(results: list) -> None:
@@ -454,7 +555,7 @@ def cmd_uninstall(purge_data: bool = False, yes: bool = False,
             print(json.dumps(_uninstall_targets()))
         else:
             t = _uninstall_targets()
-            print("Superfici rimovibili:")
+            print("Removable surfaces:")
             for x in t["targets"] + t["data"]:
                 print(f"  {'•' if x['exists'] else '·'} {x.get('label') or x.get('name')}"
                       f"  [{x['path']}]")
@@ -494,22 +595,22 @@ def cmd_repair(wipe: "list[str] | None" = None, dry_run: bool = False,
             print(f"  {mark} {t['key']:14} {t['label']}  [{t['path']}]"
                   f"{'' if t['exists'] else '  (assente)'}")
         print("\nUso: gray-matter repair <chiave> [<chiave> ...] [--dry-run]")
-        print("Poi reinstalla il codice forzato:  install.ps1 -Force  (o install.sh --force)")
+        print("Then force-reinstall the code:  install.ps1 -Force  (or install.sh --force)")
         return
     print(("[dry-run] " if dry_run else "") + "Repair — pulizia selettiva...")
     _print_results(executor.execute_repair(wipe, dry_run=dry_run))
     if reinstall and not dry_run:
         script = _paths.installer_script()
         if script is None:
-            print("\n[!] installer non registrato: reinstalla a mano (install.ps1 -Force).")
+            print("\n[!] installer not recorded: reinstall it by hand (install.ps1 -Force).")
             return
         argv = (["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Force"]
                 if str(script).endswith(".ps1") else ["bash", str(script), "--force"])
-        print(f"\nReinstall forzato suite: {' '.join(argv)}")
+        print(f"\nForce-reinstalling the suite: {' '.join(argv)}")
         import subprocess
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         sys.exit(subprocess.call(argv, creationflags=flags))
-    print("\nOra reinstalla il codice (bypassa il check versione):")
+    print("\nNow reinstall the code (bypasses the version check):")
     print("  Windows:  powershell -ExecutionPolicy Bypass -File install.ps1 -Force")
     print("  mac/Linux: ./install.sh --force")
 
@@ -520,7 +621,7 @@ def cmd_record_env(root: str = "", gm: str = "", neurag: str = "", neuron: str =
     from gray_matter import paths
     src = gm or (str(Path(root) / "gray_matter") if root else "")
     paths.record_self(source=src or None)
-    print(f"GM source registrato in {paths.env_file()}: {paths.source_dir('gray-matter')}")
+    print(f"GM source recorded in {paths.env_file()}: {paths.source_dir('gray-matter')}")
     disc = paths.discover_sources()
     if disc:
         print("Sorgenti scoperti:")
@@ -555,7 +656,7 @@ def cmd_cloud(subcmd: str, group: str, components: str, env_file: str,
                 consent = ans not in ("n", "no")
             if consent:
                 if cloud.install_cli():
-                    print("[ok] turso CLI installata — ora `turso auth login`, poi ri-esegui il setup.")
+                    print("[ok] turso CLI installed - now run `turso auth login`, then re-run setup.")
                     return
                 print("[!!] install CLI fallita — guida manuale:")
                 for ln in cloud.CLI_GUIDE:
@@ -587,7 +688,7 @@ def cmd_logs(follow: bool = False, lines: int = 50) -> None:
     from gray_matter.server import daemon_log_path
     p = daemon_log_path()
     if not p.exists():
-        print(f"Nessun log ancora ({p}). Il file nasce al prossimo `gray-matter start`.")
+        print(f"No logs yet ({p}). The file is created on the next `gray-matter start`.")
         return
     with open(p, encoding="utf-8", errors="replace") as f:
         tail = f.readlines()[-lines:]
@@ -595,7 +696,7 @@ def cmd_logs(follow: bool = False, lines: int = 50) -> None:
             print(ln.rstrip("\n"))
         if not follow:
             return
-        print(f"--- following {p} (Ctrl-C per uscire) ---")
+        print(f"--- following {p} (Ctrl-C to quit) ---")
         try:
             while True:
                 line = f.readline()
@@ -662,12 +763,12 @@ def _ensure_daemon() -> bool:
     from gray_matter.server import _spawn_gray_matter, _is_gray_matter_running
     if _is_gray_matter_running():
         return True
-    print("[i] Gray-Matter non è in esecuzione: lo avvio...")
+    print("[i] Gray-Matter is not running: starting it...")
     _spawn_gray_matter()
     for _ in range(30):          # ~3s: bind di :9876 a freddo
         time.sleep(0.1)
         if _is_gray_matter_running():
-            print("[i] daemon avviato.")
+            print("[i] daemon started.")
             return True
     return False
 
@@ -677,14 +778,15 @@ def _cmd_gm_tool(action: str, tool: str, args_json: str) -> None:
     try:
         tool_args = json.loads(args_json) if args_json.strip() else {}
     except json.JSONDecodeError as e:
-        print(f'[!] argomenti non validi: devono essere JSON, es. {{"topic": "caffe"}} — {e}')
+        print(f'[!] invalid arguments: they must be JSON, e.g. {{"topic": "coffee"}} - {e}')
         sys.exit(1)
     if not _ensure_daemon():
-        print("[!] non riesco ad avviare il daemon: prova 'gray-matter start' e guarda 'logs'.")
+        print("[!] cannot start the daemon: try 'gray-matter start', then check 'logs'.")
         sys.exit(1)
-    r = _send_ipc({"action": action, "tool": tool, "args": tool_args})
+    r = _send_ipc({"action": action, "tool": tool, "args": tool_args},
+                  timeout=IPC_TOOL_TIMEOUT)
     if "error" in r:
-        print(f"[{action}] {tool} -> errore: {r['error']}")
+        print(f"[{action}] {tool} -> error: {r['error']}")
         sys.exit(1)
     if "result" in r:
         result = r["result"].strip() if isinstance(r["result"], str) else str(r["result"])
@@ -709,6 +811,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start", help="Start Gray-Matter daemon")
     sub.add_parser("stop", help="Stop Gray-Matter daemon")
     sub.add_parser("ping", help="Check if Gray-Matter is running")
+    reap_p = sub.add_parser("reap",
+        help="Terminate suite processes left behind (orphans by default)")
+    reap_p.add_argument("--all", dest="reap_all", action="store_true",
+                        help="terminate every tracked process, not just orphans")
+    reap_p.add_argument("--dry-run", action="store_true",
+                        help="Show what would be terminated, kill nothing")
 
     iso = sub.add_parser("isolate", help="Exclude a server from the combined pulse (still callable directly)")
     iso.add_argument("name", help="Server name (neuron|neurag)")
@@ -723,19 +831,19 @@ def build_parser() -> argparse.ArgumentParser:
     reg_p.add_argument("--gateway", action="store_true",
                        help="Proxy model: register ONLY gray-matter, remove neuron/neurag from clients")
     der_p = sub.add_parser("deregister",
-                           help="Toglie un tool dal gateway e lo registra come MCP diretto nei client (go-standalone)")
+                           help="Take a tool off the gateway and register it directly in your clients (go-standalone)")
     der_p.add_argument("--tool", choices=["neuron", "neurag", "all"], default="all",
-                       help="quale tool far uscire dal gateway (default: all)")
+                       help="which tool to take off the gateway (default: all)")
     lnk_p = sub.add_parser("link",
-                           help="Ri-aggancia al gateway i tool andati standalone (inverso di deregister)")
+                           help="Re-attach standalone tools to the gateway (the inverse of deregister)")
     lnk_p.add_argument("tools", nargs="*", default=[],
-                       help="quali tool ricollegare (neuron, neurag) — vuoto = tutti gli standalone")
+                       help="which tools to re-link (neuron, neurag) - empty = every standalone one")
     lnk_p.add_argument("--list", action="store_true", dest="list_only",
-                       help="mostra lo stato gateway di ogni tool, non ricollega")
+                       help="show each tool's gateway status, re-link nothing")
     lnk_p.add_argument("--json", action="store_true",
-                       help="Output JSON (usato dal control center)")
+                       help="JSON output (used by the control center)")
     lnk_p.add_argument("--dry-run", action="store_true",
-                       help="Mostra cosa farebbe senza modificare nulla")
+                       help="Show what would happen without changing anything")
     ins_p = sub.add_parser("install", help="Idempotent gateway install (reap, register GM, deploy hooks, manifest)")
     ins_p.add_argument("--dry-run", action="store_true", help="Show actions without doing them")
     uni_p = sub.add_parser("uninstall", help="Remove GM (interactive on the memory)")
@@ -743,25 +851,25 @@ def build_parser() -> argparse.ArgumentParser:
     uni_p.add_argument("--yes", action="store_true", help="Answer yes to every prompt")
     uni_p.add_argument("--dry-run", action="store_true", help="Show actions without doing them")
     uni_p.add_argument("--list", action="store_true", dest="list_only",
-                       help="Elenca le superfici rimovibili (con --json per la GUI), non rimuove")
+                       help="List the removable surfaces (--json for the GUI), remove nothing")
     uni_p.add_argument("--json", action="store_true",
-                       help="Output JSON: superfici (--list) o esito+verifica (usato dal control center)")
+                       help="JSON output: surfaces (--list) or result+verification (used by the control center)")
     renv = sub.add_parser("record-env",
-                          help="Registra le cartelle sorgente del trio (usato dall'installer)")
-    renv.add_argument("--root", default="", help="Workspace da scandire per i componenti")
-    renv.add_argument("--gm", default="", help="Cartella sorgente gray_matter")
-    renv.add_argument("--neurag", default="", help="Cartella sorgente neurag")
-    renv.add_argument("--neuron", default="", help="Cartella sorgente neuron")
+                          help="Record the source folders of all three tools (used by the installer)")
+    renv.add_argument("--root", default="", help="Workspace to scan for the components")
+    renv.add_argument("--gm", default="", help="gray_matter source folder")
+    renv.add_argument("--neurag", default="", help="neurag source folder")
+    renv.add_argument("--neuron", default="", help="neuron source folder")
     rep_p = sub.add_parser("repair",
-                           help="Clean repair: scegli cosa cancellare, poi reinstalla forzato")
+                           help="Clean repair: choose what to delete, then force-reinstall")
     rep_p.add_argument("wipe", nargs="*", default=[],
-                       help="chiavi da cancellare (neuron_graphs, neurag_db, gm_bridges, "
-                            "gm_config, neurag_config, registrations) — oppure 'list'")
-    rep_p.add_argument("--dry-run", action="store_true", help="Mostra cosa toglierebbe, non tocca nulla")
+                       help="keys to delete (neuron_graphs, neurag_db, gm_bridges, "
+                            "gm_config, neurag_config, registrations) - or 'list'")
+    rep_p.add_argument("--dry-run", action="store_true", help="Show what would be removed, change nothing")
     rep_p.add_argument("--reinstall", action="store_true",
-                       help="dopo la pulizia lancia SUBITO l'installer della suite con -Force")
+                       help="after cleaning, run the suite installer right away with -Force")
     rep_p.add_argument("--json", action="store_true",
-                       help="Elenca le superfici cancellabili in JSON (usato dal control center)")
+                       help="list the removable surfaces as JSON (used by the control center)")
     cld_p = sub.add_parser("cloud", help="Turso cloud: setup (auto, needs turso CLI), "
                                          "wire (paste URLs, NO CLI), status, teardown")
     cld_p.add_argument("subcmd", choices=["setup", "wire", "status", "teardown"])
@@ -793,26 +901,39 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("stats", help="Orchestrator counters: cache hit rate, flashes, bridges, latency")
     sub.add_parser("doctor", help="Health snapshot: servers, workers, cache, bridges")
 
+    br_p = sub.add_parser("bridge", help="Expose full suite over HTTP for remote LLM connectors")
+    br_p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    br_p.add_argument("--bind", choices=["local", "all"], default="local",
+                       help="Shorthand: 'local' → 127.0.0.1, 'all' → 0.0.0.0")
+    br_p.add_argument("--port", type=int, default=8002, help="TCP port (default: 8002)")
+    br_p.add_argument("--port-range", type=int, default=10,
+                       help="How many ports to try if busy (default: 10)")
+    br_p.add_argument("--tunnel", action="store_true", default=False,
+                       help="Auto-launch a tunnel after bridge starts")
+    br_p.add_argument("--proxy", default=None, help="Explicit mcp-proxy command")
+    br_p.add_argument("--no-check", action="store_true", help="Skip preflight check")
+    br_p.add_argument("--print-cmd", action="store_true", help="Print the command and exit")
+
     kn_p = sub.add_parser("knowledge", help="NeuRAG knowledge base management")
     kn_p.add_argument("subcmd", choices=["status", "rebuild-links", "link-graph"],
                        help="status=show nodes/chunks/links, rebuild-links= wipe+rebuild, link-graph= show graph")
 
     gm_nrn = sub.add_parser("gm-neuron", help="Call a Neuron tool via Gray Matter")
-    gm_nrn.add_argument("tool", help="Nome del tool Neuron: pre_turn, store_turn, get_context, status, ...")
+    gm_nrn.add_argument("tool", help="Neuron tool name: pre_turn, store_turn, get_context, status, ...")
     gm_nrn.add_argument("args", nargs="?", default="{}",
-                        help='JSON facoltativo, es. {"topic": "caffe"} — vuoto = {}')
+                        help='Optional JSON, e.g. {"topic": "coffee"} - empty = {}')
 
     gm_nrg = sub.add_parser("gm-neurag", help="Call a NeuRAG tool via Gray Matter")
-    gm_nrg.add_argument("tool", help="Nome del tool NeuRAG: knowledge_query, knowledge_status, knowledge_ingest, ...")
+    gm_nrg.add_argument("tool", help="NeuRAG tool name: knowledge_query, knowledge_status, knowledge_ingest, ...")
     gm_nrg.add_argument("args", nargs="?", default="{}",
-                        help='JSON facoltativo, es. {"query": "spring boot"} — vuoto = {}')
+                        help='Optional JSON, e.g. {"query": "spring boot"} - empty = {}')
 
     cfg_p = sub.add_parser("config", help="Get/set tunable knobs (flash rate, cache TTL, prewarm, ...)")
     cfg_p.add_argument("action", choices=["get", "set", "list"])
     cfg_p.add_argument("key", nargs="?", default="")
     cfg_p.add_argument("value", nargs="?", default=None)
     cfg_p.add_argument("--json", action="store_true",
-                       help="Output JSON strutturato (usato dal control center)")
+                       help="Structured JSON output (used by the control center)")
 
     return parser
 
@@ -821,8 +942,9 @@ def build_parser() -> argparse.ArgumentParser:
 COMMAND_GROUPS = {
     "install": "lifecycle", "uninstall": "lifecycle", "repair": "lifecycle",
     "start": "lifecycle", "stop": "lifecycle", "gui": "lifecycle", "register": "lifecycle",
-    "deregister": "lifecycle", "link": "lifecycle",
+    "deregister": "lifecycle", "link": "lifecycle", "bridge": "lifecycle",
     "bridges-transfer": "maintenance", "knowledge": "maintenance",
+    "reap": "maintenance",
     "status": "inspect", "stats": "inspect", "doctor": "inspect",
     "bridges": "inspect", "logs": "inspect", "ping": "inspect",
     "gm-neuron": "inspect", "gm-neurag": "inspect",
@@ -831,8 +953,30 @@ COMMAND_GROUPS = {
 }
 
 
+def _console_safe() -> None:
+    """Non far morire la CLI su un carattere che la console non sa scrivere.
+
+    Su Windows stdout usa la code page locale (cp1252): il primo `→` che arriva
+    dal grafo di Neuron faceva esplodere `gray-matter gm-neuron pre_turn` con
+    UnicodeEncodeError a metà stampa. Il contenuto del grafo è testo utente
+    arbitrario — emoji, CJK, frecce — e non è negoziabile con la code page:
+    `errors="replace"` degrada quei caratteri a '?' invece di perdere il comando.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        # Sotto pytest, in una GUI o dietro una pipe, stdout è spesso un
+        # wrapper senza `.reconfigure` (o con l'attributo a None): si salta.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main() -> None:
     import json
+    _console_safe()
     parser = build_parser()
     args = parser.parse_args()
 
@@ -844,6 +988,8 @@ def main() -> None:
         cmd_stop()
     elif args.command == "ping":
         cmd_ping()
+    elif args.command == "reap":
+        cmd_reap(dry_run=args.dry_run, all_procs=args.reap_all)
     elif args.command == "isolate":
         cmd_isolate(args.name)
     elif args.command == "collaborate":
@@ -854,7 +1000,7 @@ def main() -> None:
         # La GUI è UNA: il control center web. La Tkinter "classic" è ritirata
         # (restava attiva in parallelo e confondeva — e non funzionava).
         if getattr(args, "classic", False):
-            print("[!] --classic è ritirato: apro il control center unico.")
+            print("[!] --classic is retired: opening the single control center.")
         try:
             from gray_matter.shortcut import ensure_desktop_shortcut
             ensure_desktop_shortcut("gray-matter", "Gray Matter",
@@ -895,6 +1041,27 @@ def main() -> None:
         cmd_stats()
     elif args.command == "doctor":
         cmd_doctor()
+    elif args.command == "bridge":
+        from gray_matter.bridge import main as bridge_main
+        # Pass through bridge-specific args; bridge_main handles its own parsing
+        bridge_args = []
+        if args.host and args.host != "127.0.0.1":
+            bridge_args += ["--host", args.host]
+        if args.bind == "all":
+            bridge_args += ["--bind", "all"]
+        if args.port and args.port != 8002:
+            bridge_args += ["--port", str(args.port)]
+        if args.port_range and args.port_range != 10:
+            bridge_args += ["--port-range", str(args.port_range)]
+        if args.tunnel:
+            bridge_args.append("--tunnel")
+        if args.proxy:
+            bridge_args += ["--proxy", args.proxy]
+        if args.no_check:
+            bridge_args.append("--no-check")
+        if args.print_cmd:
+            bridge_args.append("--print-cmd")
+        sys.exit(bridge_main(bridge_args))
     elif args.command == "config":
         cmd_config(args.action, args.key, args.value, args.json)
     elif args.command == "knowledge":

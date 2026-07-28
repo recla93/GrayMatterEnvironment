@@ -93,8 +93,15 @@ class _Row:
 
 
 class _RemoteCursor:
-    def __init__(self, result=None):
+    def __init__(self, result=None, buffered: bool = False):
         self._r = result
+        self._buffered = buffered
+
+    @property
+    def description(self):
+        if self._r is None:
+            return None
+        return [(c,) for c in self._r.columns]
 
     def fetchall(self):
         if self._r is None:
@@ -107,28 +114,136 @@ class _RemoteCursor:
         return rows[0] if rows else None
 
 
+_WRITE_PREFIXES = ("insert", "update", "delete", "replace", "create", "alter", "drop")
+
+
+def _is_write_sql(sql: str) -> bool:
+    head = sql.lstrip()
+    if not head:
+        return False
+    return head.split(None, 1)[0].lower() in _WRITE_PREFIXES
+
+
+def _with_retry(fn, *, attempts: int = 4, base_delay: float = 0.4,
+                on_retry=None):
+    """Run *fn* with exponential backoff on transient remote failures.
+
+    Only wraps atomic units (client creation, single batch) so a retry can
+    never double-apply a partially-written save. *on_retry* (T76) recreates
+    a dead client between attempts — without it a dropped WebSocket session
+    made every retry fail on the same corpse."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if i == attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** i))
+            if on_retry is not None:
+                try:
+                    on_retry()
+                except Exception:
+                    pass
+    raise last  # pragma: no cover
+
+
+def _url_candidates(url: str) -> list[str]:
+    """Connection URLs to try, in order (T76). WebSocket schemes keep a
+    long-lived socket that some proxies silently drop; the https:// form
+    is stateless per request. Try the user's URL first, then its HTTP twin."""
+    out = [url]
+    for prefix in ("libsql://", "wss://", "ws://"):
+        if url.startswith(prefix):
+            out.append("https://" + url[len(prefix):])
+            break
+    return out
+
+
 class _RemoteConn:
-    """sqlite3-compatible facade over a remote Turso (libSQL cloud) DB."""
-    def __init__(self, url, token):
-        self._client = _libsql.create_client_sync(
-            url=("https://" + url[len("libsql://"):]) if url.startswith("libsql://") else url,
-            auth_token=token)
+    """sqlite3-compatible facade over a remote Turso (libSQL cloud) DB.
 
-    @staticmethod
-    def _noop(sql):
+    Retry + URL fallback + transaction support, matching Neuron's
+    RemoteTursoConnection pattern (keep-in-sync).
+    """
+
+    def __init__(self, url: str, token: str):
+        self._auth_token = token
+        self._urls = _url_candidates(url)
+        self._url_idx = 0
+        self._client = self._create_client()
+        self._tx: list | None = None  # buffered Statements while a tx is open
+
+    def _create_client(self):
+        last: Exception | None = None
+        for i in range(self._url_idx, len(self._urls)):
+            try:
+                client = _with_retry(
+                    lambda u=self._urls[i]: _libsql.create_client_sync(
+                        url=u, auth_token=self._auth_token),
+                    attempts=2)
+                self._url_idx = i
+                return client
+            except Exception as e:
+                last = e
+        raise last
+
+    def _reconnect(self) -> None:
+        """Drop dead client and build fresh (T76)."""
+        try:
+            self._client.close()
+        except Exception:
+            pass
+        self._client = self._create_client()
+
+    def _is_noop_pragma(self, sql: str) -> bool:
         s = sql.strip().lower()
-        return s.startswith("pragma") and any(p in s for p in _REMOTE_NOOP_PRAGMAS)
+        return (s.startswith("pragma")
+                and any(p in s for p in _REMOTE_NOOP_PRAGMAS)
+                and "table_info" not in s)
 
-    def execute(self, sql, params=()):
-        if self._noop(sql):
+    # -- transaction control ------------------------------------------------
+    def begin(self) -> None:
+        self._tx = []
+
+    def rollback(self) -> None:
+        self._tx = None
+
+    def commit(self) -> None:
+        if self._tx is None:
+            return
+        stmts, self._tx = self._tx, None
+        if stmts:
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
+
+    # -- statement execution ------------------------------------------------
+    def execute(self, sql: str, params=()):
+        if self._is_noop_pragma(sql):
             return _RemoteCursor(None)
-        return _RemoteCursor(self._client.execute(sql, list(params) if params else None))
+        if self._tx is not None and _is_write_sql(sql):
+            self._tx.append(_libsql.Statement(sql, list(params) if params else None))
+            return _RemoteCursor(None, buffered=True)
+        return _with_retry(
+            lambda: _RemoteCursor(self._client.execute(sql, list(params) if params else None)),
+            on_retry=self._reconnect)
 
-    def commit(self):
-        pass
+    def executemany(self, sql: str, seq_of_params):
+        stmts = [_libsql.Statement(sql, list(p)) for p in seq_of_params]
+        if self._tx is not None:
+            self._tx.extend(stmts)
+            return _RemoteCursor(None, buffered=True)
+        if stmts:
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
+        return _RemoteCursor(None)
 
     def close(self):
-        self._client.close()
+        try:
+            self._client.close()
+        except Exception:
+            pass
 
 
 def _clean(s, cap: int = _MAX_LEN) -> str:

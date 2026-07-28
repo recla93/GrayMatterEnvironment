@@ -121,8 +121,22 @@ class TestStandaloneRegistration:
         monkeypatch.setattr(nc, "register_all", fake_register_all)
         monkeypatch.setattr(nc, "default_server_python", lambda s: "/fake/python")
         gm_clients.standalone_register_tool("neuron", dry_run=True)
-        assert called.get("slug") == "neuron5"
+        # "neuron", not the retired "neuron5": GM must pass the same default
+        # neuron/config.py:resolve_slug() uses, or the two disagree on where the
+        # graphs live (which is how one user ended up with two graph folders).
+        assert called.get("slug") == "neuron"
         assert called.get("dry_run") is True
+
+    def test_slug_default_matches_neuron(self):
+        """Regression on the split-memory bug: gray_matter.paths and
+        neuron.config must resolve the SAME default slug. They didn't —
+        'neuron5' here, 'neuron' there — so Neuron wrote graphs to <base>/neuron
+        while GM read <base>/neuron5."""
+        import os
+        from gray_matter import paths as gm_paths
+        from neuron import config as n_config
+        assert gm_paths.SLUG == n_config.resolve_slug() == "neuron"
+        assert "neuron5" not in os.environ.get("NEURON_SLUG", "")
 
     def test_register_unknown_tool_returns_error(self):
         """Registering an unknown tool returns an error line."""

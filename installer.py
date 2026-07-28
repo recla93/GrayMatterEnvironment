@@ -60,6 +60,12 @@ def plan(state: dict) -> list[dict]:
                 actions.append({"action": "deploy_hook", "client": c,
                                 "asset": HOOK_ASSETS[c]})
     actions.append({"action": "write_manifest"})
+    # GME registry (ADR-009) right after the manifest: the manifest answers
+    # "what did we install", GME answers "which Python runs it". Emitted from
+    # here rather than from the six shell installers because this is the step
+    # every path reaches — the suite installs the peers with a bare pip and the
+    # peers' own GME blocks only run in standalone mode. See gme.register_installed.
+    actions.append({"action": "register_gme"})
     return actions
 
 

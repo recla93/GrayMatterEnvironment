@@ -51,10 +51,17 @@ def _alive(pid: int) -> bool:
 
 
 def _tracked_pids() -> list[int]:
+    """I PID registrati e ancora vivi (gray_matter.pids è la SSOT del registro).
+
+    Leggeva il JSON a mano, e per mesi ha letto un file che NESSUNO scriveva:
+    tornava sempre [], quindi `orphan_pids` era sempre vuoto e il reap in
+    `execute_install()` non mieteva mai nulla. Ora la scrittura c'è
+    (`pids.record_self`) e la lettura passa da lì, potatura inclusa.
+    """
     try:
-        data = json.loads(paths.pids_path().read_text(encoding="utf-8"))
-        return [int(p) for p in (data if isinstance(data, list) else data.get("pids", []))]
-    except Exception:  # noqa: BLE001
+        from gray_matter import pids as _pids
+        return [e["pid"] for e in _pids.tracked()]
+    except Exception:  # noqa: BLE001 — registro illeggibile: nessun orfano noto
         return []
 
 
@@ -70,7 +77,15 @@ def detect_state() -> dict:
     # Cowork has no config path in CLIENTS: it rides Claude Desktop's install.
     if "claude-desktop" in detected:
         detected.append("cowork")
-    orphans = [p for p in _tracked_pids() if _alive(p) and p != os.getpid()]
+    # Orfano = vivo, ma il processo che l'ha lanciato non c'è più (il client AI
+    # è stato chiuso o riavviato). Prima si contava come orfano QUALSIASI PID
+    # tracciato e vivo: con il registro finalmente popolato, quella definizione
+    # avrebbe mietuto anche i server che stanno servendo un client attivo.
+    try:
+        from gray_matter import pids as _pids
+        orphans = [e["pid"] for e in _pids.orphans()]
+    except Exception:  # noqa: BLE001
+        orphans = []
     return {"installed": installed,
             "gm_present": paths.app_dir().exists() or paths.manifest_path().exists(),
             "clients": detected,
@@ -183,7 +198,7 @@ def _deploy_opencode(src: Path, dry_run: bool) -> tuple[list[str], str]:
         shutil.copy2(src, dest)
         cfgp = _opencode_dir() / "opencode.json"
         try:
-            cfg = json.loads(cfgp.read_text(encoding="utf-8")) if cfgp.exists() else {}
+            cfg = json.loads(cfgp.read_text(encoding="utf-8-sig")) if cfgp.exists() else {}
         except (json.JSONDecodeError, OSError):
             return [str(dest)], "opencode.json unreadable — add plugin manually"
         plugins = cfg.setdefault("plugin", [])
@@ -213,6 +228,12 @@ def _deploy_hook(client: str, asset: str, assets_root: Path, dry_run: bool) -> d
         deployed, detail = fn(src, dry_run)
     except Exception as exc:  # noqa: BLE001
         return {"action": "deploy_hook", "ok": False, "client": client, "detail": str(exc)}
+    # The deployers guard their writes with `if not dry_run` but return the same
+    # past-tense detail either way, so a --dry-run reported "hook copied +
+    # SessionStart registered" for a hook it had not touched. Prefixed here, once,
+    # rather than in each deployer — same marker cmd_uninstall/cmd_repair print.
+    if dry_run:
+        detail = f"[dry-run] {detail}"
     return {"action": "deploy_hook", "ok": True, "client": client,
             "deployed": deployed, "detail": detail}
 
@@ -320,6 +341,8 @@ def execute_install(state: dict | None = None, *, assets_root=None,
                 installer.record_install({**state, "hooks": hooks})
                 results.append({"action": "write_manifest", "ok": True,
                                 "detail": str(paths.manifest_path())})
+        elif a == "register_gme":
+            results.append(_register_gme(dry_run))
         else:
             results.append({"action": a, "ok": False, "detail": "unknown action"})
     return results
@@ -354,7 +377,7 @@ def _scrub_claude_settings(dry_run: bool) -> None:
 def _scrub_opencode_config(dry_run: bool) -> None:
     cfgp = _opencode_dir() / "opencode.json"
     try:
-        cfg = json.loads(cfgp.read_text(encoding="utf-8"))
+        cfg = json.loads(cfgp.read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001
         return
     plugins = cfg.get("plugin")
@@ -400,8 +423,54 @@ def _remove_code(dry_run: bool) -> dict:
             paths.gm_home().rmdir()
         except OSError:
             pass
+    # `removed` on a dry-run would claim a deletion that never happened — the GUI
+    # renders this list verbatim.
     return {"action": "remove_code", "ok": True,
-            "removed": [str(t) for t in targets]}
+            "removed": [] if dry_run else [str(t) for t in targets],
+            "detail": ("[dry-run] would remove " + ", ".join(str(t) for t in targets)
+                       if dry_run else "")}
+
+
+def _register_gme(dry_run: bool) -> dict:
+    """Write the GME entry for every trio tool this interpreter can import.
+    Best-effort: an install that worked must not be reported as failed because
+    the discovery registry could not be written."""
+    if dry_run:
+        return {"action": "register_gme", "ok": True,
+                "detail": f"would register into {gme_root_str()}"}
+    try:
+        from gray_matter import gme
+        keys = gme.register_installed(source=str(paths.gm_home()))
+        return {"action": "register_gme", "ok": True, "keys": keys,
+                "detail": f"{len(keys)} tool(s) -> {gme.gme_root()}"}
+    except (ImportError, OSError) as e:
+        return {"action": "register_gme", "ok": False, "detail": str(e)}
+
+
+def gme_root_str() -> str:
+    try:
+        from gray_matter import gme
+        return str(gme.gme_root())
+    except ImportError:
+        return "GME"
+
+
+def _unregister_gme(key: str, dry_run: bool) -> dict:
+    """Flip the GME registry entry to ``missing`` so discovery stops handing out
+    a dead venv path. Best-effort: a stale entry is cosmetic, a failed uninstall
+    is not — never let this raise."""
+    if dry_run:
+        return {"action": "unregister_gme", "ok": True, "key": key,
+                "detail": "would mark missing"}
+    try:
+        from gray_matter import gme
+        existed = gme.read_tool(key) is not None
+        gme.mark_missing(key)
+        return {"action": "unregister_gme", "ok": True, "key": key,
+                "detail": "marked missing" if existed else "not registered"}
+    except (ImportError, OSError) as e:
+        return {"action": "unregister_gme", "ok": False, "key": key,
+                "detail": str(e)}
 
 
 def _remove_data(name: str, path: str, dry_run: bool) -> dict:
@@ -527,6 +596,8 @@ def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
             results.append(_remove_hook(act["client"], act["path"], dry_run))
         elif a == "remove_code":
             results.append(_remove_code(dry_run))
+        elif a == "unregister_gme":
+            results.append(_unregister_gme(act["key"], dry_run))
         elif a == "ask_data":
             if dry_run:
                 results.append({"action": "ask_data", "ok": True,

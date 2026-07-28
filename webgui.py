@@ -63,6 +63,31 @@ def _python() -> str:
     return sys.executable or "python"
 
 
+def _python_for_tool(tool: str) -> str:
+    """Get the correct Python executable for a tool.
+    
+    Discovery order:
+    1. GME registry (centralized)
+    2. _python() fallback (existing behavior)
+    
+    This enables multi-venv execution: each tool uses its own Python
+    instead of always using GM's Python.
+    """
+    try:
+        # get_python(), not read_tool(): the helper gates on status == installed.
+        # Reading the raw dict handed back the venv path of a tool the uninstall
+        # had already marked *missing* — the GUI then exec'd a python that was
+        # no longer on disk. The .exists() check below stays as the second guard
+        # (a venv can vanish without anyone marking anything).
+        from gray_matter.gme import get_python
+        py = get_python(tool)
+        if py and Path(py).exists():
+            return py
+    except ImportError:
+        pass
+    return _python()  # fallback to system Python
+
+
 def _gm_version() -> str:
     try:
         from gray_matter import __version__
@@ -85,28 +110,23 @@ def _say(msg: str) -> None:
 def _cli_argv(tool: str, *cmd: str) -> list[str]:
     """argv per un comando CLI di un ambiente (``python -m <tool>.cli <cmd...>``).
 
-    È la stessa via generica di :meth:`Api.run`: i pannelli speciali (config,
-    repair, uninstall) passano da qui invece di importare gli interni di
-    gray_matter — così restano tool-agnostici e loggano in modo uniforme.
+    Uses _python_for_tool() for multi-venv execution.
     """
     base = _MODULE_FOR.get(tool)
     if base is None:
         raise ValueError(f"ambiente sconosciuto: {tool}")
-    return [_python(), *base, *cmd]
+    return [_python_for_tool(tool), *base, *cmd]
 
 
 def _argv_for(tool: str, command: str, args: dict, extra: str = "") -> list[str]:
     """Costruisce l'argv reale a partire dal comando e dai campi compilati.
 
-    Gli argomenti arrivano dal catalogo, quindi il form riflette la CLI vera:
-    i posizionali nell'ordine dichiarato, le opzioni come ``--flag valore``
-    (o il solo flag se è booleano). Il campo libero finale resta per i casi
-    che un form non copre.
+    Uses _python_for_tool() for multi-venv execution.
     """
     base = _MODULE_FOR.get(tool)
     if base is None:
         raise ValueError(f"ambiente sconosciuto: {tool}")
-    argv = [_python(), *base, command]
+    argv = [_python_for_tool(tool), *base, command]
     for a in args.get("_order", []):
         spec = args["_spec"].get(a, {})
         val = args.get(a, "")
@@ -175,14 +195,20 @@ class Api:
             return {"ok": False, "error": str(exc)}
 
     # -- catalogo ----------------------------------------------------------
-    def catalog(self, _args: str = "") -> dict:
+    def catalog(self, args: str = "") -> dict:
         """Ambienti installati + comandi, raggruppati dal più grande al più piccolo.
+
+        Accetta ``{"lang": "it"|"en"}``: le descrizioni dei comandi seguono la
+        lingua scelta nella GUI. Prima arrivavano sempre in italiano anche con
+        l'interfaccia in inglese — bottoni tradotti e spiegazioni no.
 
         Mai sollevare: se il catalogo esplode la GUI deve dirlo, non morire.
         """
         try:
+            req = json.loads(args) if args else {}
+            lang = req.get("lang") or "it"
             envs = []
-            for env in catalog.environments():
+            for env in catalog.environments(lang):
                 envs.append({**env, "groups": catalog.grouped(env),
                              "installable": (not env["installed"]) and env["key"] != "gray-matter"})
             return {"envs": envs, "python": _python(), "version": _gm_version()}
@@ -205,9 +231,15 @@ class Api:
                 env = os.environ.copy()
                 env["PYTHONUNBUFFERED"] = "1"
                 env["PYTHONUTF8"] = "1"
+                # stdin=PIPE, non DEVNULL: i comandi che fanno domande (setup,
+                # connect, cloud, repair) si rispondono QUI, dalla riga di input
+                # sotto la console. Prima venivano dirottati su una finestra
+                # `cmd /k` con CREATE_NEW_CONSOLE — la finestra nera che
+                # spuntava dalla GUI. Con stdin collegato il pannello è un
+                # terminale a tutti gli effetti e la finestra non serve più.
                 proc = subprocess.Popen(
                     argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL, text=True, bufsize=1,
+                    stdin=subprocess.PIPE, text=True, bufsize=1,
                     encoding="utf-8", errors="replace",
                     creationflags=_CREATE_NO_WINDOW, env=env)
                 self._procs[key] = proc
@@ -241,37 +273,31 @@ class Api:
             return False, "", str(exc)
         return r.returncode == 0, r.stdout, r.stderr
 
-    def _terminal(self, argv: list[str], *, display: str, keep_open: bool = True) -> dict:
-        """Apre ``argv`` in una finestra di terminale vera.
+    def send_input(self, args: str = "") -> dict:
+        """Manda una riga allo stdin del comando in esecuzione.
 
-        Serve ai comandi interattivi (setup, uninstall, connect, ...): fanno
-        domande, e nel pannello — che esegue con stdin chiuso — restavano
-        appesi senza dire niente. Era il "clicco e non parte nulla".
-
-        keep_open: se True (default), la finestra resta aperta a fine comando
-                   per leggere l'esito (cmd /k). Se False, la finestra si chiude
-                   automaticamente (cmd /c).
+        È la metà mancante di :meth:`_stream`: i comandi interattivi facevano
+        una domanda e restavano appesi perché stdin era chiuso, e la GUI li
+        dirottava in una finestra `cmd` per farli rispondere. Ora la risposta
+        arriva da qui e la finestra non serve.
         """
-        self._emit(f"$ {' '.join(argv)}", "cmd")
-        self._emit(f"[{display}] è interattivo: si apre in una finestra di "
-                   "terminale — continua lì.", "warn")
+        req = json.loads(args) if args else {}
+        text = str(req.get("text", ""))
+        key = req.get("key") or next(iter(self._running), None)
+        proc = self._procs.get(key) if key else None
+        if proc is None or proc.poll() is not None or proc.stdin is None:
+            self._emit("[!] no running command to answer.", "err")
+            return {"ok": False, "error": "no running command"}
         try:
-            if os.name == "nt":
-                cmd_flag = "/k" if keep_open else "/c"
-                subprocess.Popen(["cmd", cmd_flag, *argv],
-                                 creationflags=subprocess.CREATE_NEW_CONSOLE)
-                return {"ok": True}
-            for term in (("x-terminal-emulator", "-e"), ("gnome-terminal", "--"),
-                         ("konsole", "-e"), ("xterm", "-e")):
-                if shutil.which(term[0]):
-                    subprocess.Popen([*term, *argv])
-                    return {"ok": True}
-            self._emit("[!] nessun terminale trovato: esegui a mano: "
-                       + " ".join(argv), "err")
-            return {"ok": False, "error": "nessun terminale disponibile"}
-        except Exception as exc:  # noqa: BLE001
-            self._emit(f"[{display}] {exc}", "err")
+            proc.stdin.write(text + "\n")
+            proc.stdin.flush()
+        except (OSError, ValueError) as exc:   # pipe chiusa mentre si scriveva
+            self._emit(f"[!] could not send input: {exc}", "err")
             return {"ok": False, "error": str(exc)}
+        # Eco della risposta: lo stdin non passa dallo stdout del figlio, quindi
+        # senza questa riga la console mostrerebbe la domanda e mai la risposta.
+        self._emit(f"> {text}", "cmd")
+        return {"ok": True}
 
     def run(self, args: str = "") -> dict:
         """Esegue QUALUNQUE comando del catalogo. Unico punto di esecuzione."""
@@ -301,7 +327,10 @@ class Api:
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         if spec.get("interactive"):
-            return self._terminal(argv, display=f"{tool} {command}")
+            # Non apre più una finestra: il comando fa le sue domande QUI e si
+            # risponde dalla riga di input sotto la console (send_input).
+            self._emit(f"[{tool} {command}] asks questions — answer in the "
+                       "input box below the console.", "warn")
         return self._stream(argv, key=f"{tool}:{command}",
                             display=f"{tool} {command}")
 
@@ -413,18 +442,24 @@ class Api:
     def repair_run(self, args: str = "") -> dict:
         """Delega al TOOL: ``<tool> repair <wipe...> --reinstall``. I `wipe` sono i
         token CLI restituiti da repair_state (positional per GM, flag `--wipe-*`
-        per Neuron/NeuRAG), così questa resta generica. Aperto in un TERMINALE:
-        l'installer -Force è pesante e può fare domande — lì può rispondere, e
-        non compete con la GUI (che gira dallo stesso venv)."""
+        per Neuron/NeuRAG), così questa resta generica.
+
+        Gira nella console della GUI, non più in una finestra `cmd` a parte:
+        l'installer -Force è lungo e può fare domande, e ora può riceverle e
+        rispondere da qui (`send_input`). Il vantaggio non è solo estetico —
+        l'output di una riparazione fallita finisce nel log della GUI, dove lo
+        si può copiare, invece di sparire con la finestra alla chiusura.
+        """
         req = json.loads(args) if args else {}
         wipe = req.get("wipe") or []
         scope = req.get("scope", "gray-matter")
-        self._emit(f"$ repair  scope={scope}  wipe={wipe or '(niente)'}", "cmd")
+        self._emit(f"$ repair  scope={scope}  wipe={wipe or '(nothing)'}", "cmd")
         try:
             argv = _cli_argv(scope, "repair", *wipe, "--reinstall")
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        return self._terminal(argv, display=f"repair {scope}", keep_open=False)
+        return self._stream(argv, key=f"{scope}:repair",
+                            display=f"repair {scope}")
 
     # -- uninstall (card dedicata, non interactive) -------------------------
     # Ogni tool può esporre il proprio uninstall. GM gestisce il proprio
@@ -578,6 +613,219 @@ class Api:
                 stopped += 1
                 self._emit(f"[{k}] fermato.", "warn")
         return {"ok": True, "stopped": stopped}
+
+    # -- health metrics -----------------------------------------------------
+    def health_state(self, _args: str = "") -> dict:
+        """Health metrics for all installed tools.
+        
+        Reads from catalog (SSOT for installed tools) and enriches with
+        GME health data when available. Falls back to catalog when GME
+        has no entries (dev/shared-venv setups).
+        
+        Collects:
+        - Status (running/stopped/installed/error)
+        - Ping (module import time)
+        - Memory (RSS via psutil, best-effort)
+        - CPU (via psutil, best-effort)
+        - Uptime (process create time)
+        """
+        # Build GME lookup for enrichment
+        gme_map = {}
+        try:
+            from gray_matter.gme import list_tools as gme_list
+            gme_map = {t["key"]: t for t in gme_list()}
+        except ImportError:
+            pass
+        
+        tools = []
+        for env in catalog.environments():
+            if not env.get("installed"):
+                continue
+            
+            gme = gme_map.get(env["key"], {})
+            health = gme.get("health", {})
+            pid = health.get("pid")
+            
+            # Check if process is alive via psutil (best-effort)
+            if pid:
+                try:
+                    import psutil
+                    proc = psutil.Process(pid)
+                    health["memory_mb"] = round(proc.memory_info().rss / 1024 / 1024, 1)
+                    health["cpu_percent"] = round(proc.cpu_percent(interval=0.1), 1)
+                    health["uptime_s"] = int(time.time() - proc.create_time())
+                    health["status"] = "running"
+                except ImportError:
+                    health["status"] = "running" if pid else "stopped"
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    health["status"] = "stopped"
+                    health["pid"] = None
+            else:
+                health["status"] = "stopped"
+            
+            # Ping: try to import the module (fast check)
+            try:
+                import importlib
+                start = time.time()
+                importlib.import_module(env.get("module", env["key"]))
+                health["ping_ms"] = round((time.time() - start) * 1000, 1)
+            except Exception:  # noqa: BLE001
+                health["ping_ms"] = None
+            
+            tools.append({
+                "key": env["key"],
+                "label": env.get("label", env["key"]),
+                "version": env.get("version", ""),
+                "status": health.get("status", "unknown"),
+                "health": health,
+            })
+        
+        return {"ok": True, "tools": tools}
+
+    # -- infrastructure ---------------------------------------------------
+    def tunnel_state(self, _args: str = "") -> dict:
+        """Tunnel status: backend detection, public URL, config."""
+        backends = []
+        if shutil.which("cloudflared"):
+            backends.append("cloudflared")
+        try:
+            import importlib
+            if importlib.util.find_spec("neuron.tunnel"):
+                backends.append("neuron.tunnel")
+        except Exception:  # noqa: BLE001
+            pass
+
+        config = {}
+        try:
+            from neuron.tunnel import _tunnel_config_path, _load_tunnel_config
+            cfg_path = _tunnel_config_path()
+            if cfg_path.exists():
+                config = _load_tunnel_config()
+        except (ImportError, Exception):  # noqa: BLE001
+            pass
+
+        has_cf_creds = False
+        try:
+            from neuron.tunnel import _has_cf_credentials
+            has_cf_creds = _has_cf_credentials()
+        except (ImportError, Exception):  # noqa: BLE001
+            pass
+
+        return {
+            "ok": True,
+            "backends": backends,
+            "config": config,
+            "has_cloudflare_creds": has_cf_creds,
+        }
+
+    def bridge_state(self, _args: str = "") -> dict:
+        """Bridge status: which bridges are available, ports, full suite detection."""
+        import importlib
+        gm_detected = importlib.util.find_spec("gray_matter.server") is not None
+
+        bridges = []
+        for key, module, default_port in [
+            ("gray-matter", "gray_matter.bridge", 8002),
+            ("neuron", "neuron.bridge", 8000),
+            ("neurag", "neurag.bridge", 8001),
+        ]:
+            available = importlib.util.find_spec(module) is not None
+            bridges.append({
+                "key": key,
+                "available": available,
+                "default_port": default_port,
+                "escalates_to_gm": gm_detected and key != "gray-matter",
+            })
+
+        active_bridges = []
+        for port in (8000, 8001, 8002):
+            try:
+                import socket
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    if s.connect_ex(("127.0.0.1", port)) == 0:
+                        active_bridges.append(port)
+            except Exception:  # noqa: BLE001
+                pass
+
+        return {
+            "ok": True,
+            "bridges": bridges,
+            "full_suite": gm_detected,
+            "active_ports": active_bridges,
+        }
+
+    def cloud_state(self, _args: str = "") -> dict:
+        """Cloud Turso connection status per database."""
+        dbs = {}
+
+        neuron_url = os.environ.get("TURSO_DATABASE_URL", "")
+        neuron_token = os.environ.get("TURSO_AUTH_TOKEN", "")
+        dbs["neuron"] = {
+            "configured": bool(neuron_url and neuron_token),
+            "url": neuron_url[:50] + "..." if len(neuron_url) > 50 else neuron_url,
+            "env_var": "TURSO_DATABASE_URL",
+        }
+
+        neurag_url = os.environ.get("NEURAG_TURSO_DATABASE_URL") or os.environ.get("TURSO_DATABASE_URL", "")
+        neurag_token = os.environ.get("NEURAG_TURSO_AUTH_TOKEN") or os.environ.get("TURSO_AUTH_TOKEN", "")
+        dbs["neurag"] = {
+            "configured": bool(neurag_url and neurag_token),
+            "url": neurag_url[:50] + "..." if len(neurag_url) > 50 else neurag_url,
+            "env_var": "NEURAG_TURSO_DATABASE_URL",
+        }
+
+        gm_url = os.environ.get("GM_TURSO_DATABASE_URL") or os.environ.get("TURSO_DATABASE_URL", "")
+        gm_token = os.environ.get("GM_TURSO_AUTH_TOKEN") or os.environ.get("TURSO_AUTH_TOKEN", "")
+        dbs["gm"] = {
+            "configured": bool(gm_url and gm_token),
+            "url": gm_url[:50] + "..." if len(gm_url) > 50 else gm_url,
+            "env_var": "GM_TURSO_DATABASE_URL",
+        }
+
+        return {"ok": True, "databases": dbs}
+
+    # -- migration ----------------------------------------------------------
+    def migrate(self, args: str = "") -> dict:
+        """Migrate old installs to GME registry.
+        
+        Args (JSON):
+            - tool: migrate a single tool by key
+            - all: if True, migrate all detected old installs
+        """
+        try:
+            from gray_matter.gme import migrate_tool, migrate_all, detect_old_installs
+        except ImportError:
+            return {"ok": False, "error": "gme module not available"}
+
+        # Unguarded json.loads turned any malformed payload into a raw traceback
+        # in the GUI's error card. This endpoint is the migration button — the one
+        # place a user lands when their install is already in a bad state.
+        try:
+            req = json.loads(args) if args else {}
+        except json.JSONDecodeError:
+            return {"ok": False, "error": "richiesta non valida"}
+        
+        if req.get("all"):
+            r = migrate_all()
+            if r.get("migrated"):
+                self._emit(f"[migrate] {len(r['migrated'])} tools registered in GME", "ok")
+            if r.get("errors"):
+                for e in r["errors"]:
+                    self._emit(f"[migrate] {e}", "err")
+            return r
+        
+        tool = req.get("tool", "")
+        if not tool:
+            # Return list of old installs (detection only)
+            old = detect_old_installs()
+            return {"ok": True, "old_installs": old}
+        
+        r = migrate_tool(tool)
+        if r.get("ok"):
+            self._emit(f"[migrate] {tool} registered in GME", "ok")
+        else:
+            self._emit(f"[migrate] {tool}: {r.get('error', 'failed')}", "err")
+        return r
 
 
 def _tag_of(line: str) -> str:

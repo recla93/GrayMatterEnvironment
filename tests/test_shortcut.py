@@ -109,7 +109,8 @@ class TestEnsureDesktopShortcut:
         assert marker.exists()
 
     @patch("gray_matter.shortcut._windows_lnk")
-    def test_skips_when_marker_exists(self, mock_lnk, tmp_path):
+    @patch("gray_matter.shortcut._shortcut_file_exists", return_value=True)
+    def test_skips_when_marker_exists(self, mock_exists, mock_lnk, tmp_path):
         marker = tmp_path / ".mytool-gui-shortcut"
         marker.write_text("1")
 
@@ -122,6 +123,23 @@ class TestEnsureDesktopShortcut:
 
         assert result is True
         mock_lnk.assert_not_called()
+
+    @patch("gray_matter.shortcut._windows_lnk", return_value=True)
+    @patch("gray_matter.shortcut._shortcut_file_exists", return_value=False)
+    def test_recreates_when_marker_exists_but_lnk_deleted(self, mock_exists, mock_lnk, tmp_path):
+        """Marker present but .lnk deleted → recreate the shortcut."""
+        marker = tmp_path / ".mytool-gui-shortcut"
+        marker.write_text("1")
+
+        with patch("gray_matter.shortcut.sys") as mock_sys:
+            mock_sys.executable = str(tmp_path / "python.exe")
+            with patch("gray_matter.shortcut.os.name", "nt"):
+                from gray_matter.shortcut import ensure_desktop_shortcut
+                result = ensure_desktop_shortcut(
+                    "mytool", "My", ["-m", "m"], "")
+
+        assert result is True
+        mock_lnk.assert_called_once()
 
     def test_returns_false_on_exception(self):
         with patch("gray_matter.shortcut._windows_lnk", side_effect=OSError):

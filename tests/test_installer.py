@@ -16,7 +16,8 @@ def test_fresh_install_registers_only_gateway():
     plan = I.plan({"installed": ["neuron"], "gm_present": False,
                    "clients": ["cursor", "claude-code"]})
     assert _actions(plan) == ["ensure_data", "install", "register",
-                              "deploy_hook", "write_manifest"]   # hook: claude-code only
+                              "deploy_hook", "write_manifest",
+                              "register_gme"]                    # hook: claude-code only
     reg = [a for a in plan if a["action"] == "register"][0]
     assert reg["target"] == "gray_matter"                # ONLY the gateway
     assert reg["clients"] == ["claude-code", "cursor"]   # sorted+deduped
@@ -25,7 +26,26 @@ def test_fresh_install_registers_only_gateway():
 def test_idempotent_when_gm_present():
     plan = I.plan({"installed": ["gray_matter"], "gm_present": True, "clients": []})
     assert "install" not in _actions(plan)               # not reinstalled
-    assert _actions(plan) == ["write_manifest"]          # nothing to register (no clients)
+    # nothing to register in clients (no clients) — but GME still gets refreshed,
+    # so a re-run repairs a registry that an older installer never wrote
+    assert _actions(plan) == ["write_manifest", "register_gme"]
+
+
+def test_dry_run_never_reports_work_it_did_not_do():
+    """--dry-run has one job: say what *would* happen. The hook deployers guard
+    their writes but returned the same past-tense detail either way, so a dry-run
+    claimed the hook was copied and registered."""
+    from gray_matter import executor as E
+
+    rm = E._remove_code(dry_run=True)
+    assert rm["removed"] == [] and rm["detail"].startswith("[dry-run]")
+
+    hooks = [r for r in E.execute_install({"installed": ["neuron"], "gm_present": True,
+                                           "clients": ["claude-code"]}, dry_run=True)
+             if r["action"] == "deploy_hook"]
+    assert hooks, "no hook deployed in the plan — test is vacuous"
+    for r in hooks:
+        assert str(r["detail"]).startswith("[dry-run]"), r["detail"]
 
 
 def test_orphans_reaped_first():

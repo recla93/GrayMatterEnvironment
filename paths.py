@@ -7,7 +7,7 @@ guessing. Stdlib only. The env override GM_HOME roots everything under one dir
 
 Layout (per-OS base = %LOCALAPPDATA% on Windows, $XDG_DATA_HOME|~/.local/share else):
     <base>/graymatter/        app/, config.json, logs/, manifest.json, pids.json, bridges.json
-    <base>/<slug>/graphs      Neuron graph store (slug default 'neuron5')
+    <base>/<slug>/graphs      Neuron graph store (slug default 'neuron')
     <base>/neurag/knowledge.db NeuRAG knowledge base
 """
 from __future__ import annotations
@@ -17,7 +17,12 @@ import os
 import time
 from pathlib import Path
 
-SLUG = os.environ.get("NEURON_SLUG", "neuron5")
+# Must match neuron/config.py:resolve_slug(), which defaults to "neuron". It
+# defaulted to "neuron5" here, so Neuron wrote its graphs to <base>/neuron while
+# Gray Matter looked in <base>/neuron5 — that divergence is what split a real
+# user's memory across two folders. Only used as the fallback for when Neuron
+# is not importable; neuron_graphs() asks the peer first.
+SLUG = os.environ.get("NEURON_SLUG", "neuron")
 MANIFEST_SCHEMA = 1
 
 

@@ -10,15 +10,25 @@
 #
 #   sh install.sh            # interactive
 #   sh install.sh --yes      # non-interactive
+#   sh install.sh --clear    # delete the venv and rebuild from scratch (implies --force)
 #
 # Opt out of a peer:  GM_NO_NEURON=1  /  GM_NO_NEURAG=1
 set -eu
 
 ASSUME_YES=0
 FORCE=0
+CLEAR=0
 # --force: repair mode — bypass the version-skip and reinstall the code even at
 # the same version (pip --force-reinstall --no-deps). Used by the GUI "Ripara".
-for a in "$@"; do case "$a" in -y|--yes) ASSUME_YES=1 ;; -f|--force) FORCE=1 ;; esac; done
+# --clear: last resort — throw the venv away and rebuild, then install as usual.
+# For the states no reinstall repairs: a half-written venv, a broken interpreter,
+# a dependency pinned wrong. CODE only: graphs, knowledge.db, bridges and the GME
+# registry are user data and live outside the venv (those are `repair`/`uninstall`).
+for a in "$@"; do case "$a" in
+    -y|--yes) ASSUME_YES=1 ;;
+    -f|--force) FORCE=1 ;;
+    -c|--clear) CLEAR=1; FORCE=1 ;;
+esac; done
 FORCE_ARGS=""
 [ "$FORCE" = "1" ] && FORCE_ARGS="--force-reinstall --no-deps"
 ask() {
@@ -65,6 +75,13 @@ find_peer() {  # $1 = nome dir del tool → stampa il path se esiste
     done
     return 1
 }
+# Variant: search siblings of a specific parent (for coupled mode)
+find_peer_in() {  # $1 = nome dir, $2 = parent
+    [ -f "$2/$1/pyproject.toml" ] && { echo "$2/$1"; return 0; }
+    return 1
+}
+
+
 NEURON_DIR=$(find_peer neuron || find_peer Neuron || true)
 NEURAG_DIR=$(find_peer neurag || find_peer Neurag || true)
 # Wheel offline (pyturso non ha wheel win_amd64 su PyPI): si prendono da OGNI
@@ -77,11 +94,42 @@ for _d in "$HERE" "$NEURON_DIR" "$NEURAG_DIR"; do
 done
 
 VENV="${GM_HOME:-$HOME/.local/share/gray-matter}/.venv"
+# INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
+# POSIX unlinks mapped files happily, so this is not the Windows lock that makes
+# pip fail there; the hazard here is a stale server writing to the same store
+# mid-upgrade. Kept as a function called at the SAME three points as
+# Stop-VenvProcesses in install.ps1: an MCP client respawns its stdio server
+# while the user reads an interactive prompt, so one call at the top is not
+# enough — and the two GM installers must stay readable as the same script.
+stop_venv_procs() {
+    command -v pkill >/dev/null 2>&1 || return 0
+    pkill -f "$VENV" 2>/dev/null && sleep 1
+    return 0
+}
+stop_venv_procs
+if [ "$CLEAR" = "1" ] && [ -d "$VENV" ]; then
+    echo "Clear: removing the venv and rebuilding from scratch ($VENV)"
+    echo "  (user memory is NOT touched — graphs, knowledge.db and bridges live elsewhere)"
+    rm -rf "$VENV"
+    [ -d "$VENV" ] && { echo "ERROR: could not remove $VENV — stop any running Gray Matter/Neuron process and re-run."; exit 1; }
+fi
+# Un venv "c'e'" solo se il suo interprete PARTE. `[ -d ]` sulla cartella non e'
+# quel test: una rimozione interrotta lascia lib/ e bin/ senza pyvenv.cfg, la
+# creazione viene saltata e il primo pip muore con "failed to locate pyvenv.cfg".
+# Stessa guardia di Test-VenvHealthy in install.ps1.
+venv_healthy() {  # $1 = venv
+    [ -f "$1/pyvenv.cfg" ] || return 1
+    [ -x "$1/bin/python" ] || return 1
+    "$1/bin/python" -c "import sys" >/dev/null 2>&1
+}
+if [ -d "$VENV" ] && ! venv_healthy "$VENV"; then
+    echo "Damaged venv detected (pyvenv.cfg missing or interpreter dead) - rebuilding"
+    rm -rf "$VENV"
+fi
 # venv: Plan A stdlib venv, Plan B virtualenv, else EXIT with guidance.
 if [ ! -d "$VENV" ]; then
-    "$PY" -m venv "$VENV" 2>/dev/null \
-        || "$PY" -m virtualenv "$VENV" 2>/dev/null \
-        || { echo "ERROR: could not create a venv at $VENV — install python3-venv (or 'pip install virtualenv') and re-run."; exit 1; }
+    "$PY" -m venv "$VENV" 2>/dev/null || "$PY" -m virtualenv "$VENV" 2>/dev/null || true
+    venv_healthy "$VENV" || { echo "ERROR: could not create a working venv at $VENV - install python3-venv (or 'pip install virtualenv') and re-run."; exit 1; }
 fi
 VPY="$VENV/bin/python"
 # pip self-upgrade is non-critical: never let it abort the install.
@@ -109,8 +157,8 @@ else
         || { echo "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1; }
 fi
 
-# GM_PEER_DIR set → standalone mode (called from Neuron/install.sh or NeuRAG):
-# install ONLY GM + the specified peer, skip sibling detection entirely.
+# GM_PEER_DIR set → coupled mode (called from Neuron/install.sh or NeuRAG):
+# install GM + the calling peer, then detect and ask about other siblings.
 install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
     pkg=$(basename "$1" | tr '[:upper:]' '[:lower:]')
     if [ "$FORCE" != "1" ] && already_installed "$pkg" "$1"; then
@@ -118,6 +166,7 @@ install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
         return 0
     fi
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling $2 (forced)..." || echo "Installing $2 ($1)..."
+    stop_venv_procs                 # same respawn window as install.ps1
     # shellcheck disable=SC2086
     "$VPY" -m pip install $FINDLINKS $FORCE_ARGS "$1" \
         || "$VPY" -m pip install $FORCE_ARGS "$1" \
@@ -125,14 +174,74 @@ install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
 }
 
 if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
-    # Standalone: le wheel del peer si aggiungono a quelle già trovate.
+    # Coupled mode: called from Neuron or NeuRAG installer.
+    # Always install GM + the calling peer, then detect other siblings and ask.
     [ -d "$GM_PEER_DIR/vendor" ] && FINDLINKS="$FINDLINKS --find-links $GM_PEER_DIR/vendor"
-    install_peer "$GM_PEER_DIR" "$(basename "$GM_PEER_DIR")"
+    PEER_LABEL=$(basename "$GM_PEER_DIR")
+    install_peer "$GM_PEER_DIR" "$PEER_LABEL"
+    # Detect other peers as siblings of the calling peer's parent
+    PEER_PARENT=$(dirname "$GM_PEER_DIR")
+    OTHER_PEERS=""
+    case "$PEER_LABEL" in
+        neuron|Neuron)
+            _d=$(find_peer_in neurag "$PEER_PARENT" 2>/dev/null || find_peer_in Neurag "$PEER_PARENT" 2>/dev/null || true)
+            [ -n "$_d" ] && OTHER_PEERS="$_d:NeuRAG"
+            ;;
+        neurag|Neurag)
+            _d=$(find_peer_in neuron "$PEER_PARENT" 2>/dev/null || find_peer_in Neuron "$PEER_PARENT" 2>/dev/null || true)
+            [ -n "$_d" ] && OTHER_PEERS="$_d:Neuron"
+            ;;
+    esac
+    for _entry in $OTHER_PEERS; do
+        _dir="${_entry%%:*}"
+        _label="${_entry##*:}"
+        if already_installed "$_label" "$_dir" 2>/dev/null; then
+            echo ""
+            echo "  $_label $(src_ver "$_dir") detected alongside $PEER_LABEL."
+        else
+            echo ""
+            echo "  $_label source found alongside $PEER_LABEL."
+        fi
+        printf "  [Y]es — add %s to the suite\n" "$_label"
+        printf "  [N]o  — keep %s standalone\n" "$PEER_LABEL"
+        printf "  Include %s? [Y] " "$_label"
+        read -r _ans
+        case "$_ans" in
+            n|N|no|NO)
+                echo "  Skipping $_label."
+                ;;
+            *)
+                install_peer "$_dir" "$_label"
+                ;;
+        esac
+    done
 else
     # Full suite mode — tools bundled INSIDE the GM repo zip, or siblings.
     [ -z "${GM_NO_NEURON:-}" ] && [ -n "$NEURON_DIR" ] && install_peer "$NEURON_DIR" "Neuron"
     [ -z "${GM_NO_NEURAG:-}" ] && [ -n "$NEURAG_DIR" ] && install_peer "$NEURAG_DIR" "NeuRAG"
+    # Un peer assente veniva saltato in SILENZIO: chi scarica il solo repo GM si
+    # ritrovava il gateway da solo convinto di aver installato la suite, e lo
+    # scopriva molto dopo da un `status` con zero tool di memoria. Il gateway
+    # funziona benissimo anche da solo (pulse gestisce i server assenti) — ma
+    # va detto adesso, non intuito dopo. Non è un errore: si avvisa e si tira dritto.
+    report_missing_peer() {  # $1 = label, $2 = dir repo, $3 = url
+        echo ""
+        echo "  [i] $1 not found next to Gray Matter — it will NOT be installed."
+        echo "      Gray Matter works on its own, with that half of the memory missing."
+        echo "      To add it: clone $3 into a '$2' folder next to this one,"
+        echo "      then run this installer again."
+    }
+    [ -z "${GM_NO_NEURON:-}" ] && [ -z "$NEURON_DIR" ] && \
+        report_missing_peer "Neuron (semantic memory)" \
+                            "neuron" "https://github.com/recla93/Neuron"
+    [ -z "${GM_NO_NEURAG:-}" ] && [ -z "$NEURAG_DIR" ] && \
+        report_missing_peer "NeuRAG (knowledge base)" \
+                            "neurag" "https://github.com/recla93/neurag"
 fi
+
+# Last stop before the dependency phase (pyturso / fastembed write into
+# site-packages). Mirrors install.ps1.
+stop_venv_procs
 
 # Best-effort turso tier: prova le wheel vendored (Neuron/vendor o vendor del
 # peer), poi PyPI (mac/linux le ha). Se fallisce NON è un errore: NeuRAG e
@@ -163,6 +272,13 @@ echo "Installing the gateway (register + hooks + manifest)..."
 [ -n "$NEURON_DIR" ] && "$VPY" -m neuron record-paths --source "$NEURON_DIR" >/dev/null 2>&1 || true
 [ -n "$NEURAG_DIR" ] && "$VPY" -m neurag.cli record-paths --source "$NEURAG_DIR" >/dev/null 2>&1 || true
 
+# --- GME Registry ---
+# `cli install` above already registers every tool (installer.plan emits
+# register_gme). Repeated here as the safety net for its `|| cli register`
+# fallback path, which writes no manifest and no registry: one line, same single
+# writer, so the two can never drift the way six shell copies did.
+"$VPY" -m gray_matter.gme register "$HERE" || true
+
 # Convenience: put `gray-matter` on PATH if ~/.local/bin exists.
 if [ -x "$VENV/bin/gray-matter" ] && [ -d "$HOME/.local/bin" ]; then
     ln -sf "$VENV/bin/gray-matter" "$HOME/.local/bin/gray-matter" 2>/dev/null || true
@@ -174,8 +290,11 @@ if [ -d "$HOME/Desktop" ]; then
     printf '#!/bin/sh\nexec "%s" -m gray_matter.cli gui\n' "$VPY" > "$SC" && chmod +x "$SC" || true
 fi
 
+echo ""
 echo "Done. Restart your AI apps to load the servers."
-echo "Control center any time:  $VENV/bin/gray-matter gui   (or: gray-matter gui)"
-if ask "Open the Gray-Matter control center now?"; then
-    nohup "$VPY" -m gray_matter.cli gui >/dev/null 2>&1 &
-fi
+echo "Control center: the 'Gray-Matter-GUI' icon on your Desktop"
+echo "                (or run: gray-matter gui)"
+# L'installer NON apre piu' il control center da solo — keep-in-sync con
+# install.ps1. Aprirlo qui significava aprirlo nel momento peggiore: subito
+# dopo aver scritto venv, registrazioni e shortcut, col daemon non ancora a
+# regime. Il lanciatore sul Desktop c'e': lo si apre quando si vuole.

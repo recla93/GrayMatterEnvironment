@@ -50,7 +50,8 @@ _DETECT = {"neuron": "neuron", "neurag": "neurag", "gray-matter": "gray_matter"}
 
 # Gateway flip (§1 proxy model): clients talk ONLY to GM; these slugs get
 # evicted from client configs (GM spawns them itself as managed workers).
-# "neuron5" is the slug real installs use, "neuron" the generic one.
+# "neuron" is the slug installs use; "neuron5" is the retired v5 identity, kept
+# here so a config written by an older install still gets evicted.
 GATEWAY_EVICT = ("neuron", "neuron5", "neurag")
 
 
@@ -130,7 +131,7 @@ def _pick(paths: list[str]) -> "str | None":
 def _register_json(spec: dict, path: str, servers: list[str], py: str,
                    evict: tuple = ()) -> dict:
     try:
-        raw = Path(path).read_text(encoding="utf-8") if os.path.exists(path) else ""
+        raw = Path(path).read_text(encoding="utf-8-sig") if os.path.exists(path) else ""
         data = json.loads(raw) if raw.strip() else {}
     except (json.JSONDecodeError, OSError):
         # Likely JSONC or unreadable — hand the user a snippet, don't clobber.
@@ -235,7 +236,12 @@ def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
         if only and ckey not in only:
             continue
         paths = [p for p in spec["paths"]() if os.path.exists(p)]
-        if not paths and not spec.get("create"):
+        # "create_if_missing", the key neuron/clients.py and neurag/clients.py
+        # actually use. This read "create", which no spec anywhere defines — so
+        # the opt-in was unreachable here while the two peers honoured it and
+        # created configs for apps that are not installed. Same key, same
+        # default (False), one behaviour across the three.
+        if not paths and not spec.get("create_if_missing"):
             results.append({"client": spec["label"], "ok": False,
                             "action": "skipped", "detail": "client not found"})
             continue
@@ -274,7 +280,7 @@ def deregister(servers: "list[str] | None" = None) -> list[dict]:
             continue
         for path in paths_:
             try:
-                raw = Path(path).read_text(encoding="utf-8")
+                raw = Path(path).read_text(encoding="utf-8-sig")
                 data = json.loads(raw) if raw.strip() else {}
             except (json.JSONDecodeError, OSError):
                 results.append({"client": spec["label"], "ok": False,
@@ -346,7 +352,7 @@ def standalone_register_tool(name: str, dry_run: bool = False) -> list[str]:
     try:
         if name == "neuron":
             from neuron import clients as _nc
-            slug = os.environ.get("NEURON_SLUG", "neuron5")
+            slug = os.environ.get("NEURON_SLUG", "neuron")
             py = _nc.default_server_python(slug)
             results = _nc.register_all(slug, py, dry_run=dry_run)
         elif name == "neurag":
@@ -396,7 +402,7 @@ def doctor(py: "str | None" = None) -> list[dict]:
         if path is None:
             continue
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8") or "{}")
+            data = json.loads(Path(path).read_text(encoding="utf-8-sig") or "{}")
             node = data
             for k in spec["keys"]:
                 node = node.get(k, {}) if isinstance(node, dict) else {}

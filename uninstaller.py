@@ -29,6 +29,11 @@ def plan(manifest: dict, *, purge_data: bool = False,
         for p in hpaths:
             actions.append({"action": "remove_hook", "client": client, "path": p})
     actions.append({"action": "remove_code"})   # app/, config.json, logs/, manifest, pids
+    # The GME registry entry outlives the code unless we say so: catalog.py and
+    # webgui.py would keep handing out a `python` path into a venv that is no
+    # longer there. Marked *missing* rather than deleted so a later reinstall
+    # (and the migration card) still sees the tool was once registered here.
+    actions.append({"action": "unregister_gme", "key": "gray-matter"})
     for name, path in sorted((data_paths or {}).items()):
         actions.append({"action": "remove_data" if purge_data else "ask_data",
                         "name": name, "path": str(path)})
@@ -38,7 +43,7 @@ def plan(manifest: dict, *, purge_data: bool = False,
 # What a `--deep` legacy scan hunts for on the host PC. Descriptors only — the
 # actual filesystem/process/config walk is effectful and runs locally.
 LEGACY_TARGETS = [
-    {"kind": "old_slug",     "desc": "data dir del vecchio slug 'neuron' (vs 'neuron5')"},
+    {"kind": "old_slug",     "desc": "data dir del vecchio slug 'neuron5' (lo slug attuale è 'neuron')"},
     {"kind": "old_name",     "desc": "artefatti 'neural-stimulus'/'neural_stimulus' (vecchio nome)"},
     {"kind": "path_scripts", "desc": "script neuron*/gray-matter rimasti su PATH"},
     {"kind": "stale_client", "desc": "entry MCP orfane nei config client (slug non installato)"},

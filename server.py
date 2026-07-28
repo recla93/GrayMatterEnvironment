@@ -38,9 +38,17 @@ _cfg = _settings.load()
 
 # SSOT in cli.py: la CLI (e la GUI) devono conoscere host/porta SENZA
 # importare questo modulo, che trascina `mcp` e tutto il server.
+# _send_ipc/_recv_exact vivono in cli.py con host e porta (stesso SSOT). Qui ne
+# esisteva una COPIA sincrona, resa irraggiungibile dall'omonima `async
+# _recv_exact` definita più sotto: Python risolve i globali alla chiamata, così
+# `_send_ipc` finiva per invocare la coroutine con 2 argomenti su 3 →
+# TypeError. Effetto: _send_heartbeat/_send_registration fallivano SEMPRE →
+# NeuRAG standalone moriva all'avvio (autoregister non è protetto) e Neuron non
+# si registrava mai al gateway, in silenzio. Una copia sola, importata.
 from gray_matter.cli import (GRAY_MATTER_HOST, GRAY_MATTER_PORT,  # noqa: E402
                              GRAY_MATTER_PORT_SPAN, resolve_port, write_port_file,
-                             clear_port_file, port_is_free, gm_answers)
+                             clear_port_file, port_is_free, gm_answers,
+                             _send_ipc, IPC_TOOL_TIMEOUT)
 HEARTBEAT_INTERVAL = _cfg["heartbeat_interval"]  # seconds
 HEARTBEAT_TIMEOUT = 15.0  # seconds — after 3 missed beats, mark dead
 IDLE_SLEEP_TIMEOUT = _cfg["idle_sleep_timeout"]  # sleep after this long idle
@@ -48,40 +56,6 @@ IDLE_SLEEP_TIMEOUT = _cfg["idle_sleep_timeout"]  # sleep after this long idle
 # ---------------------------------------------------------------------------
 # IPC helpers (tiny TCP-based protocol for server <-> Gray-Matter)
 # ---------------------------------------------------------------------------
-
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    """Read exactly n bytes from sock, or return b'' on short/failed read."""
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            return b""
-        buf += chunk
-    return buf
-
-
-def _send_ipc(data: dict) -> dict:
-    """Send a JSON IPC message to the local Gray-Matter process."""
-    payload = json.dumps(data).encode("utf-8")
-    length = struct.pack("!I", len(payload))
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(3.0)
-            s.connect((GRAY_MATTER_HOST, resolve_port()))
-            s.sendall(length + payload)
-            hdr = _recv_exact(s, 4)
-            if not hdr:
-                return {"error": "no response"}
-            resp_len = struct.unpack("!I", hdr)[0]
-            if resp_len <= 0 or resp_len > 1_000_000:
-                return {"error": "invalid response length"}
-            resp_data = _recv_exact(s, resp_len)
-            if not resp_data:
-                return {"error": "incomplete response"}
-            return json.loads(resp_data.decode("utf-8"))
-    except (ConnectionRefusedError, TimeoutError, OSError) as e:
-        return {"error": str(e)}
-
 
 def _send_registration(name: str, tool_names: list[str], socket_path: str, pid: int) -> dict:
     """Register this server with Gray-Matter."""
@@ -145,11 +119,22 @@ def _spawn_gray_matter() -> None:
     """Spawn Gray-Matter as a background process."""
     # Use python -m gray_matter.server to run the server module
     # Detach from parent process so it survives parent death
-    import sys
     cmd = [sys.executable, "-u", "-m", "gray_matter.server", "--daemon"]  # -u: log senza buffering
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+        # NIENTE DETACHED_PROCESS. Windows IGNORA CREATE_NO_WINDOW quando è
+        # combinato con DETACHED_PROCESS (o CREATE_NEW_CONSOLE), e il figlio
+        # staccato si alloca una console TUTTA SUA — la finestra CMD vuota che
+        # compariva a ogni `gray-matter start`. Misurato sul posto:
+        #   CREATE_NO_WINDOW | DETACHED_PROCESS -> console visibile
+        #   CREATE_NO_WINDOW                    -> nessuna console
+        #   CREATE_NO_WINDOW | NEW_PROCESS_GROUP-> nessuna console
+        # DETACHED_PROCESS non serviva comunque a far sopravvivere il daemon:
+        # su Windows i figli non muoiono col padre (non c'è kill dell'albero
+        # senza un Job object). Il gruppo separato serve solo a NON prendere il
+        # Ctrl-C della console che l'ha avviato.
+        creationflags = (subprocess.CREATE_NO_WINDOW
+                         | subprocess.CREATE_NEW_PROCESS_GROUP)
 
     # G2: stdout/stderr → logs/daemon.log (append) invece del buco nero — ogni
     # print e traceback diventa leggibile con `gray-matter logs [--follow]`.
@@ -566,7 +551,10 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict) 
     lock = _worker_locks.setdefault(server_name, asyncio.Lock())
     async with lock:                              # one request at a time per pipe
         p = _worker_for(server_name)
-        loop = asyncio.get_event_loop()
+        # get_running_loop, not get_event_loop: all three call sites are inside
+        # coroutines, and get_event_loop() is deprecated when a loop is already
+        # running (3.12+) — on 3.14 the no-loop case raises outright.
+        loop = asyncio.get_running_loop()
 
         def _io() -> str:
             p.stdin.write(json.dumps({"tool": tool_name, "args": arguments}) + "\n")
@@ -614,7 +602,7 @@ async def _fetch_tool_schemas(server_name: str) -> dict:
     lock = _worker_locks.setdefault(server_name, asyncio.Lock())
     async with lock:
         p = _worker_for(server_name)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _io() -> str:
             p.stdin.write(json.dumps({"op": "list_tools"}) + "\n")
@@ -857,8 +845,11 @@ async def _maybe_flash(topic: str):
 # IPC listener (background) — receives registrations, heartbeats
 # ---------------------------------------------------------------------------
 
-async def _recv_exact(loop, conn, n: int) -> "bytes | None":
-    """Read exactly n bytes from a non-blocking socket, or None on short read."""
+async def _recv_exact_async(loop, conn, n: int) -> "bytes | None":
+    """Read exactly n bytes from a non-blocking socket, or None on short read.
+
+    Suffisso `_async` non decorativo: si chiamava `_recv_exact` come l'omonima
+    sincrona di cli.py e la copriva silenziosamente a livello di modulo."""
     buf = b""
     while len(buf) < n:
         try:
@@ -876,13 +867,13 @@ async def _recv_message(loop, conn) -> bytes:
     many bytes. Returns the payload (b'' on short read / bad frame). This is the
     fix for the old `data[4:]` single-recv assumption that broke on any message
     split across TCP segments."""
-    header = await _recv_exact(loop, conn, 4)
+    header = await _recv_exact_async(loop, conn, 4)
     if header is None:
         return b""
     (length,) = struct.unpack("!I", header)
     if length <= 0 or length > 1_000_000:      # sanity guard vs junk/oversize
         return b""
-    payload = await _recv_exact(loop, conn, length)
+    payload = await _recv_exact_async(loop, conn, length)
     return payload or b""
 
 
@@ -892,7 +883,7 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
     exit_on_busy: a daemon that finds :9876 taken is a duplicate and must die
     (SystemExit escapes asyncio). A stdio instance (main) must instead keep
     serving MCP without a listener — its managed workers don't need the port."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     # Singleton PRESERVATO ma porta DINAMICA: se su una porta candidata risponde
     # GIÀ un GM (probe `ping`), siamo un duplicato e moriamo. Se la porta è presa
     # da un processo ESTRANEO, si scala alla prima libera invece di non partire
@@ -917,6 +908,9 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
             if gm_answers(GRAY_MATTER_HOST, port):
                 if exit_on_busy:
                     raise SystemExit(0)
+                return
+            if not exit_on_busy:
+                # stdio mode: non cercare un'altra porta — salta l'ascolto IPC
                 return
             continue
         server_sock, chosen = s, port
@@ -1065,6 +1059,7 @@ def _init_options() -> InitializationOptions:
 
 def main() -> None:
     """Run Gray-Matter as a stdio MCP server with background IPC listener."""
+    _record_self("stdio")
     async def _run():
         # Start background tasks
         ipc_task = asyncio.create_task(_ipc_listener(exit_on_busy=False))
@@ -1115,12 +1110,41 @@ def auto_register_and_run(name: str, tool_names: list[str]) -> None:
     t.start()
 
 
+def _record_self(role: str) -> None:
+    """Iscrive questo processo al registro dei PID (INSTALLER-UX §7).
+
+    Best-effort e mai bloccante: senza registro la suite funziona lo stesso,
+    è `doctor` che smette di poter dire "questi due sono rimasti indietro".
+    """
+    try:
+        from gray_matter import pids as _pids
+        _pids.record_self(role)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_daemon() -> None:
     """Registry/orchestrator only: IPC listener (:9876) + monitors, NO stdio MCP.
     This is how Gray-Matter runs when started as a background daemon (autoregister
     or `gray-matter start`) — there's no MCP client to attach stdio to, so main()'s
     stdio_server() would just exit on a detached process."""
+    _record_self("daemon")
+
     async def _run():
+        # Stessa self-discovery di main(): era cablata SOLO nel ramo stdio, così
+        # un daemon avviato con `gray-matter start` (o spawnato da autoregister)
+        # restava con il registro vuoto — `status` diceva "Servers: 0" e ogni
+        # gm-neuron/gm-neurag moriva con "worker gave no response". I due rami
+        # devono partire dallo stesso stato: è lo stesso gateway.
+        #
+        # In BACKGROUND, non awaited prima del listener: il bootstrap interroga
+        # i worker (spawn del subprocess + caricamento del modello) e può durare
+        # decine di secondi. Awaitarlo qui teneva la porta IPC chiusa per tutto
+        # quel tempo: `gray-matter start` diceva "started" e un `doctor` subito
+        # dopo rispondeva "not running" con connessione rifiutata. main() fa lo
+        # stesso: crea il task del listener PRIMA di aspettare il bootstrap.
+        boot = asyncio.create_task(_bootstrap_subservers())
+        boot.add_done_callback(lambda t: t.cancelled() or t.exception())
         await asyncio.gather(
             _ipc_listener(),
             _heartbeat_monitor(),

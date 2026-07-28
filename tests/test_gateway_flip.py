@@ -35,6 +35,7 @@ def test_ipc_listener_exits_when_port_taken(monkeypatch):
     port = blocker.getsockname()[1]
     monkeypatch.setattr(server, "GRAY_MATTER_HOST", "127.0.0.1")
     monkeypatch.setattr(server, "GRAY_MATTER_PORT", port)
+    monkeypatch.setattr(server, "GRAY_MATTER_PORT_SPAN", 1)  # only try the blocked port
     try:
         with pytest.raises(SystemExit):
             asyncio.run(server._ipc_listener())

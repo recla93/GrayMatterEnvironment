@@ -15,5 +15,18 @@ venv/
 
 # OS / editors
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
+
+# Agent/session settings — locali per macchina, non per il repo.
+.claude/
+.codex/
+
+# Output generato: il grafo di navigazione si rigenera, non si versiona.
+graphify-out/
+
+# Logs / backup lasciati dagli strumenti (clients.py salva un .bak a ogni
+# modifica dei config dei client MCP).
+*.log
+*.bak
