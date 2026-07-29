@@ -171,6 +171,11 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="knowledge_reindex",
+            description="Re-embed every chunk with the currently active embedding model. Use after changing embed_model: vectors from two models are not comparable, so search returns noise until the vault is rebuilt. Only vectors change — chunk text, nodes and links are untouched, and the source files are not needed. For a chunk-SIZE change use knowledge_ingest instead (it re-chunks from disk).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="knowledge_neighbors",
             description="D3 — structured neighborhood of a node, resolved from a query (trigger match, then exact name). BFS over parent/children/links up to `depth` hops. JSON: {node, neighbors:[{name, path, node_type, relation, distance}]}. Empty node = no match. Cheap (SQL-only) — built for Gray Matter's proactive-knowledge pulse.",
             inputSchema={
@@ -440,6 +445,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = db.rebuild_links()
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
+    if name == "knowledge_reindex":
+        result = db.reindex()
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
     if name == "knowledge_remove_node":
         name = arguments["name"]
         node = db.get_node_by_name(name)
@@ -484,6 +493,7 @@ def main() -> None:
         "knowledge_health",
         "knowledge_link_graph",
         "knowledge_rebuild_links",
+        "knowledge_reindex",
         "knowledge_remove_node",
         "knowledge_rename_node",
         "knowledge_import",

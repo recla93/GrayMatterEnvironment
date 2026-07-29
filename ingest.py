@@ -112,7 +112,7 @@ def auto_ingest(kg, root, godnode: "str | None" = None, say=None) -> dict:
             continue
         report["files"] += 1
         report["chunks"] += n
-        say(f"  {f.relative_to(root)} → {n} chunk")
+        say(f"  {f.relative_to(root)} -> {n} chunk")
 
     say("[link] ricostruzione dei collegamenti…")
     report["links"] = kg.rebuild_links()

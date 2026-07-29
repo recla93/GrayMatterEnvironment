@@ -347,6 +347,12 @@ CREATE TABLE IF NOT EXISTS node_links (
 
 CREATE INDEX IF NOT EXISTS idx_links_source ON node_links(source_id);
 CREATE INDEX IF NOT EXISTS idx_links_target ON node_links(target_id);
+
+-- Which embedding model produced the vectors in `chunks`. Stored NEXT TO the
+-- vectors, not in config.json, because that is the only place that stays true:
+-- a settings file can be edited, copied, or reset independently of the vault,
+-- and then nothing knows the stored vectors are from a different space.
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
@@ -787,8 +793,10 @@ class KnowledgeGraph:
         # under "Install > Windows > venv" that only says "run the script" is
         # unreachable by "windows install" unless its location is in the vector.
         # Stored text stays pure — only the embedding input is enriched.
-        vec = self._get_embedding(f"{section}\n\n{text}" if section else text)
+        vec = self._get_embedding(self._embed_input(text, section))
         blob = self._pack_vec(vec) if vec else None
+        if blob is not None:
+            self._record_embed_signature()   # claims an unclaimed vault only
         cur = self._conn.execute(
             "INSERT INTO chunks (node_id, text, source, section, chunk_index, embedding) VALUES (?, ?, ?, ?, ?, ?)",
             (node_id, text, source, section, chunk_index, blob),
@@ -1139,6 +1147,119 @@ class KnowledgeGraph:
 
     # -- search: semantic (embedder) or lexical (TF-IDF) --------------------
 
+    # -- embedding provenance: which model built the vectors in this vault ----
+
+    @staticmethod
+    def _embed_input(text: str, section: "str | None") -> str:
+        """What actually gets embedded. One definition so `add_chunk` and
+        `reindex` cannot drift into embedding different strings for the same
+        chunk — which would silently split the vault across two vector spaces."""
+        return f"{section}\n\n{text}" if section else text
+
+    def meta_get(self, key: str) -> "str | None":
+        try:
+            row = self._conn.execute("SELECT value FROM meta WHERE key = ?",
+                                     (key,)).fetchone()
+        except Exception:  # noqa: BLE001 — pre-meta vault, or corrupt
+            return None
+        return row[0] if row else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+        self._conn.commit()
+
+    def active_embed_signature(self) -> "tuple[str, int]":
+        e = self._embedder
+        return (getattr(e, "model_name", "") or e.name, int(getattr(e, "dim", 0) or 0))
+
+    def stored_embed_signature(self) -> "tuple[str, int] | None":
+        model = self.meta_get("embed_model")
+        if model is None:
+            return None
+        try:
+            return (model, int(self.meta_get("embed_dim") or 0))
+        except (TypeError, ValueError):
+            return (model, 0)
+
+    def _record_embed_signature(self, force: bool = False) -> None:
+        """Claim the vault for the active model — only if unclaimed, so an
+        existing mismatch stays visible instead of being overwritten by the
+        first new chunk."""
+        if force or self.stored_embed_signature() is None:
+            model, dim = self.active_embed_signature()
+            self.meta_set("embed_model", model)
+            self.meta_set("embed_dim", dim)
+
+    def embed_mismatch(self) -> "dict | None":
+        """Non-None when the vault's vectors came from a different model.
+
+        Vectors from two models are not comparable — cosine between them is
+        noise, not a weak match — so this has to be detected at OPEN, loudly,
+        rather than quietly producing bad rankings forever. It is never fatal:
+        the vault still opens and still answers (I5)."""
+        stored = self.stored_embed_signature()
+        if stored is None:
+            return None
+        if not getattr(self._embedder, "available", False):
+            return None                      # lexical mode ignores vectors anyway
+        active = self.active_embed_signature()
+        if stored == active:
+            return None
+        try:
+            embedded = self._conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").fetchone()[0]
+        except Exception:  # noqa: BLE001
+            embedded = 0
+        if not embedded:
+            return None                      # nothing to be wrong about
+        return {"stored_model": stored[0], "stored_dim": stored[1],
+                "active_model": active[0], "active_dim": active[1],
+                "embedded_chunks": embedded,
+                "hint": "Vectors in this vault were built with a different model, "
+                        "so semantic search is unreliable. Run `neurag reindex`."}
+
+    def reindex(self, say=None) -> dict:
+        """Re-embed every chunk with the ACTIVE model, in place.
+
+        Only the vectors are rebuilt — chunk text, sections, nodes and links are
+        untouched, and the source files are not needed. That is the right scope
+        for a MODEL change. A change to the chunk ceiling is a different
+        operation: re-run `neurag ingest`, which is idempotent per source file
+        and re-chunks from disk.
+        """
+        say = say or (lambda s: None)
+        model, dim = self.active_embed_signature()
+        if not getattr(self._embedder, "available", False):
+            return {"ok": False, "reason": "lexical mode — no embedder to reindex with",
+                    "model": model, "chunks": 0, "embedded": 0}
+
+        rows = self._conn.execute(
+            "SELECT id, text, section FROM chunks ORDER BY id").fetchall()
+        # ASCII only: a Windows console on the legacy cp1252 codepage raises
+        # UnicodeEncodeError on a bare "->" arrow and takes the whole reindex
+        # down with it. Same rule the .cmd launchers already follow.
+        say(f"[reindex] {len(rows)} chunk(s) -> {model} (dim {dim})")
+        done = failed = 0
+        for i, r in enumerate(rows, 1):
+            try:
+                vec = self._get_embedding(self._embed_input(r["text"], r["section"]))
+                self._conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?",
+                                   (self._pack_vec(vec) if vec else None, r["id"]))
+                done += 1
+            except Exception as exc:  # noqa: BLE001 — one bad chunk must not abort
+                failed += 1
+                say(f"  [!] chunk {r['id']}: {exc}")
+            if i % 200 == 0:
+                self._conn.commit()
+                say(f"  {i}/{len(rows)}")
+        self._conn.commit()
+        self._record_embed_signature(force=True)
+        say(f"[ok] re-embedded {done}, failed {failed}")
+        return {"ok": failed == 0, "model": model, "dim": dim,
+                "chunks": len(rows), "embedded": done, "failed": failed}
+
     def _get_embedding(self, text: str):
         """Embed a DOCUMENT. None when lexical-only (NullEmbedder)."""
         return self._embedder.embed(text)
@@ -1404,6 +1525,10 @@ class KnowledgeGraph:
                     "'fastembed>=0.5,<1', then `neurag reindex`.")
         else:
             out["search_mode"] = "semantic"
+        mismatch = self.embed_mismatch()
+        if mismatch:
+            out["embed_mismatch"] = mismatch
+            out["warning"] = mismatch["hint"]
         return out
 
     # -- health: structural integrity (L1, deterministic) -------------------

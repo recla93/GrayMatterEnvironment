@@ -127,13 +127,19 @@ Four real gaps — and the first one is a direct violation of I2:
 
 Then:
 
-1. **Changing the model silently corrupts the vault.** `settings.set("embed_model", …)`
-   succeeds instantly, and every existing vector becomes noise — different models are
-   different spaces, and a dim change makes them not even comparable. `HELP` warns in
-   prose; nothing enforces it. **Deliverable:** `neurag reindex` (CLI + MCP + GUI button),
-   and a model change that is *refused* unless followed by a re-index or `--force`.
-   Store `embed_model` + `embed_dim` in the DB `meta` alongside the vectors, so a
-   mismatch is detected at open, not at query.
+1. ~~**Changing the model silently corrupts the vault.**~~ **✅ FIXED 2026-07-30.**
+   `settings.set("embed_model", …)` succeeded instantly and every stored vector became
+   noise; the only warning was prose in the knob's `HELP`, which nothing enforced.
+   Now: `embed_model` + `embed_dim` live in a `meta` table **next to the vectors** —
+   config.json can be edited, copied or reset independently of the vault, so it could
+   never be the source of truth — and `embed_mismatch()` detects a swap at open rather
+   than at query, surfaced through `status()`. `neurag reindex` (CLI `--json`, MCP
+   `knowledge_reindex`, catalogued so the GUI renders it) re-embeds every chunk from
+   stored text; sources are not needed and text/nodes/links are untouched. Changing
+   `embed_model`/`embed_dim` on a populated vault is refused with the exact recovery
+   command unless `--force`.
+   Scope note: `reindex` is for a MODEL change. A chunk-*size* change needs re-chunking
+   from disk — that is `neurag ingest`, which is idempotent per source file since P2.
 2. **e5 models ship broken.** Option 4 is `intfloat/multilingual-e5-large`, advertised as
    best quality. E5 requires `query: ` / `passage: ` prefixes; a grep across all three
    repos finds none. Picking option 4 today yields *worse* results than option 1, with no
@@ -342,7 +348,7 @@ Each phase ships green, standalone (I2), and with the GUI verified (I7).
 | **P0** ✅ | **Turn the graph on.** `add_tags()` + `index_into_node` populates `nodes.tags`; `MIN_TAG_JACCARD=0.15` restored; `build_crossref_links` replaced with the designed trigger-mention scan (`MIN_CROSSREF_MENTIONS=2`, whole-word matching); `upsert_link(commit=False)` so a bulk build is one transaction. | `neurag/db.py`, `tests/test_node_links.py` | ✅ same fixture: `{tag_overlap: 0, cross_ref: 0}` → `{1, 2}`. `neurag/tests` 136 passed. Gate added: `test_auto_ingest_actually_produces_links` |
 | **P1** | **Tag substrate.** Tables + migration + IDF suppression + tag salience. Legacy columns kept as read path. | `neurag/db.py`, `chunker.py` | migration idempotent; link count within 2× of P0 |
 | **P2** ✅ | **Encoding.** Ceiling derived from the live tokenizer (`embedder.max_chars_for`), breadcrumb `section` embedded with the body, 12% overlap taken *out* of the budget, H1–H6 split, single enforcement point at `chunk_file`. Plus: idempotent re-ingest, and generated-artefact dirs skipped. | `neurag/chunker.py`, `embedder.py`, `db.py`, `ingest.py`, `settings.py` | ✅ 77.3% of corpus text was unreachable → 0%. `neurag/tests` 154 passed |
-| **P3** ◑ | **Retrieval.** RRF hybrid (both rankers always run), BM25 replacing length-unnormalised TF-IDF, `node_id` subtree scope, MMR (λ=0.7), e5 `query:`/`passage:` prefixes, and `.sh`/`.ps1`/`.sql`/`.c`/`.cs`/… made indexable. | `neurag/db.py`, `embedder.py`, `chunker.py` | ✅ recall@5 **67% → 94%** vs the shipped vector-only. 183 passed. **Outstanding:** `neurag reindex` as an explicit command, and the guard that refuses an `embed_model` change without one |
+| **P3** ✅ | **Retrieval.** RRF hybrid (both rankers always run), BM25 replacing length-unnormalised TF-IDF, `node_id` subtree scope, MMR (λ=0.7), e5 `query:`/`passage:` prefixes, `.sh`/`.ps1`/`.sql`/`.c`/`.cs`/… made indexable, plus `reindex` + the embed-model guard. | `neurag/db.py`, `embedder.py`, `chunker.py`, `cli.py`, `server.py`, `gray_matter/catalog.py` | ✅ recall@5 **67% → 94%** vs the shipped vector-only. 195 passed |
 | **P4** | **Layers.** L1 session cache (port from Neuron), L3/L4 parking, link/tag decay, `recall`. | `neurag/db.py`, `settings.py`, `cli.py` | every parked item returns byte-identical via `recall` (I5) |
 | **P5** | **Brain.** `origin` column, Hebbian on confirm, spreading-activation expansion. | `neurag/db.py`, `server.py` | curated links survive re-ingest |
 | **P6** | **Cross-tool (GM only).** CLS consolidation Neuron→NeuRAG; bridges join on tag ids; stimuli enriched with knowledge. | `gray_matter/bridges.py`, `server.py`, `neuron/…/stimulus.py` | all of P0–P5 still green with GM absent |

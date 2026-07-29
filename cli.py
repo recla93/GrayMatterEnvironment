@@ -74,6 +74,16 @@ def build_parser() -> argparse.ArgumentParser:
     cfg_p.add_argument("value", nargs="?", default=None)
     cfg_p.add_argument("--json", action="store_true",
                        help="Structured JSON output (used by the control center)")
+    cfg_p.add_argument("--force", action="store_true",
+                       help="Change embed_model/embed_dim even though the vault "
+                            "already holds vectors (they become unusable until "
+                            "`neurag reindex`)")
+
+    rix = sub.add_parser("reindex",
+                         help="Re-embed every chunk with the active model "
+                              "(after changing embed_model)")
+    rix.add_argument("--json", action="store_true",
+                     help="Structured JSON output (used by the control center)")
 
     rep = sub.add_parser("repair",
                          help="Clean reinstall of NeuRAG ONLY (standalone, no GM): choose what to delete, then force-reinstall")
@@ -137,7 +147,7 @@ COMMAND_GROUPS = {
     "health": "inspect", "doctor": "inspect",
     "chunk": "maintenance", "add-node": "maintenance",
     "add-chunks": "maintenance", "import": "maintenance",
-    "ingest": "maintenance", "rename-node": "maintenance",
+    "ingest": "maintenance", "reindex": "maintenance", "rename-node": "maintenance",
     "remove-node": "maintenance",
     "config": "tuning", "repair": "lifecycle", "record-paths": "lifecycle",
     "register": "lifecycle", "deregister": "lifecycle", "uninstall": "lifecycle",
@@ -522,8 +532,58 @@ def _knob_dict(k, cfg, settings) -> dict:
             "suggest": getattr(settings, "SUGGEST", {}).get(k, [])}
 
 
+def _embed_change_blocked(key: str, value) -> str:
+    """Refuse a model change that would strand the vault's existing vectors.
+
+    Vectors from two models are not comparable — the cosine between them is
+    noise, not a weak match. Before this, `neurag config set embed_model X`
+    succeeded instantly and every stored vector silently became garbage; the
+    only warning was prose in the knob's help text, which nothing enforced.
+    Empty vault, unchanged value, or --force: allowed.
+    """
+    try:
+        from neurag.db import KnowledgeGraph
+        kg = KnowledgeGraph()
+        try:
+            embedded = kg._conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").fetchone()[0]
+        finally:
+            kg.close()
+    except Exception:  # noqa: BLE001 — can't open the vault: don't block config
+        return ""
+    if not embedded:
+        return ""
+    from neurag import settings
+    if str(settings.get(key)) == str(value):
+        return ""
+    # ASCII only: this goes to a console that may be on the legacy cp1252
+    # codepage, where a dash renders as mojibake (or raises).
+    return (f"Refusing to change {key}: this vault holds {embedded} vector(s) built "
+            f"with a different model, and vectors from two models are not "
+            f"comparable - search would silently return noise.\n"
+            f"  Change it and rebuild:  neurag config set {key} {value} --force "
+            f"&& neurag reindex\n"
+            f"  (chunk text is untouched; reindex only recomputes the vectors)")
+
+
+def _cmd_reindex(as_json: bool = False) -> None:
+    """Re-embed the whole vault with the active model."""
+    from neurag.db import KnowledgeGraph
+    kg = KnowledgeGraph()
+    try:
+        report = kg.reindex(say=None if as_json else (lambda s: print(s)))
+    finally:
+        kg.close()
+    if as_json:
+        print(json_mod.dumps(report))
+    elif not report.get("ok"):
+        print(f"reindex incompleto: {report.get('reason') or report.get('failed')} fallito/i",
+              file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_config(action: str, key: str = "", value=None,
-                as_json: bool = False) -> None:
+                as_json: bool = False, force: bool = False) -> None:
     """Get/set/list NeuRAG knobs. Same shape as `gray-matter config` so the
     catalog-driven control center renders an identical toggle surface.
     `--json` emette i knob strutturati (value/default/type/help/suggest): la GUI
@@ -558,6 +618,10 @@ def _cmd_config(action: str, key: str = "", value=None,
     # set
     if not key or value is None:
         print("uso: neurag config set <key> <value>", file=sys.stderr); sys.exit(1)
+    if key in ("embed_model", "embed_dim") and not force:
+        blocked = _embed_change_blocked(key, value)
+        if blocked:
+            print(blocked, file=sys.stderr); sys.exit(2)
     try:
         cfg = settings.set(key, value)
     except KeyError as e:
@@ -621,7 +685,11 @@ def main() -> None:
     # `config` is a pure settings op — handle it BEFORE opening KnowledgeGraph
     # (which loads the embedder). No DB, no model, instant.
     if args.command == "config":
-        _cmd_config(args.action, args.key, args.value, args.json)
+        _cmd_config(args.action, args.key, args.value, args.json, args.force)
+        return
+
+    if args.command == "reindex":
+        _cmd_reindex(args.json)
         return
 
     # repair prima del DB: deve funzionare anche su vault corrotto/non-Turso.
