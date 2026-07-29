@@ -28,6 +28,10 @@ DEFAULTS = {
     # comparable, so changing either later means re-indexing the vault.
     "embed_model": "",
     "embed_dim": 0,         # 0 = derive from embed_model (384 for the default)
+    # Max characters per chunk. 0 = derive from the live model's tokenizer,
+    # which is the right answer for every shipped model (all truncate at 128
+    # tokens). Raise it only for a model with a genuinely bigger window.
+    "chunk_max_chars": 0,
 }
 
 # Per-knob help + suggestions surfaced by the control center (GUI reads these so
@@ -45,6 +49,11 @@ HELP = {
                    "confrontabili.",
     "embed_dim": "Dimensione dei vettori. 0 = derivata da embed_model. Deve "
                  "combaciare col modello, altrimenti la ricerca è rumore.",
+    "chunk_max_chars": "Lunghezza massima di un chunk. 0 = derivata dal modello "
+                       "attivo (tutti i modelli inclusi tagliano a 128 token, "
+                       "circa 400 caratteri). Oltre il limite il testo viene "
+                       "troncato dall'embedder e diventa NON cercabile. "
+                       "Cambiarlo richiede un re-index.",
 }
 # Free-text knobs that still have good known values → GUI shows a picker but
 # keeps custom input allowed.

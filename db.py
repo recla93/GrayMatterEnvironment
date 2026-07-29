@@ -286,6 +286,16 @@ def _open_local_turso(path: str):
 
 # SSOT dei path: la posizione del vault vive in neurag/paths.py, non qui.
 from neurag import paths as _paths
+
+
+def _settings_get(key: str):
+    """Read a persisted knob. Never fatal: a missing/unreadable config must not
+    stop the vault from opening (same rule as embedder._setting)."""
+    try:
+        from neurag import settings
+        return settings.get(key)
+    except Exception:  # noqa: BLE001
+        return None
 _DEFAULT_DB_DIR = _paths.data_dir()
 _DEFAULT_DB = _paths.db_path()
 
@@ -394,6 +404,15 @@ class KnowledgeGraph:
         self._init_schema()
         self._embedder = get_embedder()  # auto: fastembed if present, else null (lexical)
         self._reranker = get_reranker()  # OFF by default → NullReranker (zero cost)
+        # Chunk ceiling comes from the LIVE model's tokenizer, not a constant:
+        # every model we ship truncates at 128 tokens, and a chunk past that is
+        # silently unsearchable. `chunk_max_chars` overrides for a bigger model.
+        from neurag.embedder import max_chars_for
+        try:
+            configured = int(_settings_get("chunk_max_chars") or 0)
+        except (TypeError, ValueError):
+            configured = 0
+        self._max_chunk_chars = configured if configured > 0 else max_chars_for(self._embedder)
 
     # -- connection ---------------------------------------------------------
 
@@ -597,27 +616,45 @@ class KnowledgeGraph:
         self._conn.commit()
         return cur.lastrowid
 
+    def _merge_json_list(self, node_id: int, column: str,
+                         values: list[str], cap: int) -> None:
+        """Merge values into a node's JSON-array column (dedup, order-preserving).
+
+        `column` is never user input — only the two literals below — so the
+        f-string can't carry injection."""
+        clean = [v for v in (values or []) if v]
+        if not clean:
+            return
+        row = self._conn.execute(
+            f"SELECT {column} FROM nodes WHERE id = ?", (node_id,)).fetchone()
+        if not row:
+            return
+        try:
+            current = json.loads(row[column] or "[]")
+        except (TypeError, ValueError):
+            current = []
+        merged = list(dict.fromkeys([*current, *clean]))[:cap]
+        self._conn.execute(f"UPDATE nodes SET {column} = ? WHERE id = ?",
+                           (json.dumps(merged), node_id))
+        self._conn.commit()
+
     def add_triggers(self, node_id: int, triggers: list[str]) -> None:
         """Merge extra triggers into a node (dedup, capped at 40).
 
         Auto-enriches a node from the symbol tags of the code chunked into it,
         so the Neuron→NeuRAG bridge can reach the node by concept without anyone
         hand-tagging it."""
-        clean = [t for t in (triggers or []) if t]
-        if not clean:
-            return
-        row = self._conn.execute(
-            "SELECT triggers FROM nodes WHERE id = ?", (node_id,)).fetchone()
-        if not row:
-            return
-        try:
-            current = json.loads(row["triggers"] or "[]")
-        except (TypeError, ValueError):
-            current = []
-        merged = list(dict.fromkeys([*current, *clean]))[:40]
-        self._conn.execute("UPDATE nodes SET triggers = ? WHERE id = ?",
-                           (json.dumps(merged), node_id))
-        self._conn.commit()
+        self._merge_json_list(node_id, "triggers", triggers, 40)
+
+    def add_tags(self, node_id: int, tags: list[str]) -> None:
+        """Merge tags into a node (dedup, capped at 40).
+
+        Tags are what `build_tag_links` reads. Until this existed, `auto_ingest`
+        wrote the chunker's symbols to `triggers` ONLY, so every auto-ingested
+        node had `tags='[]'`, the linker's `WHERE tags != '[]'` matched nothing,
+        and the whole graph came out with zero links — a silent no-op that the
+        unit tests missed because they hand-set `tags=` on `add_node`."""
+        self._merge_json_list(node_id, "tags", tags, 40)
 
     def get_node(self, node_id: int) -> Optional[dict]:
         row = self._conn.execute(
@@ -746,7 +783,11 @@ class KnowledgeGraph:
                   source: Optional[str] = None,
                   section: Optional[str] = None,
                   chunk_index: int = 0) -> int:
-        vec = self._get_embedding(text)
+        # Embed the breadcrumb WITH the body (encoding specificity): a paragraph
+        # under "Install > Windows > venv" that only says "run the script" is
+        # unreachable by "windows install" unless its location is in the vector.
+        # Stored text stays pure — only the embedding input is enriched.
+        vec = self._get_embedding(f"{section}\n\n{text}" if section else text)
         blob = self._pack_vec(vec) if vec else None
         cur = self._conn.execute(
             "INSERT INTO chunks (node_id, text, source, section, chunk_index, embedding) VALUES (?, ?, ?, ?, ?, ?)",
@@ -764,8 +805,22 @@ class KnowledgeGraph:
 
     def index_into_node(self, filepath: Path, node_id: int) -> int:
         """Chunk a file, add the chunks to a node, and enrich the node's triggers
-        with the symbols found (the tags each code chunk carries)."""
-        chunks = self._chunk_file(filepath)
+        with the symbols found (the tags each code chunk carries).
+
+        Idempotent per source file: this file's previous chunks are replaced, not
+        appended to. Without that, running `neurag ingest` twice DOUBLED every
+        chunk (three times tripled them) — duplicates that are embedded, ranked,
+        and counted into the tag/link graph. It also makes re-indexing free: a
+        re-run picks up the current chunk ceiling and embedding model, which is
+        the only way an existing vault gets the benefit of a settings change.
+
+        Not a violation of "nothing is ever deleted": the same source's content
+        is being REPLACED by its current version, not forgotten. Chunks whose
+        file is gone from disk are never touched here."""
+        source = str(filepath)
+        self._conn.execute("DELETE FROM chunks WHERE node_id = ? AND source = ?",
+                           (node_id, source))
+        chunks = self._chunk_file(filepath, self._max_chunk_chars)
         count = 0
         tag_pool: list[str] = []
         for c in chunks:
@@ -778,7 +833,9 @@ class KnowledgeGraph:
             )
             tag_pool += getattr(c, "tags", None) or []
             count += 1
-        self.add_triggers(node_id, list(dict.fromkeys(tag_pool)))
+        symbols = list(dict.fromkeys(tag_pool))
+        self.add_triggers(node_id, symbols)
+        self.add_tags(node_id, symbols)   # tags drive build_tag_links; triggers drive lookup
         return count
 
     def index_directory_into_node(self, root: Path, node_id: int) -> int:
@@ -791,8 +848,11 @@ class KnowledgeGraph:
 
     def upsert_link(self, source_id: int, target_id: int,
                     link_type: str, weight: float = 1.0,
-                    evidence: str = "") -> None:
-        """Insert or update a link between two nodes. Self-links are silently ignored."""
+                    evidence: str = "", commit: bool = True) -> None:
+        """Insert or update a link between two nodes. Self-links are silently ignored.
+
+        `commit=False` lets a bulk builder write thousands of links in one
+        transaction instead of one fsync per row."""
         if source_id == target_id:
             return
         self._conn.execute("""
@@ -803,7 +863,8 @@ class KnowledgeGraph:
                 evidence = excluded.evidence,
                 updated_at = datetime('now')
         """, (source_id, target_id, link_type, weight, evidence))
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     def get_links(self, node_id: int, link_type: Optional[str] = None) -> list[dict]:
         """All links for a node (outgoing + incoming), with connected node info."""
@@ -897,8 +958,15 @@ class KnowledgeGraph:
     def link_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM node_links").fetchone()[0]
 
-    def build_tag_links(self) -> int:
+    # Jaccard floor for a tag_overlap link. From DESIGN-CROSSLINKS.md §2, which
+    # specified it and shipped without it: one shared tag out of forty is not a
+    # relationship, and linking every such pair is how a few hundred nodes turn
+    # into six figures of meaningless edges.
+    MIN_TAG_JACCARD = 0.15
+
+    def build_tag_links(self, min_jaccard: "float | None" = None) -> int:
         """Create tag_overlap links between nodes sharing tags. Returns link count added."""
+        floor = self.MIN_TAG_JACCARD if min_jaccard is None else min_jaccard
         # Single pass: build inverted index + tag cache
         index: dict[str, set[int]] = {}
         node_tags: dict[int, set[str]] = {}
@@ -912,6 +980,10 @@ class KnowledgeGraph:
 
         added = 0
         seen: set[tuple[int,int]] = set()
+        # ponytail: still pair-wise within each tag's posting list. The Jaccard
+        # floor caps the WRITES, not the comparisons — a tag on every node is
+        # still O(n²) to evaluate. P1's IDF suppression skips those lists
+        # outright; until then this is fine at vault scale.
         for tag, node_ids in index.items():
             ids = sorted(node_ids)
             for i in range(len(ids)):
@@ -925,49 +997,107 @@ class KnowledgeGraph:
                     shared = tags_a & tags_b
                     union = tags_a | tags_b
                     weight = len(shared) / len(union) if union else 0.0
+                    if weight < floor:
+                        continue
                     evidence = ",".join(sorted(shared))
-                    self.upsert_link(ids[i], ids[j], "tag_overlap", weight, evidence)
+                    self.upsert_link(ids[i], ids[j], "tag_overlap", weight,
+                                     evidence, commit=False)
                     added += 1
         self._conn.commit()
         return added
 
-    def build_crossref_links(self) -> int:
-        """Create cross_ref links between nodes sharing the same source file. Returns count."""
-        # Pre-fetch all chunk data in 2 queries
-        source_nodes: dict[str, set[int]] = {}
-        node_source_chunks: dict[tuple[int,str], int] = {}
+    MIN_CROSSREF_MENTIONS = 2   # one passing mention is a coincidence, not a reference
+
+    # A cue occurring in more than this share of the corpus carries no
+    # information about WHICH node is meant. Measured on a real tree: nodes are
+    # named after folders, so `cache`, `ast`, `docs`, `tests`, `hooks` became
+    # cues and matched every chunk containing that ordinary English word —
+    # `cache` linked to six nodes at weight 1.0, `graphify-out -> ast` claimed
+    # "mentioned in 3996 chunks". A cue that predicts everything predicts
+    # nothing; this is IDF suppression with the threshold made explicit.
+    MAX_CUE_DOC_RATIO = 0.10
+    # ...but a ratio is meaningless on a small vault: at 3 chunks, 10% rounds to
+    # 0 and suppresses every real cue. Below this many documents, suppress
+    # nothing — a corpus this size has no "too common" term.
+    MIN_CUE_DOC_FLOOR = 50
+
+    def build_crossref_links(self, min_mentions: "int | None" = None) -> int:
+        """Create cross_ref links where one node's chunks MENTION another node.
+
+        This is the algorithm `DESIGN-CROSSLINKS.md` §3 specified. What shipped
+        instead linked nodes that share a source *file* — and since
+        `index_into_node` files every chunk of a file into exactly ONE node, each
+        source mapped to one node, the pair loop never executed, and the function
+        returned 0 for every auto-ingested vault. A real cross-reference is "A
+        talks about B", which is what this measures.
+        """
+        floor = self.MIN_CROSSREF_MENTIONS if min_mentions is None else min_mentions
+
+        # Trigger index. Single tokens are matched against a tokenised chunk (so
+        # "int" can't match inside "print"); names with separators need substring.
+        word_index: dict[str, set[int]] = {}
+        phrases: list[tuple[str, int]] = []
         for row in self._conn.execute(
-            "SELECT node_id, source, COUNT(*) AS cnt FROM chunks "
-            "WHERE source IS NOT NULL AND source != '' GROUP BY node_id, source"
-        ).fetchall():
-            source_nodes.setdefault(row["source"], set()).add(row["node_id"])
-            node_source_chunks[(row["node_id"], row["source"])] = row["cnt"]
+                "SELECT id, name, triggers FROM nodes WHERE id != 0").fetchall():
+            try:
+                cues = json.loads(row["triggers"] or "[]")
+            except (TypeError, ValueError):
+                cues = []
+            for cue in [*cues, row["name"]]:
+                cue = (cue or "").strip().lower()
+                if len(cue) < 3:
+                    continue
+                if re.fullmatch(r"\w+", cue):
+                    word_index.setdefault(cue, set()).add(row["id"])
+                else:
+                    phrases.append((cue, row["id"]))
+
+        if not word_index and not phrases:
+            return 0
 
         node_total_chunks: dict[int, int] = {}
         for row in self._conn.execute(
-            "SELECT node_id, COUNT(*) AS cnt FROM chunks GROUP BY node_id"
-        ).fetchall():
+                "SELECT node_id, COUNT(*) AS cnt FROM chunks GROUP BY node_id").fetchall():
             node_total_chunks[row["node_id"]] = row["cnt"]
 
+        # Pass 1 — keep only the cues each chunk actually contains, and count in
+        # how many chunks every cue occurs (document frequency).
+        per_chunk: list[tuple[int, set[str]]] = []
+        doc_freq: dict[str, int] = {}
+        for row in self._conn.execute("SELECT node_id, text FROM chunks").fetchall():
+            text = (row["text"] or "").lower()
+            found = {t for t in re.findall(r"\w+", text) if t in word_index}
+            found |= {p for p, _ in phrases if p in text}
+            per_chunk.append((row["node_id"], found))
+            for cue in found:
+                doc_freq[cue] = doc_freq.get(cue, 0) + 1
+
+        # Pass 2 — drop the uninformative cues, then count real mentions.
+        total_chunks = len(per_chunk) or 1
+        cap = max(self.MIN_CUE_DOC_FLOOR, int(total_chunks * self.MAX_CUE_DOC_RATIO))
+        cue_targets: dict[str, set[int]] = dict(word_index)
+        for phrase, tgt in phrases:
+            cue_targets.setdefault(phrase, set()).add(tgt)
+
+        mentions: dict[tuple[int, int], int] = {}
+        for src, found in per_chunk:
+            hit: set[int] = set()
+            for cue in found:
+                if doc_freq.get(cue, 0) > cap:
+                    continue                    # too common to identify anything
+                hit |= cue_targets.get(cue, set())
+            for tgt in hit:
+                if tgt != src:
+                    mentions[(src, tgt)] = mentions.get((src, tgt), 0) + 1
+
         added = 0
-        seen: set[tuple[int,int]] = set()
-        for source, node_ids in source_nodes.items():
-            ids = sorted(node_ids)
-            for i in range(len(ids)):
-                for j in range(i + 1, len(ids)):
-                    pair = (ids[i], ids[j])
-                    if pair in seen:
-                        continue
-                    seen.add(pair)
-                    chunks_a = node_source_chunks.get((ids[i], source), 0)
-                    chunks_b = node_source_chunks.get((ids[j], source), 0)
-                    total_a = node_total_chunks.get(ids[i], 1)
-                    total_b = node_total_chunks.get(ids[j], 1)
-                    min_chunks = min(chunks_a, chunks_b)
-                    max_total = max(total_a, total_b) or 1
-                    weight = min_chunks / max_total
-                    self.upsert_link(ids[i], ids[j], "cross_ref", weight, source)
-                    added += 1
+        for (src, tgt), count in mentions.items():
+            if count < floor:
+                continue
+            weight = min(1.0, count / max(node_total_chunks.get(src, 1), 1))
+            self.upsert_link(src, tgt, "cross_ref", weight,
+                             f"mentioned in {count} chunk(s)", commit=False)
+            added += 1
         self._conn.commit()
         return added
 

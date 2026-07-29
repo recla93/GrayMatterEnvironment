@@ -62,12 +62,25 @@ _MODEL = _resolve_model()
 DIM = _resolve_dim()
 
 
+# Chars per token, mixed IT/EN prose and code. Measured against the default
+# model: 488 chars encoded to exactly 128 tokens => 3.81. Code tokenises denser
+# (identifiers split hard), so round DOWN — overshooting the window is silent
+# data loss, undershooting only costs a slightly smaller chunk.
+CHARS_PER_TOKEN = 3.2
+
+# Used when no model is loaded (lexical-only install): every fastembed model we
+# ship truncates at 128, so assuming it keeps standalone chunking compatible
+# with a vault that later turns semantic on.
+DEFAULT_MAX_TOKENS = 128
+
+
 class NullEmbedder:
     """No embeddings. `embed` returns None → callers use the lexical path."""
 
     dim = DIM
     available = False
     name = "null"
+    max_tokens = DEFAULT_MAX_TOKENS
 
     def embed(self, text: str):
         return None
@@ -91,10 +104,39 @@ class FastEmbedEmbedder:
         # for a single sequential inference. Measured: ~4% lower resident
         # memory per worker, no latency change for this workload.
         self._m = TextEmbedding(model_name=model, threads=2, enable_cpu_mem_arena=False)
+        self.max_tokens = _model_max_tokens(self._m)
 
     def embed(self, text: str) -> list[float]:
         v = next(iter(self._m.embed([text])))
         return [float(x) for x in v]
+
+
+def _model_max_tokens(model) -> int:
+    """The model's REAL context window, read from its tokenizer.
+
+    fastembed's `list_supported_models()` reports `max_length: None` for every
+    model we ship, so this cannot be looked up — it has to be asked of the
+    tokenizer. It matters more than it looks: both MiniLM options truncate at
+    **128 tokens** (~490 chars), not the 512 people assume. Anything longer is
+    dropped from the vector silently, with no error and no warning."""
+    try:
+        from tokenizers import Tokenizer
+        for attr in ("tokenizer", "_tokenizer", "model"):
+            obj = getattr(model, attr, None)
+            obj = getattr(obj, "tokenizer", obj)
+            if isinstance(obj, Tokenizer) and obj.truncation:
+                n = int(obj.truncation.get("max_length") or 0)
+                if n > 0:
+                    return n
+    except Exception:  # noqa: BLE001 — never let introspection break embedding
+        pass
+    return DEFAULT_MAX_TOKENS
+
+
+def max_chars_for(embedder) -> int:
+    """Character budget one chunk may occupy before the model starts truncating."""
+    tokens = getattr(embedder, "max_tokens", None) or DEFAULT_MAX_TOKENS
+    return max(120, int(tokens * CHARS_PER_TOKEN))
 
 
 def get_embedder():

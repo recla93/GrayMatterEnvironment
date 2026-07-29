@@ -34,8 +34,18 @@ from pathlib import Path
 from neurag.chunker import _SUPPORTED_EXTENSIONS
 
 # Cartelle che non sono conoscenza: build, cache, VCS, ambienti.
+# (Le cartelle che iniziano con "." sono già escluse da _skippable.)
+#
+# `cache` / `graphify-out` aggiunti dopo una misura su un albero reale: le
+# cache di tool contengono JSON generati — indici di path, non conoscenza — e
+# avvelenano tutto a valle. Ingerendo `neurag/` producevano migliaia di chunk
+# in cui OGNI path del progetto compare come token, quindi ogni nome di nodo
+# sembrava "menzionato" ovunque: il nodo `cache` risultava collegato a sei
+# nodi con peso 1.0. Costo aggiuntivo: embedding e ricerca su testo che nessuno
+# vorrà mai recuperare.
 _SKIP_DIRS = {"__pycache__", "node_modules", "venv", ".venv", "build", "dist",
-              "site-packages", "egg-info"}
+              "site-packages", "egg-info", "cache", "graphify-out",
+              "htmlcov", "coverage"}
 
 
 def _skippable(rel_parts: tuple) -> bool:

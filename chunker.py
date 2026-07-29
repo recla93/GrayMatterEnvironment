@@ -5,6 +5,18 @@ Code is chunked by *meaning*, not by a blind line count: Python via the stdlib
 other languages by definition boundaries. Every code chunk also carries `tags`
 — the symbol name split into sub-words — which feed a node's triggers so the
 Neuron→NeuRAG bridge can match a dormant concept to the right knowledge.
+
+SIZE CEILING (the thing this module got wrong for a long time)
+-------------------------------------------------------------
+Structure alone is not enough. A markdown section or a Python class is one
+*meaningful* unit but can be thousands of characters, and every embedding model
+we ship truncates at **128 tokens — about 490 characters**. Everything past that
+was dropped from the vector with no error: the chunk was stored, looked fine in
+the GUI, and was simply unfindable. Bigger files retrieved *worse*, silently.
+
+So structure decides WHERE to cut; :func:`enforce_budget` guarantees NOTHING
+escapes the ceiling. Every producer funnels through :func:`chunk_file`, which
+applies it once at the exit — one guard, not six.
 """
 
 import ast
@@ -13,6 +25,15 @@ from pathlib import Path
 from typing import Iterator
 
 from .models import Chunk
+
+# Fallback budget when the caller does not pass one (128 tokens × 3.2 chars).
+# The real value comes from the live model via `embedder.max_chars_for()`.
+DEFAULT_MAX_CHARS = 400
+
+# Overlap keeps a definition that straddles a cut reachable from both sides.
+# 12% is the usual RAG range; it is taken OUT of the budget, never added on top,
+# so an overlapped chunk still fits the window.
+OVERLAP_RATIO = 0.12
 
 # Sub-words that make poor triggers (too generic to disambiguate a topic).
 _STOP = {"the", "and", "def", "class", "self", "init", "main", "get", "set",
@@ -58,9 +79,89 @@ def _module_tags(text: str) -> list[str]:
     return names[:8]
 
 
+def _split_text(text: str, max_chars: int, overlap: int = 0) -> list[str]:
+    """Cut `text` into pieces of at most `max_chars`, at the coarsest boundary
+    that actually divides it: paragraph → line → sentence → word → hard slice.
+
+    Terminates: a piece that is still too long contains no occurrence of the
+    separator it was split on, so the next pass necessarily uses a finer one,
+    and the hard slice is the floor."""
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    budget = max(1, max_chars - overlap)     # overlap comes OUT of the budget
+    for sep in ("\n\n", "\n", ". ", " "):
+        if sep not in text:
+            continue
+        pieces: list[str] = []
+        buf = ""
+        for unit in text.split(sep):
+            cand = unit if not buf else buf + sep + unit
+            if len(cand) <= budget:
+                buf = cand
+            else:
+                if buf:
+                    pieces.append(buf)
+                buf = unit
+        if buf:
+            pieces.append(buf)
+        if len(pieces) > 1:
+            out: list[str] = []
+            for p in pieces:
+                out.extend(_split_text(p, budget) if len(p) > budget else [p])
+            return _with_overlap(out, overlap, max_chars)
+
+    return _with_overlap([text[i:i + budget] for i in range(0, len(text), budget)],
+                         overlap, max_chars)
+
+
+def _with_overlap(pieces: list[str], overlap: int, max_chars: int) -> list[str]:
+    """Prefix each piece with the tail of the previous one."""
+    if overlap <= 0 or len(pieces) < 2:
+        return pieces
+    out = [pieces[0]]
+    for prev, cur in zip(pieces, pieces[1:]):
+        tail = prev[-overlap:].lstrip()
+        out.append(f"{tail} {cur}"[:max_chars] if tail else cur)
+    return out
+
+
+def enforce_budget(chunks: list[Chunk], max_chars: int,
+                   overlap: "int | None" = None) -> list[Chunk]:
+    """Split every oversized chunk and renumber. The single point where the
+    model's context window is enforced — see the module docstring."""
+    if max_chars <= 0:
+        return chunks
+    if overlap is None:
+        overlap = int(max_chars * OVERLAP_RATIO)
+    out: list[Chunk] = []
+    for c in chunks:
+        parts = _split_text(c.text, max_chars, overlap)
+        if len(parts) <= 1:
+            if parts:
+                out.append(Chunk(text=parts[0], source=c.source, section=c.section,
+                                 chunk_index=len(out), tags=list(c.tags or [])))
+            continue
+        for i, part in enumerate(parts, 1):
+            out.append(Chunk(text=part, source=c.source,
+                             section=f"{c.section} ({i}/{len(parts)})",
+                             chunk_index=len(out), tags=list(c.tags or [])))
+    return out
+
+
 def chunk_markdown(filepath: Path) -> list[Chunk]:
+    """One chunk per heading section, `section` carrying the full breadcrumb.
+
+    The breadcrumb is not cosmetic: `db.add_chunk` embeds `section + text`, so a
+    chunk under `Install > Windows > venv` encodes where it lives. Without it a
+    paragraph saying "run the script" is unfindable by "windows install".
+    """
     lines = filepath.read_text(encoding="utf-8").split("\n")
     chunks: list[Chunk] = []
+    stack: list[tuple[int, str]] = []      # (level, title) — the heading path
     current_section = "intro"
     current_lines: list[str] = []
     chunk_index = 0
@@ -75,11 +176,17 @@ def chunk_markdown(filepath: Path) -> list[Chunk]:
             chunk_index += 1
 
     for line in lines:
-        heading = re.match(r"^#{2,4}\s+(.+)$", line)
+        # H1..H6: `#{2,4}` skipped H1 entirely, so a doc using `#` for its
+        # sections came out as ONE chunk, and H5/H6 never split at all.
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading:
             flush()
             current_lines = []
-            current_section = heading.group(1).strip()
+            level, title = len(heading.group(1)), heading.group(2).strip()
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, title))
+            current_section = " > ".join(t for _, t in stack)
         current_lines.append(line)
 
     flush()
@@ -255,21 +362,29 @@ def chunk_docx(filepath: Path) -> list[Chunk]:
     return chunks
 
 
-def chunk_file(filepath: Path) -> list[Chunk]:
+def chunk_file(filepath: Path, max_chars: "int | None" = None) -> list[Chunk]:
+    """Structure-aware chunking, then the size ceiling — always, for every type.
+
+    `max_chars=None` uses :data:`DEFAULT_MAX_CHARS`; callers that know the live
+    model pass `embedder.max_chars_for(...)`. Pass 0 to disable the ceiling
+    (tests that assert structural behaviour only)."""
     suffix = filepath.suffix.lower()
     if suffix == ".md":
-        return chunk_markdown(filepath)
-    if suffix == ".py":
-        return chunk_python_ast(filepath)
-    if suffix in (".kt", ".java", ".ts", ".js", ".rs", ".go"):
-        return chunk_code_generic(filepath)
-    if suffix == ".pdf":
-        return chunk_pdf(filepath)
-    if suffix == ".docx":
-        return chunk_docx(filepath)
-    if suffix in (".txt", ".rst", ".yaml", ".yml", ".toml", ".json", ".xml"):
-        return chunk_lines(filepath)
-    return []
+        chunks = chunk_markdown(filepath)
+    elif suffix == ".py":
+        chunks = chunk_python_ast(filepath)
+    elif suffix in (".kt", ".java", ".ts", ".js", ".rs", ".go"):
+        chunks = chunk_code_generic(filepath)
+    elif suffix == ".pdf":
+        chunks = chunk_pdf(filepath)
+    elif suffix == ".docx":
+        chunks = chunk_docx(filepath)
+    elif suffix in (".txt", ".rst", ".yaml", ".yml", ".toml", ".json", ".xml"):
+        chunks = chunk_lines(filepath)
+    else:
+        return []
+    budget = DEFAULT_MAX_CHARS if max_chars is None else max_chars
+    return enforce_budget(chunks, budget)
 
 
 def scan_directory(root: Path) -> Iterator[Path]:

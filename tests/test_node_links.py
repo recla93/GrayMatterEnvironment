@@ -1,7 +1,16 @@
-"""Tests for node_links: schema, upsert, get, graph."""
+"""Tests for node_links: schema, upsert, get, graph.
+
+Every unit test below hand-builds its nodes with `tags=` / `triggers=` and its
+chunks with an explicit `source=`. That is exactly why the link layer could ship
+returning ZERO links for every real vault while this file stayed green: no test
+went through `auto_ingest`, the only path a user takes. See
+`test_auto_ingest_actually_produces_links` at the bottom — the one assertion
+that would have caught it.
+"""
 import json
 import pathlib
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from neurag.db import KnowledgeGraph
@@ -221,17 +230,63 @@ def test_build_tag_links_idempotent():
 # ---------- Fase 3: cross-ref linking ----------
 
 def test_build_crossref_links_basic():
+    """A cross_ref is "A's chunks talk about B", per DESIGN-CROSSLINKS §3.
+
+    This used to assert "A and B share a source file" — which `index_into_node`
+    can never produce (every chunk of a file goes to ONE node), so the function
+    returned 0 for every real vault while this test stayed green.
+    """
     kg = _kg()
-    a = kg.add_node("A", "fundamental", parent_id=0)
-    b = kg.add_node("B", "fundamental", parent_id=0)
-    kg.add_chunk(a, "hello", source="file1.md", section="s1")
-    kg.add_chunk(b, "world", source="file1.md", section="s2")
+    a = kg.add_node("A", "fundamental", parent_id=0, triggers=["alpha"])
+    b = kg.add_node("B", "fundamental", parent_id=0, triggers=["bravo"])
+    kg.add_chunk(a, "this section explains bravo in detail", source="a.md")
+    kg.add_chunk(a, "bravo again, compared with alpha", source="a.md")
+    kg.add_chunk(b, "nothing relevant here", source="b.md")
     added = kg.build_crossref_links()
-    assert added == 1
+    assert added == 1                       # A -> B only; B never mentions A
     links = kg.get_links(a)
     assert len(links) == 1
     assert links[0]["other_name"] == "B"
     assert links[0]["weight"] > 0
+    kg.close()
+
+
+def test_build_crossref_links_below_min_mentions():
+    """One passing mention is a coincidence, not a reference."""
+    kg = _kg()
+    a = kg.add_node("A", "fundamental", parent_id=0, triggers=["alpha"])
+    b = kg.add_node("B", "fundamental", parent_id=0, triggers=["bravo"])
+    kg.add_chunk(a, "bravo is mentioned exactly once", source="a.md")
+    assert kg.build_crossref_links() == 0
+    assert kg.build_crossref_links(min_mentions=1) == 1
+    kg.close()
+
+
+def test_common_cues_are_suppressed_only_on_a_big_enough_corpus():
+    """IDF suppression must not fire on a small vault.
+
+    A pure ratio killed the feature it was meant to sharpen: at 3 chunks
+    `int(3 * 0.10)` is 0, so a cap of 1 suppressed every genuine cue and
+    `build_crossref_links` returned 0 again. Below the floor, nothing is common
+    enough to be uninformative.
+    """
+    kg = _kg()
+    a = kg.add_node("A", "fundamental", parent_id=0, triggers=["alpha"])
+    b = kg.add_node("B", "fundamental", parent_id=0, triggers=["bravo"])
+    for i in range(5):
+        kg.add_chunk(a, f"chunk {i} discussing bravo at length", source="a.md")
+    assert kg.build_crossref_links() == 1, "suppression fired on a tiny corpus"
+    kg.close()
+
+
+def test_build_crossref_links_matches_whole_words_only():
+    """Substring matching linked "int" to every chunk containing "print"."""
+    kg = _kg()
+    a = kg.add_node("A", "fundamental", parent_id=0, triggers=["cache"])
+    b = kg.add_node("B", "fundamental", parent_id=0, triggers=["ache"])
+    kg.add_chunk(a, "the cache layer", source="a.md")
+    kg.add_chunk(a, "cache again", source="a.md")
+    assert kg.build_crossref_links() == 0   # "ache" is inside "cache", not a mention
     kg.close()
 
 
@@ -273,10 +328,10 @@ def test_build_crossref_links_idempotent():
 
 def test_rebuild_links():
     kg = _kg()
-    a = kg.add_node("A", "fundamental", parent_id=0, tags=["java"])
-    b = kg.add_node("B", "fundamental", parent_id=0, tags=["java"])
-    kg.add_chunk(a, "x", source="file1.md")
-    kg.add_chunk(b, "y", source="file1.md")
+    a = kg.add_node("A", "fundamental", parent_id=0, tags=["java"], triggers=["alpha"])
+    b = kg.add_node("B", "fundamental", parent_id=0, tags=["java"], triggers=["bravo"])
+    kg.add_chunk(a, "bravo shows up here", source="file1.md")
+    kg.add_chunk(a, "and bravo once more", source="file1.md")
     result = kg.rebuild_links()
     assert result["tag_overlap"] >= 1
     assert result["cross_ref"] >= 1
@@ -354,4 +409,84 @@ def test_rebuild_links_full_pipeline():
     # C has no tag overlap with A/B
     links_c = kg.get_links(c)
     assert len(links_c) == 0
+    kg.close()
+
+
+# ---------- the integration gate (DESIGN-EVOLUTION §0/§7) ----------
+
+def test_auto_ingest_actually_produces_links(tmp_path):
+    """The whole link layer, through the path a user actually takes.
+
+    Two independent defects made this return `{'tag_overlap': 0, 'cross_ref': 0}`
+    for every auto-ingested vault, and every unit test above stayed green:
+
+    * `build_tag_links` reads `nodes.tags`, but `index_into_node` wrote the
+      chunker's symbols to `nodes.triggers` only — one column to the left.
+    * `build_crossref_links` grouped chunks by source FILE, but every chunk of a
+      file lands in one node, so each source mapped to a single node and the
+      pair loop never ran.
+
+    Assert on the report, not on internals: if this is ever 0 again, the graph
+    is empty and everything built on it (neighbours, spreading activation, the
+    GUI link panel) is silently traversing nothing.
+    """
+    from neurag.ingest import auto_ingest
+
+    root = tmp_path / "proj"
+    (root / "a").mkdir(parents=True)
+    (root / "b").mkdir()
+    (root / "a" / "x.py").write_text(
+        "def alpha_helper():\n    return 1\n\nclass BetaThing:\n    def run(self): pass\n")
+    (root / "b" / "y.py").write_text(
+        "def alpha_helper():\n    return 2\n\nclass GammaThing:\n    def run(self): pass\n")
+    (root / "b" / "z.md").write_text(
+        "## Alpha section\ntext about alpha_helper and BetaThing, more alpha_helper\n"
+        "\n## Beta section\nBetaThing again plus alpha_helper\n")
+
+    kg = KnowledgeGraph(tmp_path / "vault.db")
+    report = auto_ingest(kg, root)
+
+    assert report["chunks"] > 0, "nothing was indexed — fixture is wrong, not the code"
+    assert report["links"]["tag_overlap"] > 0, (
+        "no tag links: is index_into_node still writing triggers but not tags?")
+    assert report["links"]["cross_ref"] > 0, (
+        "no cross-refs: is build_crossref_links back to grouping by source file?")
+
+    # And the tags really are on the nodes, not only the triggers.
+    tagged = kg._conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE tags IS NOT NULL AND tags != '[]'").fetchone()[0]
+    assert tagged >= 2, "auto_ingest left nodes untagged"
+    kg.close()
+
+
+def test_reingest_replaces_chunks_instead_of_duplicating(tmp_path):
+    """`neurag ingest` twice used to DOUBLE every chunk, three times tripled it.
+
+    Nodes were correctly reused; chunks were appended. The duplicates get
+    embedded, ranked, and counted into the tag/link graph. It also blocked
+    re-indexing: picking up a new chunk ceiling or embedding model means
+    re-running ingest, which multiplied the vault instead of refreshing it.
+    """
+    from neurag.ingest import auto_ingest
+
+    root = tmp_path / "proj"
+    (root / "a").mkdir(parents=True)
+    doc = root / "a" / "x.md"
+    doc.write_text("## Alpha\ntesto di prova sufficientemente lungo per un chunk\n",
+                   encoding="utf-8")
+
+    kg = KnowledgeGraph(tmp_path / "vault.db")
+    counts = []
+    for _ in range(3):
+        auto_ingest(kg, root)
+        counts.append(kg._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+    assert counts[0] == counts[1] == counts[2], f"ingest is not idempotent: {counts}"
+
+    # A re-ingest must also pick the file's CURRENT content up.
+    doc.write_text("## Alpha\ntesto MODIFICATO sufficientemente lungo per un chunk\n",
+                   encoding="utf-8")
+    auto_ingest(kg, root)
+    texts = [r[0] for r in kg._conn.execute("SELECT text FROM chunks").fetchall()]
+    assert len(texts) == counts[0], "re-ingest after an edit changed the chunk count"
+    assert any("MODIFICATO" in t for t in texts), "re-ingest kept the stale content"
     kg.close()
