@@ -101,8 +101,10 @@ Neuron/
 │   ├── cline-roocode.example.json
 │   ├── opencode.example.json
 │   └── generic-mcp.example.json
-├── NeuronInstaller.exe        # Windows first-run bootstrapper (no Python/terminal needed)
-├── install.ps1                # installer engine (called by the bootstrapper)
+├── install.cmd                # Windows entry point (double-click) → install.ps1
+├── install.command            # macOS entry point (double-click) → install.sh
+├── install.sh                 # Linux entry point → installer engine (POSIX)
+├── install.ps1                # installer engine (Windows)
 ├── pyproject.toml
 ├── README.md
 ├── DEVELOPER.md
@@ -632,23 +634,26 @@ python scripts/run_interactive.py --provider ollama  # Chat with local LLM
 
 ### Windows installer and GUI
 
-For a clean Windows machine, distribute `NeuronInstaller.exe` together with the
-repository files, especially `install.ps1` and `vendor/`. The small bootstrapper is
-compiled from `installer/NeuronInstaller.cs` with the .NET Framework compiler already
-present on Windows; it locates or asks for the source folder, runs `install.ps1 -Yes`,
-shows its output and opens the installed Control Center. It is intentionally a
-bootstrapper, not a self-contained offline bundle.
+For a clean Windows machine, distribute the repository files — especially
+`install.cmd`, `install.ps1` and `vendor/`. The user double-clicks `install.cmd`,
+which forwards `%*` to `install.ps1` and propagates its exit code. Python is not a
+prerequisite: the installer fetches the newest 3.14.x from python.org (per-user,
+no admin) when none in 3.10–3.14 is present.
 
-After installation, the supported human entry point is **Neuron — Control Center**.
-The Tkinter GUI owns setup, registration, deploy/update, Turso, Bridge/Tunnel, graph
-maintenance and vault import. `scripts/run_mcp.bat` remains only as a compatibility
-launcher for legacy MCP registrations; it is not an interactive user entry point.
+There is **no compiled bootstrapper.** `NeuronInstaller.exe` and its C# source
+(`installer/`) were removed on 2026-07-29: the in-tree binary had gone stale
+(pre-unification build, flagged in `work/history/RELEASE-CHECKLIST.md`), and
+shipping a binary that duplicates what a 15-line `.cmd` already does was cost
+without benefit. The four launchers — `.cmd` / `.ps1` / `.sh` / `.command` — are
+the entire distribution surface, and `gray_matter/tests/test_installer_parity.py`
+asserts all three projects ship all four.
 
-Build the bootstrapper on Windows with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
-```
+After installation, the supported human entry point is the **Gray Matter control
+center** — one GUI for the whole suite (`neuron gui` opens it). It is not a
+separate Neuron GUI: Neuron ships GM's wheel in `src/neuron/_gm_vendor/` and
+installs it offline on first launch, so the control center works even when Gray
+Matter was never installed as a peer. `scripts/run_mcp.bat` remains only as a
+compatibility launcher for legacy MCP registrations.
 
 ### Verify syntax
 

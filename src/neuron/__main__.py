@@ -557,6 +557,16 @@ def cli() -> None:
         _console_safe()
         print(_usage())
         raise SystemExit(0)
+    # `--version` starts with '-', so the unknown-command guard below waves it
+    # through, no COMMANDS entry matches, and it fell into the "no command =>
+    # run the MCP server" branch: `neuron --version` STARTED THE STDIO SERVER
+    # and blocked on stdin forever. The installer's last line asks for the
+    # version, so a finished install hung there — everything done, nothing said.
+    if cmd in ("-V", "--version", "version"):
+        _console_safe()
+        from neuron import __version__
+        print(__version__)
+        raise SystemExit(0)
     # Senza questa guardia QUALSIASI parola sconosciuta cadeva nel ramo "avvia
     # il server MCP": `neuron --help` e ogni refuso partivano come server stdio
     # e restavano appesi in attesa su stdin, senza dire niente. I flag di

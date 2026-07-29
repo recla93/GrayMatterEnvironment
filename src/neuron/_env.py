@@ -70,7 +70,14 @@ def _is_test_run() -> bool:
 
 def load_dotenv_once(path: str | None = None) -> bool:
     """Populate os.environ from a .env (real env wins). Returns True if a file
-    was read. No-op under pytest / NEURON_NO_DOTENV, and after the first call."""
+    was read. No-op under pytest / NEURON_NO_DOTENV, and after the first call.
+
+    Two files are consulted, project first: the walked-up project ``.env``, then
+    the per-user one (``config.user_env_file()``). The user file is what the
+    installer and the GUI write, and it is the only one an MCP-spawned server
+    can be relied on to find — the client picks the cwd, so the walk-up may
+    reach nothing at all. Project-first + ``setdefault`` keeps the precedence
+    real env > project .env > user .env."""
     global _loaded
     if _loaded:
         return False
@@ -79,7 +86,26 @@ def load_dotenv_once(path: str | None = None) -> bool:
         return False
     if _is_test_run():
         return False
-    path = path or _find_env_file()
+    if path:
+        return _read_env_file(path)
+    read_any = False
+    for cand in (_find_env_file(), _user_env_file()):
+        if cand and os.path.isfile(cand):
+            read_any = _read_env_file(cand) or read_any
+    return read_any
+
+
+def _user_env_file() -> str | None:
+    """The per-user settings file (lazy import: config is stdlib-only, but this
+    module runs during ``neuron/__init__`` — keep the import off module level)."""
+    try:
+        from neuron.config import user_env_file
+        return user_env_file()
+    except Exception:
+        return None
+
+
+def _read_env_file(path: str) -> bool:
     if not path or not os.path.isfile(path):
         return False
     try:

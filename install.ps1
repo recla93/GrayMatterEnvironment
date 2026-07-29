@@ -7,7 +7,9 @@
 #   -Force / --force  → repair mode (pip --force-reinstall --no-deps)
 #   -Clear / --clear  → last resort: delete the venv and rebuild (implies -Force).
 #                       CODE only — graphs/knowledge.db/bridges are never touched.
-param([switch]$Force, [switch]$Clear)
+#   -EmbedModel <name>  → embedding model to install (skips the prompt).
+#                       Default: the 384-dim multilingual MiniLM (EN+IT).
+param([switch]$Force, [switch]$Clear, [string]$EmbedModel = "")
 $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -28,18 +30,40 @@ if ($Force) { $Fwd += "-Force" }
 if ($Clear) { $Fwd += "-Clear" }        # forwarded: GM owns the shared venv
 $ForceArgs = @(); if ($Force) { $ForceArgs = @("--force-reinstall", "--no-deps") }
 if ($env:GM_OPTIN -eq "0") { $WantGm = $false; $Mode = "standalone" }
+# -Yes = "don't ask me anything": one gate for EVERY prompt below. Needed by any
+# caller without a usable stdin — CI, a scheduled task, a parent process that
+# redirects streams. UserInteractive cannot carry this: it describes the session,
+# not the console, so it stays TRUE exactly when Read-Host would hang forever.
+$Ask = ([Environment]::UserInteractive -and -not $Force -and ($args -notcontains "-Yes"))
 
 # Mode selector: click-and-go (Enter = full suite) or explicit --no-gm.
 # Only shows in interactive sessions; non-interactive defaults to gateway.
-if ($WantGm -and [Environment]::UserInteractive -and -not $Force) {
+# Picking [N] is NOT the same question as "standalone forever": Neuron can run
+# orchestrated by a GM that isn't on disk yet. So [N] asks a second question —
+# stay alone, or fetch GM — instead of silently choosing the first for you.
+# Returns $true for [G]: leave $WantGm set and let the normal gateway path run
+# (local GM -> fetch -> PyPI). GM's coupled mode then asks about NeuRAG itself,
+# so "Neuron + GM without NeuRAG" needs no extra flag here.
+function Read-NeuronOnlyMode {
+    Write-Host "`n  Neuron only — which one?"
+    Write-Host "    [S] Full standalone — Neuron alone, own venv, registers itself in the clients"
+    Write-Host "    [G] Get Gray Matter — download GM next to Neuron, then install orchestrated"
+    Write-Host ""
+    $a = Read-Host "  Choice [S]"
+    return ($a -match '^(g|gm|get|gray|graymatter|gray-matter|orchestrated)$')
+}
+if ($WantGm -and $Ask) {
     Write-Host "`n  Installation mode:"
     Write-Host "    [F] Full suite — GM + Neuron + NeuRAG (recommended)"
-    Write-Host "    [N] Solo Neuron — standalone (registers directly in clients)"
+    Write-Host "    [N] Neuron only — standalone, or with GM fetched for you"
     Write-Host "    [D] Details — what you lose without GM"
     Write-Host ""
     $ans = Read-Host "  Choice [F]"
     switch -Regex ($ans) {
-        '^(n|no|standalone)$' { $WantGm = $false; $Mode = "standalone" }
+        '^(n|no|standalone)$' {
+            if (Read-NeuronOnlyMode) { $Mode = "gateway" }   # [G]: keep $WantGm, fall through
+            else { $WantGm = $false; $Mode = "standalone" }
+        }
         '^(d|details)$' {
             Write-Host "`n  Without GM you lose:"
             Write-Host "    - Cross-store bridges (Neuron <--> NeuRAG)"
@@ -54,9 +78,211 @@ if ($WantGm -and [Environment]::UserInteractive -and -not $Force) {
 
             $ans2 = Read-Host "  Install Full suite? [Y/n]"
 
-            if ($ans2 -match '^(n|no)$') { $WantGm = $false; $Mode = "standalone" }
+            if ($ans2 -match '^(n|no)$') {
+                if (Read-NeuronOnlyMode) { $Mode = "gateway" }   # [G]: keep $WantGm, fall through
+                else { $WantGm = $false; $Mode = "standalone" }
+            }
         }
     }
+}
+
+# Python bootstrap. A missing interpreter used to end the install with a link
+# and exit 1 — the one dependency the installer refused to handle, on the one
+# platform where fixing it is easy. Accepts what the vendored pyturso wheels
+# support (cp310..cp314); installs the newest 3.14 from python.org otherwise.
+$PyMin = [Version]"3.10"; $PyMax = [Version]"3.14"
+function Test-PythonOk([string]$exe) {
+    if (-not $exe) { return $false }
+    # No 2>$null on a native exe: in PS 5.1 that wraps every stderr line in an
+    # ErrorRecord and turns it fatal under EAP=Stop, even at exit code 0 — the
+    # rule test_no_native_stderr_redirect_in_powershell enforces. Scope the
+    # preference instead; a broken candidate just fails the version match.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $v = & $exe -c "import sys;print('%d.%d'%sys.version_info[:2])"
+        if ($LASTEXITCODE -ne 0 -or -not ("$v".Trim() -match '^\d+\.\d+$')) { return $false }
+        $ver = [Version]("$v".Trim())
+        return ($ver -ge $PyMin -and $ver -le $PyMax)
+    } catch { return $false } finally { $ErrorActionPreference = $prevEap }
+}
+function Find-Python {
+    foreach ($c in @("python", "python3")) {
+        $g = Get-Command $c -ErrorAction SilentlyContinue
+        # Windows ships App Execution Aliases that are 0-byte stubs opening the
+        # Store; they resolve via Get-Command but are not an interpreter.
+        if ($g -and (Test-PythonOk $g.Source)) { return $g.Source }
+    }
+    # The py launcher knows about installs that never touched PATH.
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        foreach ($tag in @("-3.14", "-3.13", "-3.12", "-3.11", "-3.10", "-3")) {
+            try {
+                $p = & py $tag -c "import sys;print(sys.executable)" 2>$null
+                if ($LASTEXITCODE -eq 0 -and (Test-PythonOk $p)) { return $p.Trim() }
+            } catch { }
+        }
+    }
+    # Default per-user install location (PrependPath does not affect THIS process).
+    foreach ($n in @("Python314", "Python313", "Python312", "Python311", "Python310")) {
+        $p = Join-Path $env:LOCALAPPDATA "Programs\Python\$n\python.exe"
+        if ((Test-Path $p) -and (Test-PythonOk $p)) { return $p }
+    }
+    return $null
+}
+function Install-Python {
+    # Resolve the newest 3.14.x from python.org rather than pinning a patch
+    # number that may not exist yet (or any more).
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ver = $env:NEURON_PYTHON_VERSION
+    if (-not $ver) {
+        try {
+            $list = Invoke-WebRequest -Uri "https://www.python.org/ftp/python/" -UseBasicParsing
+            $ver = ($list.Links.href | ForEach-Object { $_.TrimEnd('/') } |
+                    Where-Object { $_ -match '^3\.14\.\d+$' } |
+                    Sort-Object { [Version]$_ } | Select-Object -Last 1)
+        } catch { }
+    }
+    if (-not $ver) { $ver = "3.14.0" }      # offline listing: try the .0 anyway
+    $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "win32" }
+    $url  = "https://www.python.org/ftp/python/$ver/python-$ver-$arch.exe"
+    $dst  = Join-Path $env:TEMP "python-$ver-$arch.exe"
+    Write-Host "Python not found - installing Python $ver for your user from python.org."
+    Write-Host "  $url"
+    try { Invoke-WebRequest -Uri $url -OutFile $dst -UseBasicParsing }
+    catch { Write-Host "  ERROR: download failed: $($_.Exception.Message)"; return $null }
+    Write-Host "  Running the installer (per-user, no admin needed)..."
+    # InstallAllUsers=0 keeps it admin-free; Include_pip/tcltk are what Neuron
+    # and the control center actually need.
+    $p = Start-Process -FilePath $dst -Wait -PassThru -ArgumentList @(
+        "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_pip=1",
+        "Include_tcltk=1", "Include_test=0", "AssociateFiles=0")
+    Remove-Item -Force $dst -ErrorAction SilentlyContinue
+    if ($p.ExitCode -ne 0) { Write-Host "  ERROR: the Python installer exited with $($p.ExitCode)."; return $null }
+    Write-Host "  Python $ver installed."
+    return Find-Python
+}
+function Ensure-Python {
+    $found = Find-Python
+    if ($found) { return $found }
+    $found = Install-Python
+    if ($found) { return $found }
+    Write-Host ""
+    Write-Host "ERROR: Neuron needs Python $PyMin - $PyMax and it could not be installed automatically."
+    Write-Host "  Install it manually, then re-run this installer:"
+    Write-Host "  https://www.python.org/downloads/"
+    exit 1
+}
+
+# Embedding model choice. The store is EMPTY at install time, which is the only
+# moment this is free: vectors from different models are not comparable, so
+# changing it later means a full re-embed (scripts/reembed.py). Hence the prompt
+# lives here and not only in the GUI.
+# dim MUST match the model — models.py guards VECTOR_DIM on the first embed.
+# Names/dims/sizes verified against fastembed's list_supported_models().
+$EmbedModels = @(
+    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - default, best size/quality" },
+    @{ name = "sentence-transformers/all-MiniLM-L6-v2";                      dim = 384;  size = "90 MB";  note = "English only - smallest and fastest" },
+    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual, stronger - 2x storage per vector" },
+    @{ name = "intfloat/multilingual-e5-large";                              dim = 1024; size = "2.2 GB"; note = "multilingual, best quality - heavy (RAM + disk)" }
+)
+function Select-EmbedModel {
+    # Explicit -EmbedModel wins; otherwise prompt, defaulting to the multilingual.
+    if ($EmbedModel) {
+        foreach ($m in $EmbedModels) { if ($m.name -eq $EmbedModel) { return $m } }
+        # Unknown name is not an error: fastembed supports more than we list.
+        # dim is discovered from the model itself at write time (below).
+        return @{ name = $EmbedModel; dim = 0; size = "?"; note = "custom" }
+    }
+    if (-not $Ask) { return $EmbedModels[0] }
+    Write-Host "`n  Embedding model (downloaded once, defines the memory's vector space):"
+    for ($i = 0; $i -lt $EmbedModels.Count; $i++) {
+        $m = $EmbedModels[$i]
+        Write-Host ("    [{0}] {1}" -f ($i + 1), $m.note)
+        Write-Host ("        {0}  ({1}-dim, {2})" -f $m.name, $m.dim, $m.size)
+    }
+    Write-Host ""
+    Write-Host "  Changing this later requires re-embedding the whole store."
+    $a = Read-Host "  Choice [1]"
+    if ($a -match '^[1-9][0-9]*$' -and [int]$a -le $EmbedModels.Count) { return $EmbedModels[[int]$a - 1] }
+    return $EmbedModels[0]
+}
+function Save-EmbedModel([string]$Vpy, $Model) {
+    # Persisted to the per-user .env (neuron.config.user_env_file), NOT to this
+    # process's env: the MCP client respawns the server from an arbitrary cwd,
+    # so a shell variable here would be gone by the time it matters.
+    $dim = $Model.dim
+    if ($dim -eq 0) {
+        # Custom model: ask fastembed for the real width instead of guessing.
+        # No 2>$null here: redirecting a native exe's stderr in PS 5.1 wraps
+        # each line in an ErrorRecord and turns it fatal under EAP=Stop (the
+        # rule test_no_native_stderr_redirect_in_powershell enforces).
+        $prevProbeEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $probe = & $Vpy -c "from fastembed import TextEmbedding
+print(next((m['dim'] for m in TextEmbedding.list_supported_models() if m['model']=='$($Model.name)'), 384))"
+        } catch { $probe = "" } finally { $ErrorActionPreference = $prevProbeEap }
+        $dim = if ("$probe".Trim() -match '^\d+$') { [int]"$probe".Trim() } else { 384 }
+    }
+    & $Vpy -c "from neuron.config import set_user_env
+print(set_user_env(NS_EMBED_MODEL='$($Model.name)', NS_EMBED_DIM='$dim'))"
+    if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: could not save the model choice - the multilingual default stays active."; return }
+
+    Write-Host "`n  Downloading the embedding model ($($Model.size), one-time)."
+    Write-Host "  Large models take several minutes - this is NOT frozen."
+    # The download must never take the installer down with it:
+    #  * the model is re-fetched lazily on first use anyway, so a failure here
+    #    costs a delay, not a broken install;
+    #  * fastembed/onnxruntime emit UserWarnings on stderr, and under
+    #    ErrorActionPreference=Stop a native command's stderr can surface as a
+    #    terminating NativeCommandError — hence the ErrorAction override and
+    #    the try/catch, not just an exit-code check;
+    #  * HF's tqdm bar redraws with \r and never emits a newline, so the GUI
+    #    installer (line-buffered reader) shows NOTHING for the whole download
+    #    and looks softlocked. Bar off, explicit lines instead.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $prevBars = $env:HF_HUB_DISABLE_PROGRESS_BARS
+    $env:HF_HUB_DISABLE_PROGRESS_BARS = "1"
+    $ok = $false
+    try {
+        # No redirect at all: output flows straight to the console / the GUI's
+        # reader, which is what makes a long download visibly alive.
+        & $Vpy -W "ignore" -c "from neuron.server import _get_embedder
+_get_embedder()
+print('EMBED_MODEL_READY')"
+        $ok = ($LASTEXITCODE -eq 0)
+    } catch {
+        Write-Host "    $($_.Exception.Message)"
+    } finally {
+        $env:HF_HUB_DISABLE_PROGRESS_BARS = $prevBars
+        $ErrorActionPreference = $prevEap
+    }
+    if ($ok) { Write-Host "  [OK] $($Model.name) cached." }
+    else { Write-Host "  [!] download failed - Neuron will retry it on first use (install continues)." }
+}
+
+# The console script is a convenience wrapper around `python -m <module>`; it
+# is NOT guaranteed to exist. pip can install the package and skip it (a
+# --no-deps repair over a half-removed venv, a Scripts/ dir the AV quarantined).
+# `& <missing path>` is a TERMINATING error under ErrorActionPreference=Stop, so
+# the install died right after pip succeeded: code on disk, nothing registered,
+# no shortcut, no manifest. The module form always works if the package
+# imports, so fall back to it instead of taking the whole install down.
+function Invoke-Tool {
+    param([string]$Venv, [string]$Exe, [string]$Module, [Parameter(ValueFromRemainingArguments = $true)]$Rest)
+    $path = Join-Path $Venv "Scripts\$Exe"
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        if (Test-Path $path) { & $path @Rest }
+        else {
+            Write-Host "  ($Exe not found in the venv - using python -m $Module)"
+            & (Join-Path (Join-Path $Venv "Scripts") "python.exe") -m $Module @Rest
+        }
+    } catch {
+        Write-Host "  WARNING: $Exe $Rest failed: $($_.Exception.Message)"
+    } finally { $ErrorActionPreference = $prevEap }
 }
 
 # STANDALONE: only Neuron, its own venv, registers itself in the clients.
@@ -64,9 +290,9 @@ if ($WantGm -and [Environment]::UserInteractive -and -not $Force) {
 # Also the safety net when GM cannot be obtained (§6: degrade, don't exit).
 function Install-Standalone {
     Write-Host "Installing Neuron STANDALONE (no Gray Matter - add it any time by re-running)."
-    $py = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
-    if (-not $py) { Write-Host "ERROR: need Python 3.10+ - https://www.python.org/downloads/"; exit 1 }
+    # Ask before the long pip phase, write after it (needs the venv's python).
+    $Chosen = Select-EmbedModel
+    $PyExe = Ensure-Python      # installs it from python.org if absent
     $Home_ = if ($env:NEURON_HOME) { $env:NEURON_HOME } else { Join-Path $env:LOCALAPPDATA "neuron" }
     $Venv = Join-Path $Home_ ".venv"
     # INSTALLER-UX §5.3 — kill what runs from this venv BEFORE pip writes to it.
@@ -117,7 +343,7 @@ function Install-Standalone {
         Remove-Venv $Venv "Damaged venv detected (pyvenv.cfg missing or interpreter dead) - rebuilding"
     }
     if (-not (Test-Path $Venv)) {
-        & $py.Source -m venv $Venv
+        & $PyExe -m venv $Venv
         if (-not (Test-VenvHealthy $Venv)) {
             Write-Host "ERROR: could not create a working venv at $Venv - check disk space and permissions"
             exit 1
@@ -133,8 +359,23 @@ function Install-Standalone {
         & $Vpy -m pip install @ForceArgs $Here
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Neuron install failed — check network, or try: pip install --upgrade pip"; exit 1 }
     }
-    & (Join-Path $Venv "Scripts\neuron.exe") register --client all
-    & (Join-Path $Venv "Scripts\neuron.exe") doctor
+    Save-EmbedModel $Vpy $Chosen
+    # Handshake assets. GM deploys these when it is the gateway; standalone has
+    # no GM, so the tool deploys them itself — otherwise the ONLY channel left is
+    # the MCP `instructions` field, which hosts are free to ignore. Idempotent:
+    # same files, same paths, and the hook resolves the owner at runtime.
+    try {
+        $HookSrc = Join-Path $Venv "Lib\site-packages
+euron\clients\deploy_hooks.py"
+        if (Test-Path $HookSrc) { & $Vpy $HookSrc }
+    } catch { Write-Host "  (handshake assets not deployed: $($_.Exception.Message))" }
+    # Let the user choose WHERE this registers. "ask" prompts (detected
+    # clients pre-selected, Enter accepts); with no console to ask on it
+    # falls back to "detected", which never touches a client the user
+    # does not have. -Yes / non-interactive never prompts.
+    $ClientSel = if ($Ask) { "ask" } else { "detected" }
+    Invoke-Tool $Venv "neuron.exe" "neuron" register --client $ClientSel
+    Invoke-Tool $Venv "neuron.exe" "neuron" doctor
     
     # --- GME Registry ---
     # One line instead of ~30 of hand-written JSON: gray_matter/gme.py is the
@@ -147,10 +388,19 @@ function Install-Standalone {
     # Desktop icon "Neuron" → doppio click apre il control center (bootstrappa GM
     # al primo click). Best-effort: non blocca l'install se fallisce.
     try { & $Vpy -m neuron gui --shortcut-only } catch {}
-    $NeuronVer = & (Join-Path $Venv "Scripts\neuron.exe") --version
-    Write-Host "`n  Neuron $NeuronVer — standalone"
+    $NeuronVer = (Invoke-Tool $Venv "neuron.exe" "neuron" --version | Select-Object -Last 1)
+    if (-not "$NeuronVer".Trim()) { $NeuronVer = "?" }   # never print a blank version
+    # An explicit, affirmative terminator. Without it the script just stopped
+    # producing output and callers (GUI installer, install.cmd, CI) could not
+    # tell "finished successfully" from "still working" or "died quietly".
+    Write-Host ""
+    Write-Host "  ============================================================"
+    Write-Host "  [OK] INSTALL COMPLETE - Neuron $NeuronVer (standalone)"
+    Write-Host "  ============================================================"
+    Write-Host "  Embedding model: $($Chosen.name)"
     Write-Host "  Restart your AI apps to load the server."
     Write-Host "  Desktop icon 'Neuron' opens the control center (installs Gray Matter on first click)."
+    Write-Host ""
     exit 0
 }
 if (-not $WantGm) { Install-Standalone }
@@ -170,42 +420,69 @@ foreach ($gm in @((Join-Path $Here "gray_matter"), (Join-Path (Split-Path -Paren
 $GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.1.2" }
 $GmRepo    = if ($env:GM_REPO)    { $env:GM_REPO }    else { "recla93/gray-matter" }
 $GmSha256  = $env:GM_SHA256          # optional: pin the release zip checksum
-$Cache     = if ($env:GM_CACHE)   { $env:GM_CACHE }  else { Join-Path $Here ".gm-bootstrap" }
-Write-Host "Gray Matter not found locally - bootstrapping it (GM is the required gateway)."
-New-Item -ItemType Directory -Force -Path $Cache | Out-Null
 
-# 2) Primary remote: pinned GitHub release zip of the GM repo (immutable tag,
-#    TLS, optional SHA256). Reuses the exact same tested install.ps1 pipeline.
-$Url = "https://github.com/$GmRepo/archive/refs/tags/v$GmVersion.zip"
-$Zip = Join-Path $Cache "gm-$GmVersion.zip"
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $Url -OutFile $Zip -UseBasicParsing
-} catch { Remove-Item $Zip -Force -ErrorAction SilentlyContinue }
-if (Test-Path $Zip) {
+# 2) Fetch GM as a real SIBLING of this repo — the suite folder that already
+#    holds neuron/ (and usually neurag/). Not a private cache inside neuron/:
+#    GM discovers its peers as siblings of GM_PEER_DIR's parent, so a GM living
+#    under neuron/.gm-bootstrap/ can never see neurag/, and the next re-run
+#    re-downloads instead of reusing what is already on disk.
+#    git first (updatable, and what a dev wants), zip as the no-git fallback.
+function Get-GrayMatter {
+    $suite  = Split-Path -Parent $Here
+    $target = Join-Path $suite "gray_matter"
+    if (Test-Path (Join-Path $target "install.ps1")) { return $target }
+
+    Write-Host "Gray Matter not found locally - fetching it into $suite (GM is the required gateway)."
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        Write-Host "  git clone https://github.com/$GmRepo.git"
+        & git clone --depth 1 --branch "v$GmVersion" "https://github.com/$GmRepo.git" $target 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            # No such tag (or offline): try the default branch before giving up.
+            Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
+            & git clone --depth 1 "https://github.com/$GmRepo.git" $target 2>&1 | Out-Host
+        }
+        if (Test-Path (Join-Path $target "install.ps1")) { return $target }
+        Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
+        Write-Host "  git clone did not produce a usable checkout - falling back to the release zip."
+    }
+
+    $tmp = Join-Path $env:TEMP "gm-fetch-$PID"
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $Zip = Join-Path $tmp "gm-$GmVersion.zip"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri "https://github.com/$GmRepo/archive/refs/tags/v$GmVersion.zip" -OutFile $Zip -UseBasicParsing
+    } catch { Remove-Item $Zip -Force -ErrorAction SilentlyContinue }
+    if (-not (Test-Path $Zip)) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue; return $null }
     if ($GmSha256) {
         $h = (Get-FileHash -Algorithm SHA256 $Zip).Hash
-        if ($h -ne $GmSha256) { Write-Host "ERROR: GM checksum mismatch — re-download or set `$env:GM_SHA256 to skip"; exit 1 }
-    }
-    Expand-Archive -Path $Zip -DestinationPath $Cache -Force
-    $gm = Get-ChildItem -Directory $Cache -Filter "gray-matter*" | Select-Object -First 1
-    if ($gm) {
-        $inst = Join-Path $gm.FullName "install.ps1"
-        if (Test-Path $inst) {
-            $env:GM_PEER_DIR = $Here
-            & powershell -ExecutionPolicy Bypass -File $inst @Fwd
-            exit $LASTEXITCODE
+        if ($h -ne $GmSha256) {
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+            Write-Host "ERROR: GM checksum mismatch — re-download or unset `$env:GM_SHA256 to skip"; exit 1
         }
     }
+    Expand-Archive -Path $Zip -DestinationPath $tmp -Force
+    $gm = Get-ChildItem -Directory $tmp -Filter "gray-matter*" | Select-Object -First 1
+    if ($gm) { Move-Item -Path $gm.FullName -Destination $target -Force -ErrorAction SilentlyContinue }
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    if (Test-Path (Join-Path $target "install.ps1")) { return $target }
+    return $null
+}
+
+$GmDir = Get-GrayMatter
+if ($GmDir) {
+    Write-Host "  Gray Matter ready at $GmDir"
+    $env:GM_PEER_DIR = $Here
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $GmDir "install.ps1") @Fwd
+    exit $LASTEXITCODE
 }
 
 # 3) Fallback: PyPI. Install GM into the venv, then drive the gateway install.
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
-if ($py) {
-    & $py.Source -m pip install "gray-matter==$GmVersion"
+$PyExe = Find-Python        # PyPI fallback: use it only if already present
+if ($PyExe) {
+    & $PyExe -m pip install "gray-matter==$GmVersion"
     if ($LASTEXITCODE -eq 0) {
-        & $py.Source -m pip install --find-links (Join-Path $Here "vendor") $Here
+        & $PyExe -m pip install --find-links (Join-Path $Here "vendor") $Here
         $gmcli = Get-Command gray-matter -ErrorAction SilentlyContinue
         # exit only on success: a failed gateway install must fall through to
         # the standalone degrade below (§6), not strand the user (audit fix).

@@ -44,10 +44,15 @@ directory passed.
 
 ### Human and AI entry points
 
-- `NeuronInstaller.exe` is the first-run Windows entry point and does not require
-  Python, pip, Tkinter or a terminal window.
-- `install.ps1 -Yes` is now genuinely non-interactive: optional LLM providers default
-  to skipped instead of reading stdin.
+- `install.cmd` is the first-run Windows entry point (double-click); `install.sh`
+  on Linux and `install.command` on macOS. All three are thin launchers over the
+  installer engine and forward their arguments. No compiled binary is shipped:
+  the old `NeuronInstaller.exe` bootstrapper was removed (2026-07-29) after its
+  in-tree copy went stale — four launchers, one per platform, is the whole story.
+- Python is not a prerequisite on Windows: `install.ps1` installs the newest
+  3.14.x from python.org (per-user, no admin) when none in 3.10–3.14 is found.
+- `install.ps1 -Yes` is genuinely non-interactive: every prompt is gated behind
+  one `$Ask` flag, so a scripted or console-less caller never blocks on stdin.
 - Turso setup has a GUI form that validates, probes read/write access and saves only
   after a successful test; the token is not placed on a command line or in the log.
 - The GUI command bar validates subcommands and the packaged skills match their root

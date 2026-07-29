@@ -53,11 +53,32 @@ def _cred_path() -> Path:
 
 
 def _tunnel_config_path() -> Path:
-    """Where we store the user's tunnel name + account ID."""
-    if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", "~")) / "GrayMatterEnvironment"
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "GrayMatterEnvironment"
+    """Where we store the user's tunnel name + account ID.
+
+    This file lives INSIDE the GME folder, so it must land where the registry
+    actually is — ask Gray Matter rather than recomputing. Two bugs came from
+    the hand-rolled copy that used to be here:
+
+    * on macOS it resolved `~/.local/share/GrayMatterEnvironment` while
+      `gme_root()` resolved `~/Library/Application Support/...` — tunnel.json
+      went into a folder the registry was not in;
+    * `os.environ.get("LOCALAPPDATA", "~")` returns `""` when the variable is
+      set-but-empty (service, scheduled task, scrubbed env), and `Path("")` is
+      RELATIVE — so the config landed in the process's cwd. `Path("~")` is not
+      expanded either. gme.py documents this exact failure as one that happened.
+
+    Lazy import + mirror-on-failure: Neuron must keep working standalone, so a
+    missing Gray Matter degrades instead of raising."""
+    try:
+        from gray_matter.gme import gme_root
+        base = gme_root()
+    except Exception:  # noqa: BLE001 — GM not installed: mirror its rule
+        if os.name == "nt":
+            root = os.environ.get("LOCALAPPDATA", "")
+        else:
+            root = os.environ.get("XDG_DATA_HOME", "") or str(
+                Path.home() / ".local" / "share")
+        base = Path(root or Path.home()) / "GrayMatterEnvironment"
     return base / "tunnel.json"
 
 

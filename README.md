@@ -337,6 +337,24 @@ Architecture, the DB layer, per-client config and cloud/bridge internals are doc
 
 ---
 
+## 🧩 Part of the Gray Matter suite
+
+Three MCP servers that work alone and work better together. Install any
+one of them and it can pull in the others; the gateway then serves all
+three through a **single** connector, so your client registers once.
+
+| Project | What it does |
+|---|---|
+| 🧠 **[Neuron](https://github.com/recla93/Neuron)** ← you are here | Semantic memory — concepts, links, salience. It <b>learns</b>. |
+| 📚 **[NeuRAG](https://github.com/recla93/neurag)** | Hierarchical knowledge vault — nodes, chunks, triggers. It <b>keeps</b>. |
+| ⚡ **[Gray Matter](https://github.com/recla93/gray-matter)** | MCP gateway — one connector, warm workers, cross-store bridges. |
+
+<sub>Whoever is installed first owns the session handshake: the gateway
+when it is present, otherwise the standalone tool — so the model is never
+told to call tools that are not there.</sub>
+
+---
+
 ## 📜 License
 
 **PolyForm Noncommercial License 1.0.0** — free for noncommercial use. See [LICENSE](LICENSE).

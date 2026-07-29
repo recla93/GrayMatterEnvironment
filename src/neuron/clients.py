@@ -190,6 +190,53 @@ def _home(*parts: str) -> str:
     return os.path.join(os.path.expanduser("~"), *parts)
 
 
+def _vscode_user_dir() -> str:
+    """VS Code's per-user config dir, per-OS."""
+    if _env("APPDATA"):
+        return os.path.join(_env("APPDATA"), "Code", "User")
+    if sys.platform == "darwin":
+        return _home("Library", "Application Support", "Code", "User")
+    return _home(".config", "Code", "User")
+
+
+def windsurf_candidates() -> list[str]:
+    """Windsurf (Cognition). Primary is Codeium's own MCP file; the second is
+    the VS Code-fork layout, since Windsurf is a VS Code fork and newer builds
+    follow it. Not verified on this machine (Windsurf not installed) — which is
+    exactly why both are probed and `create_if_missing` stays False: a wrong
+    guess costs a "skipped", never an invented config in the wrong place."""
+    cands = [_home(".codeium", "windsurf", "mcp_config.json")]
+    if _env("APPDATA"):
+        cands.append(os.path.join(_env("APPDATA"), "Windsurf", "User", "mcp.json"))
+    elif sys.platform == "darwin":
+        cands.append(_home("Library", "Application Support", "Windsurf", "User", "mcp.json"))
+    else:
+        cands.append(_home(".config", "Windsurf", "User", "mcp.json"))
+    return cands
+
+
+def vscode_candidates() -> list[str]:
+    """`mcp.json` FIRST, then `settings.json`.
+
+    VS Code 1.102 moved MCP servers out of settings.json into a dedicated
+    `User/mcp.json`. Registering only into settings.json meant the entry was
+    written where a current VS Code never looks — and, worse, `deregister`
+    could not see a server that WAS in mcp.json, so uninstalling left it
+    behind (observed 2026-07-29: a legacy `neuron5` in mcp.json survived
+    `deregister_all('neuron5')`, which reported "not registered").
+
+    Both are listed so an existing install is found wherever it actually is;
+    `pick_existing` then prefers the most recently modified.
+    """
+    d = _vscode_user_dir()
+    return [os.path.join(d, "mcp.json"), os.path.join(d, "settings.json")]
+
+
+def vscode_keys_for(path: str) -> list[str]:
+    """mcp.json is already the MCP file → servers live at the root."""
+    return ["servers"] if os.path.basename(path).lower() == "mcp.json" else ["mcp", "servers"]
+
+
 # Each spec: candidates() -> list[str] (first existing wins unless noted),
 # keys = nested path to the server map, entry(python_exe) -> dict, format.
 CLIENTS: dict[str, dict[str, Any]] = {
@@ -226,14 +273,12 @@ CLIENTS: dict[str, dict[str, Any]] = {
     },
     "vscode": {
         "label": "VS Code",
-        "candidates": lambda: (
-            [os.path.join(_env("APPDATA"), "Code", "User", "settings.json")]
-            if _env("APPDATA")
-            else [_home("Library", "Application Support", "Code", "User", "settings.json")]
-            if sys.platform == "darwin"
-            else [_home(".config", "Code", "User", "settings.json")]
-        ),
+        "candidates": vscode_candidates,
+        # Two different shapes, chosen by WHICH file we land on (see keys_for):
+        #   User/mcp.json      -> {"servers": {...}}          (VS Code 1.102+)
+        #   User/settings.json -> {"mcp": {"servers": {...}}} (older inline form)
         "keys": ["mcp", "servers"],
+        "keys_for": vscode_keys_for,
         "entry": lambda py: {"type": "stdio", "command": py, "args": ["-m", "neuron"]},
         "format": "json",   # frequently JSONC in the wild → manual snippet path
         "create_if_missing": False,
@@ -253,6 +298,14 @@ CLIENTS: dict[str, dict[str, Any]] = {
             if _env("APPDATA") else [_home(".config", "zed", "settings.json")]
         ),
         "keys": ["context_servers"],
+        "entry": lambda py: {"command": py, "args": ["-m", "neuron"]},
+        "format": "json",
+        "create_if_missing": False,
+    },
+    "windsurf": {
+        "label": "Windsurf",
+        "candidates": windsurf_candidates,
+        "keys": ["mcpServers"],
         "entry": lambda py: {"command": py, "args": ["-m", "neuron"]},
         "format": "json",
         "create_if_missing": False,
@@ -383,6 +436,11 @@ def register_claude_code_via_cli(slug: str, python_exe: str,
 
 def register(client: str, slug: str, python_exe: str,
              install_dir: str = "", dry_run: bool = False) -> Result:
+    # The guard lives HERE, on the single function that writes, not on
+    # register_all(): the client picker replaced the register_all() call with a
+    # per-client loop and silently drove straight past it — a "dry" test install
+    # rewrote six live configs anyway (observed 2026-07-29, twice).
+    dry_run = dry_run or bool(os.environ.get("GM_NO_CLIENT_REGISTER", "").strip())
     spec = CLIENTS.get(client)
     if spec is None:
         return Result(client, False, "unknown client",
@@ -405,6 +463,13 @@ def register(client: str, slug: str, python_exe: str,
             return Result(client, True, "skipped", "config not found (app not installed?)")
         chosen = spec["candidates"]()[0]
         os.makedirs(os.path.dirname(chosen), exist_ok=True)
+
+    # Some clients keep the server map at a different depth depending on WHICH
+    # of their config files exists (VS Code: mcp.json vs settings.json), so the
+    # nesting can only be resolved once we know the file. Static `keys` stays
+    # the default for every other client.
+    if spec.get("keys_for"):
+        keys = spec["keys_for"](chosen)
 
     multi_note = ""
     if len(existing) > 1:
@@ -479,6 +544,89 @@ def register(client: str, slug: str, python_exe: str,
     return Result(client, True, "registered", warn, path=chosen)
 
 
+def detected_clients() -> list[str]:
+    """Clients whose config actually exists on this machine."""
+    out = []
+    for name, spec in CLIENTS.items():
+        chosen, _ = pick_existing(list(spec["candidates"]()))
+        if chosen:
+            out.append(name)
+    return out
+
+
+def resolve_clients(selector: str, *, interactive: bool = True) -> list[str] | None:
+    """Turn a --client selector into a concrete list.
+
+        all               every known client (the historic default)
+        detected          only the ones whose config exists
+        ask               interactive picker, defaulting to detected
+        a,b,c             an explicit comma-separated list
+
+    Returns None if the user aborted the picker. Unknown names raise ValueError
+    so a typo is a loud failure, never a silent "registered nowhere".
+    """
+    selector = (selector or "all").strip()
+    if selector == "all":
+        return list(CLIENTS)
+    if selector == "detected":
+        return detected_clients()
+    if selector == "ask":
+        if not interactive or not sys.stdin or not sys.stdin.isatty():
+            # No console to ask on: `detected` is the safe answer — it never
+            # touches a client the user does not actually have.
+            return detected_clients()
+        return _pick_clients_interactively()
+
+    names = [n.strip() for n in selector.split(",") if n.strip()]
+    unknown = [n for n in names if n not in CLIENTS]
+    if unknown:
+        raise ValueError(f"unknown client(s): {', '.join(unknown)} — "
+                         f"known: {', '.join(sorted(CLIENTS))}")
+    return names
+
+
+def _pick_clients_interactively() -> list[str] | None:
+    """Numbered picker. Detected clients are pre-selected; Enter accepts them."""
+    found = set(detected_clients())
+    names = list(CLIENTS)
+    print("\n  Register the MCP server in which clients?")
+    for i, name in enumerate(names, 1):
+        mark = "x" if name in found else " "
+        note = "" if name in found else "   (not detected)"
+        print(f"    [{mark}] {i}) {CLIENTS[name]['label']}{note}")
+    print("\n  Enter = the detected ones, 'all', 'none', or numbers like 1,3,4")
+    try:
+        raw = input("  Choice [detected]: ").strip().lower()
+    except EOFError:
+        # Nobody there to answer (piped stdin, CI, a GUI-spawned console that
+        # reports isatty() but has no reader). That is the non-interactive case,
+        # so take the safe default instead of registering NOTHING — an installer
+        # must not silently no-op because a prompt could not be read.
+        print("detected (no input available)")
+        return sorted(found, key=names.index)
+    except KeyboardInterrupt:
+        print()
+        return None            # explicit abort: the user really said no
+    if not raw or raw == "detected":
+        return sorted(found, key=names.index)
+    if raw == "all":
+        return names
+    if raw in ("none", "skip", "-"):
+        return []
+    picked = []
+    for tok in raw.replace(" ", ",").split(","):
+        if not tok:
+            continue
+        if tok.isdigit() and 1 <= int(tok) <= len(names):
+            picked.append(names[int(tok) - 1])
+        elif tok in CLIENTS:
+            picked.append(tok)
+        else:
+            print(f"  (ignoring '{tok}' — not a client)")
+    # dict.fromkeys: de-dupe but keep the order the user typed
+    return list(dict.fromkeys(picked))
+
+
 def register_all(slug: str, python_exe: str, install_dir: str = "",
                  dry_run: bool = False) -> list[Result]:
     return [register(c, slug, python_exe, install_dir, dry_run) for c in CLIENTS]
@@ -491,31 +639,51 @@ def deregister(client: str, slug: str) -> Result:
     spec = CLIENTS.get(client)
     if spec is None:
         return Result(client, False, "unknown client")
-    chosen, _ = pick_existing(list(spec["candidates"]()))
+    chosen, existing = pick_existing(list(spec["candidates"]()))
     if chosen is None:
         return Result(client, True, "skipped", "config not found")
-    if spec["format"] == "toml":
-        old = read_text(chosen)
-        pattern = re.compile(r"(?ms)^\[mcp_servers\." + re.escape(slug) + r"\]\s*?\r?\n.*?(?=^\[|\Z)")
-        if not pattern.search(old):
-            return Result(client, True, "skipped", "not registered")
-        backup(chosen)
-        with open(chosen, "w", encoding="utf-8") as fh:
-            fh.write(pattern.sub("", old))
-        return Result(client, True, "deregistered", path=chosen)
-    data, kind = load_config(chosen)
-    if kind in ("jsonc", "invalid"):
+
+    # Sweep EVERY config this client has, not just the most recent one. A
+    # register writes to one file, but the entry we must remove may sit in
+    # another (VS Code keeps both mcp.json and settings.json; Claude Desktop
+    # has the classic and the MSIX copy). Cleaning only `chosen` is how an
+    # uninstall left a live server entry behind.
+    removed, manual = [], []
+    for path in existing:
+        if spec["format"] == "toml":
+            old = read_text(path)
+            pattern = re.compile(r"(?ms)^\[mcp_servers\." + re.escape(slug) + r"\]\s*?\r?\n.*?(?=^\[|\Z)")
+            if not pattern.search(old):
+                continue
+            backup(path)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(pattern.sub("", old))
+            removed.append(path)
+            continue
+
+        data, kind = load_config(path)
+        if kind in ("jsonc", "invalid"):
+            manual.append(path)
+            continue
+        keys = spec["keys_for"](path) if spec.get("keys_for") else spec["keys"]
+        node = data
+        for k in keys:
+            node = node.get(k) if isinstance(node, dict) else None
+        if not isinstance(node, dict) or slug not in node:
+            continue
+        node.pop(slug, None)
+        backup(path)
+        save_json(path, data)
+        removed.append(path)
+
+    if removed:
+        note = f"also: {', '.join(removed[1:])}" if len(removed) > 1 else ""
+        return Result(client, True, "deregistered", note, path=removed[0])
+    if manual:
         return Result(client, False, "manual step required",
-                      f"config is {kind}: remove the '{slug}' entry by hand", path=chosen)
-    node = data
-    for k in spec["keys"]:
-        node = node.get(k) if isinstance(node, dict) else None
-    if not isinstance(node, dict) or slug not in node:
-        return Result(client, True, "skipped", "not registered")
-    node.pop(slug, None)
-    backup(chosen)
-    save_json(chosen, data)
-    return Result(client, True, "deregistered", path=chosen)
+                      f"config is JSONC/invalid: remove the '{slug}' entry by hand",
+                      path=manual[0])
+    return Result(client, True, "skipped", "not registered")
 
 
 def deregister_all(slug: str) -> list[Result]:
@@ -837,7 +1005,9 @@ def cli(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="neuron register|doctor")
     ap.add_argument("cmd", choices=["register", "doctor"])
     ap.add_argument("--client", default="all",
-                    help="one of: " + ", ".join(sorted(CLIENTS)) + ", or 'all'")
+                    help="'all', 'detected' (only configs that exist), 'ask' "
+                         "(interactive picker), or a comma-separated list of: "
+                         + ", ".join(sorted(CLIENTS)))
     ap.add_argument("--slug", default=os.environ.get("NEURON_SLUG", "neuron"))
     ap.add_argument("--python", dest="python_exe", default=None,
                     help="server python (default: the installed venv's, NOT this one)")
@@ -853,10 +1023,19 @@ def cli(argv: list[str]) -> int:
     if args.cmd == "register":
         if not _guard_direct_register("neuron", args.force, args.dry_run):
             return 1
-        results = (register_all(args.slug, args.python_exe, args.install_dir, args.dry_run)
-                   if args.client == "all"
-                   else [register(args.client, args.slug, args.python_exe,
-                                  args.install_dir, args.dry_run)])
+        try:
+            targets = resolve_clients(args.client)
+        except ValueError as e:
+            print(f"neuron register: {e}")
+            return 2
+        if targets is None:
+            print("  Aborted — nothing was registered.")
+            return 1
+        if not targets:
+            print("  No clients selected — nothing was registered.")
+            return 0
+        results = [register(c, args.slug, args.python_exe, args.install_dir, args.dry_run)
+                   for c in targets]
         for r in results:
             print(r.line())
         return 0 if all(r.ok or r.action == "skipped" for r in results) else 1
