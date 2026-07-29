@@ -74,6 +74,21 @@ CHARS_PER_TOKEN = 3.2
 DEFAULT_MAX_TOKENS = 128
 
 
+def prefixes_for(model: str) -> "tuple[str, str]":
+    """(query_prefix, passage_prefix) required by the model, asymmetrically.
+
+    E5 is trained with `query: ` / `passage: ` markers and degrades measurably
+    without them — and `intfloat/multilingual-e5-large` is option 4 in every
+    installer, advertised as "best quality". Nothing in any of the three repos
+    applied them, so choosing it produced WORSE results than the default with
+    no indication why. Other models we ship take no prefix; adding one there
+    would poison the vector, so this stays a strict allowlist."""
+    m = (model or "").lower()
+    if "e5" in m:
+        return "query: ", "passage: "
+    return "", ""
+
+
 class NullEmbedder:
     """No embeddings. `embed` returns None → callers use the lexical path."""
 
@@ -83,6 +98,9 @@ class NullEmbedder:
     max_tokens = DEFAULT_MAX_TOKENS
 
     def embed(self, text: str):
+        return None
+
+    def embed_query(self, text: str):
         return None
 
 
@@ -105,10 +123,20 @@ class FastEmbedEmbedder:
         # memory per worker, no latency change for this workload.
         self._m = TextEmbedding(model_name=model, threads=2, enable_cpu_mem_arena=False)
         self.max_tokens = _model_max_tokens(self._m)
+        self.model_name = model
+        self._q_prefix, self._p_prefix = prefixes_for(model)
 
-    def embed(self, text: str) -> list[float]:
+    def _vec(self, text: str) -> list[float]:
         v = next(iter(self._m.embed([text])))
         return [float(x) for x in v]
+
+    def embed(self, text: str) -> list[float]:
+        """Embed a DOCUMENT (a stored chunk)."""
+        return self._vec(self._p_prefix + text)
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a QUERY. Asymmetric on purpose — see `prefixes_for`."""
+        return self._vec(self._q_prefix + text)
 
 
 def _model_max_tokens(model) -> int:
@@ -139,10 +167,21 @@ def max_chars_for(embedder) -> int:
     return max(120, int(tokens * CHARS_PER_TOKEN))
 
 
+def lexical_only_requested() -> bool:
+    """True when the user actually ASKED for lexical-only search.
+
+    `none` is the installer's "no model download, fully standalone" answer. It
+    has to be distinguished from an accidental fallback: both end at
+    NullEmbedder, but one is a choice and the other is a fault, and reporting
+    them the same way is how a broken semantic install stayed invisible."""
+    return (os.environ.get("NEURAG_EMBEDDER", "").lower() == "null"
+            or _resolve_model().strip().lower() in ("none", "null"))
+
+
 def get_embedder():
     """Return the embedder per NEURAG_EMBEDDER. auto = fastembed if present else null."""
     choice = os.environ.get("NEURAG_EMBEDDER", "auto").lower()
-    if choice == "null":
+    if choice == "null" or lexical_only_requested():
         return NullEmbedder()
     if choice in ("auto", "fastembed"):
         try:

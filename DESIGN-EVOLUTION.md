@@ -110,18 +110,20 @@ The plumbing largely exists and is already aligned:
 
 Four real gaps — and the first one is a direct violation of I2:
 
-0. **Standalone NeuRAG cannot embed at all.** `fastembed` is a hard dependency of Neuron
-   (`neuron/pyproject.toml`) but only an optional extra in NeuRAG
-   (`semantic = ["fastembed>=0.5.0,<1.0"]`), and `neurag/install.ps1` installs `$Here`
-   without any extra. So NeuRAG installed alone: the installer's dim probe
-   (`from fastembed import TextEmbedding`) fails silently and falls back to 384; the
-   model download is documented "never fatal" and does nothing; `get_embedder()` returns
-   `NullEmbedder`. A user who explicitly picks `multilingual-e5-large` gets lexical-only
-   search and is never told. Today NeuRAG embeds *only because Neuron happens to be next
-   to it* — which is exactly the dependency I2 forbids.
-   **Deliverable:** when a model other than `none` is selected, install `.[semantic]`;
-   verify the embedder is live before reporting success; make `none` the only path that
-   yields `NullEmbedder`. All six installers (I1).
+0. ~~**Standalone NeuRAG cannot embed at all.**~~ **✅ FIXED 2026-07-30.** `fastembed` was
+   a hard dependency of Neuron but only an optional `semantic` extra in NeuRAG, and no
+   installer ever requested that extra — so NeuRAG alone resolved to `NullEmbedder` and
+   searched lexically, embedding *only* when Neuron happened to share the venv. Exactly
+   the dependency I2 forbids, and silent: picking `multilingual-e5-large` gave worse
+   results than the default with nothing said.
+   Fixed at the root — `fastembed` is now a hard dependency, mirroring Neuron, so all six
+   installers inherit it through pip resolution rather than four call sites needing the
+   extras syntax. This does **not** force a model download: weights are fetched lazily on
+   first `TextEmbedding(...)`, so the installer's "none — lexical only, no model download"
+   answer is unchanged. `lexical_only_requested()` now separates a *chosen* lexical mode
+   from an *accidental* one, and `status()` reports `search_mode` as
+   `semantic` / `lexical (requested)` / `lexical (DEGRADED)` with a fix hint.
+   Verified: `pip show neurag` → `Requires: fastembed, mcp, pyturso`.
 
 Then:
 
@@ -340,7 +342,7 @@ Each phase ships green, standalone (I2), and with the GUI verified (I7).
 | **P0** ✅ | **Turn the graph on.** `add_tags()` + `index_into_node` populates `nodes.tags`; `MIN_TAG_JACCARD=0.15` restored; `build_crossref_links` replaced with the designed trigger-mention scan (`MIN_CROSSREF_MENTIONS=2`, whole-word matching); `upsert_link(commit=False)` so a bulk build is one transaction. | `neurag/db.py`, `tests/test_node_links.py` | ✅ same fixture: `{tag_overlap: 0, cross_ref: 0}` → `{1, 2}`. `neurag/tests` 136 passed. Gate added: `test_auto_ingest_actually_produces_links` |
 | **P1** | **Tag substrate.** Tables + migration + IDF suppression + tag salience. Legacy columns kept as read path. | `neurag/db.py`, `chunker.py` | migration idempotent; link count within 2× of P0 |
 | **P2** ✅ | **Encoding.** Ceiling derived from the live tokenizer (`embedder.max_chars_for`), breadcrumb `section` embedded with the body, 12% overlap taken *out* of the budget, H1–H6 split, single enforcement point at `chunk_file`. Plus: idempotent re-ingest, and generated-artefact dirs skipped. | `neurag/chunker.py`, `embedder.py`, `db.py`, `ingest.py`, `settings.py` | ✅ 77.3% of corpus text was unreachable → 0%. `neurag/tests` 154 passed |
-| **P3** | **Retrieval.** RRF hybrid + BM25 + `node_id` scope + MMR + e5 prefixes + `reindex`. | `neurag/db.py`, `embedder.py`, `cli.py`, `server.py` | fixed query set, recall@5 up vs P2 baseline |
+| **P3** ◑ | **Retrieval.** RRF hybrid (both rankers always run), BM25 replacing length-unnormalised TF-IDF, `node_id` subtree scope, MMR (λ=0.7), e5 `query:`/`passage:` prefixes, and `.sh`/`.ps1`/`.sql`/`.c`/`.cs`/… made indexable. | `neurag/db.py`, `embedder.py`, `chunker.py` | ✅ recall@5 **67% → 94%** vs the shipped vector-only. 183 passed. **Outstanding:** `neurag reindex` as an explicit command, and the guard that refuses an `embed_model` change without one |
 | **P4** | **Layers.** L1 session cache (port from Neuron), L3/L4 parking, link/tag decay, `recall`. | `neurag/db.py`, `settings.py`, `cli.py` | every parked item returns byte-identical via `recall` (I5) |
 | **P5** | **Brain.** `origin` column, Hebbian on confirm, spreading-activation expansion. | `neurag/db.py`, `server.py` | curated links survive re-ingest |
 | **P6** | **Cross-tool (GM only).** CLS consolidation Neuron→NeuRAG; bridges join on tag ids; stimuli enriched with knowledge. | `gray_matter/bridges.py`, `server.py`, `neuron/…/stimulus.py` | all of P0–P5 still green with GM absent |
@@ -383,6 +385,27 @@ vector. The single largest chunk was 164k characters, of which 490 were embedded
 **Link quality after both.** `tag_overlap: 1, cross_ref: 79` on the `neurag/` tree, and
 the top edges are real: `clients ↔ hooks`, `claude-code-hook ↔ hooks`,
 `neuron-guard → claude-code-hook`, `neuron-usage → neurag · skills`.
+
+**Retrieval, measured (P3).** recall@5 over 18 queries on the `neurag/` tree, half exact
+identifiers (`vector_distance_cos`, `GM_NO_CLIENT_REGISTER`, `pyvenv.cfg`) and half
+conceptual paraphrases in IT and EN:
+
+| retriever | recall@5 |
+|---|---:|
+| vector only — **what shipped** | 67% |
+| lexical only | 94% |
+| **hybrid RRF** | **94%** |
+
+The gain over what shipped is 27 points. Hybrid does not beat the better half on this
+set, and that is not the point: vector-only failed an entire *class* of query
+(identifiers, flags, error strings), and fusion means no class can fail that way again.
+The single remaining miss — "how are duplicate nodes merged" → `consolidat` — is missed
+by both retrievers; a genuine hard paraphrase, recorded rather than tuned away.
+
+One finding came out of the benchmark rather than the code: `.sh`, `.ps1`, `.cmd`,
+`.sql`, `.c`, `.cs`, `.html` were absent from `_SUPPORTED_EXTENSIONS`, so the installers
+— the most-discussed files in this suite — could not be indexed at all. A query for
+`pyvenv.cfg` was unanswerable because the only file containing it was never ingested.
 
 **A note on tuning constants.** IDF suppression (`MAX_CUE_DOC_RATIO`) shipped as a bare
 ratio and broke `build_crossref_links` on small vaults — at 3 chunks, `int(3 * 0.10)`

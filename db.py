@@ -1140,8 +1140,13 @@ class KnowledgeGraph:
     # -- search: semantic (embedder) or lexical (TF-IDF) --------------------
 
     def _get_embedding(self, text: str):
-        """Embed via the active embedder. None when lexical-only (NullEmbedder)."""
+        """Embed a DOCUMENT. None when lexical-only (NullEmbedder)."""
         return self._embedder.embed(text)
+
+    def _get_query_embedding(self, text: str):
+        """Embed a QUERY — e5 needs `query: ` where documents need `passage: `."""
+        fn = getattr(self._embedder, "embed_query", None)
+        return fn(text) if fn else self._embedder.embed(text)
 
     @staticmethod
     def _pack_vec(v: list[float]) -> bytes:
@@ -1159,70 +1164,186 @@ class KnowledgeGraph:
             return 0.0
         return dot / (na * nb)
 
-    def search(self, query: str, top_n: int = 5) -> list[dict]:
-        """Rank chunks for a free-text query. Semantic when the embedder is on and
-        embeddings exist, else lexical TF-IDF. Returns chunk rows, best first.
+    # Reciprocal Rank Fusion constant. 60 is the value from the original RRF
+    # paper and is not sensitive — it only damps the head of each ranking.
+    RRF_K = 60
+    MMR_LAMBDA = 0.7        # 1.0 = pure relevance, 0.0 = pure diversity
 
-        Two stages: :meth:`_retrieve` fetches candidates cheaply (vector SQL /
-        Python cosine / lexical), then — only if the reranker is enabled — a
-        cross-encoder reorders a wider pool and keeps the true top-n. With the
-        reranker OFF (default) the pool equals top_n and this is a no-op wrapper
-        around the old behaviour."""
+    def search(self, query: str, top_n: int = 5, node_id: "int | None" = None,
+               diversify: bool = True) -> list[dict]:
+        """Rank chunks for a free-text query, best first.
+
+        Hybrid by default. It used to be either/or — vector if embeddings
+        existed, lexical ONLY as a fallback when they did not — which meant the
+        lexical ranker was dead code on every real install. That is backwards
+        for a corpus of code and technical docs: dense vectors are weakest
+        exactly where precision matters most (identifiers, flags, error
+        strings — `vector_distance_cos`, `WinError 5`, `--client`), and lexical
+        is blind to paraphrase and to cross-language matches, which an IT+EN
+        vault needs constantly. Both retrievers already existed here; they had
+        simply never run together.
+
+        `node_id` scopes the search to a subtree — the hierarchy finally
+        contributing to retrieval rather than only to browsing.
+        """
         rr = getattr(self, "_reranker", None)
         rerank_on = bool(rr is not None and getattr(rr, "available", False))
-        pool = top_n
-        if rerank_on:
-            from neurag import settings as _st
-            pool = max(top_n, int(_st.get("rerank_pool") or 50))
-        results = self._retrieve(query, pool)
+        from neurag import settings as _st
+        pool = max(top_n * 4, int(_st.get("rerank_pool") or 50)) if rerank_on \
+            else max(top_n * 4, 20)
+
+        results = self._retrieve(query, pool, node_id=node_id)
         if rerank_on and results:
-            results = rr.rerank(query, results, top_n)
+            results = rr.rerank(query, results, max(top_n * 2, top_n))
+        if diversify and len(results) > top_n:
+            results = self._mmr(query, results, top_n)
         return results[:top_n]
 
-    def _retrieve(self, query: str, top_n: int = 5) -> list[dict]:
-        """First-stage retrieval (no rerank).
+    def _scope_ids(self, node_id: "int | None") -> "list[int] | None":
+        """The node and its whole subtree, or None for "the entire vault"."""
+        if node_id is None:
+            return None
+        ids = [node_id] + [d["id"] for d in self.get_descendants(node_id)]
+        return ids or [node_id]
 
-        Fast path (Turso engine): ranking interamente in SQL con
-        ``vector_distance_cos`` — niente full-scan dei blob in Python, scala
-        con l'indice invece che con O(N) per query. Fallback trasparente al
-        coseno Python (sqlite3 stdlib) o al lessicale (senza embedder)."""
-        qv = self._get_embedding(query)
-        if qv and getattr(self, "_vector_sql", False):
+    def _mmr(self, query: str, rows: list[dict], top_n: int) -> list[dict]:
+        """Maximal Marginal Relevance — trade a little relevance for coverage.
+
+        Without it the top-n is routinely five near-identical chunks from one
+        file, which wastes the model's context on one restated point. Same
+        lambda as Neuron's ADR-008 §5.6, so the two behave alike."""
+        vecs, pool = [], []
+        for r in rows:
+            blob = r.get("embedding")
+            if blob:
+                vecs.append(self._unpack_vec(blob))
+                pool.append(r)
+        if len(pool) <= top_n or not vecs:
+            return rows
+        chosen: list[int] = [0]                      # rows are already ranked
+        while len(chosen) < top_n and len(chosen) < len(pool):
+            best, best_score = None, None
+            for i in range(len(pool)):
+                if i in chosen:
+                    continue
+                relevance = 1.0 - (i / len(pool))    # rank-based, cheap
+                redundancy = max(self._cosine_sim(vecs[i], vecs[j]) for j in chosen)
+                score = self.MMR_LAMBDA * relevance - (1 - self.MMR_LAMBDA) * redundancy
+                if best_score is None or score > best_score:
+                    best, best_score = i, score
+            if best is None:
+                break
+            chosen.append(best)
+        picked = [pool[i] for i in chosen]
+        # Anything without a vector keeps its original order behind the picks.
+        return picked + [r for r in rows if r not in picked]
+
+    def _vector_candidates(self, qv, top_n: int,
+                           scope: "list[int] | None") -> list[dict]:
+        """Vector ranking. Turso does it in SQL (`vector_distance_cos`), which is
+        why pyturso is the default tier; sqlite3 falls back to Python cosine."""
+        if not qv:
+            return []
+        where = "embedding IS NOT NULL"
+        params: list = [self._pack_vec(qv)]
+        if scope:
+            where += f" AND node_id IN ({','.join('?' * len(scope))})"
+        if getattr(self, "_vector_sql", False):
             try:
+                sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, "
+                       "1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS sim "
+                       f"FROM chunks WHERE {where} ORDER BY sim DESC LIMIT ?")
                 rows = self._conn.execute(
-                    "SELECT id, node_id, text, source, section, chunk_index, "
-                    "1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS sim "
-                    "FROM chunks WHERE embedding IS NOT NULL "
-                    "ORDER BY sim DESC LIMIT ?",
-                    (self._pack_vec(qv), top_n)).fetchall()
+                    sql, (*params, *(scope or []), top_n)).fetchall()
                 if rows:
                     return [dict(r) for r in rows]
             except Exception:  # noqa: BLE001 — engine senza f32blob → path Python
                 pass
-        rows = [dict(r) for r in self._conn.execute("SELECT * FROM chunks").fetchall()]
-        if not rows:
-            return []
-        embedded = [r for r in rows if r.get("embedding")]
-        if qv and embedded:
-            scored = [(self._cosine_sim(qv, self._unpack_vec(r["embedding"])), r) for r in embedded]
-            scored.sort(key=lambda x: x[0], reverse=True)
-            return [r for _, r in scored[:top_n]]
-        return self._rank_lexical(query, rows, top_n)
+        # ponytail: O(N) blob scan + Python cosine. Only the sqlite3 tier lands
+        # here; on Turso the SQL path above is used. Fine to ~10k chunks.
+        sql = f"SELECT * FROM chunks WHERE {where.replace(' AND node_id', ' AND node_id')}"
+        rows = [dict(r) for r in self._conn.execute(sql, tuple(scope or [])).fetchall()]
+        scored = [(self._cosine_sim(qv, self._unpack_vec(r["embedding"])), r) for r in rows]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        out = []
+        for sim, r in scored[:top_n]:
+            r["sim"] = sim
+            out.append(r)
+        return out
 
-    @staticmethod
-    def _rank_lexical(query: str, rows: list[dict], top_n: int) -> list[dict]:
-        # ponytail: TF-IDF lite — a real ranking, not substring; swap for BM25 if it bites.
+    def _lexical_candidates(self, query: str, top_n: int,
+                            scope: "list[int] | None") -> list[dict]:
+        sql = "SELECT * FROM chunks"
+        params: tuple = ()
+        if scope:
+            sql += f" WHERE node_id IN ({','.join('?' * len(scope))})"
+            params = tuple(scope)
+        rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        return self._rank_lexical(query, rows, top_n) if rows else []
+
+    def _retrieve(self, query: str, top_n: int = 5,
+                  node_id: "int | None" = None) -> list[dict]:
+        """First-stage retrieval: vector AND lexical, fused with RRF.
+
+        Reciprocal Rank Fusion needs no score calibration — it combines the two
+        RANKINGS, so a cosine in [0,1] and an unbounded BM25 score can be merged
+        without normalising either. That is what makes running both cheap enough
+        to always do."""
+        scope = self._scope_ids(node_id)
+        qv = self._get_query_embedding(query)
+        vector = self._vector_candidates(qv, top_n, scope)
+        lexical = self._lexical_candidates(query, top_n, scope)
+
+        if not vector:
+            return lexical[:top_n]
+        if not lexical:
+            return vector[:top_n]
+
+        fused: dict[int, float] = {}
+        rows_by_id: dict[int, dict] = {}
+        for ranking in (vector, lexical):
+            for rank, row in enumerate(ranking):
+                cid = row["id"]
+                rows_by_id.setdefault(cid, row)
+                fused[cid] = fused.get(cid, 0.0) + 1.0 / (self.RRF_K + rank + 1)
+        order = sorted(fused, key=lambda c: fused[c], reverse=True)
+        return [rows_by_id[c] for c in order[:top_n]]
+
+    # BM25 constants. k1 damps term-frequency saturation, b controls how much
+    # document length is penalised. 1.5/0.75 are the standard defaults.
+    BM25_K1 = 1.5
+    BM25_B = 0.75
+
+    @classmethod
+    def _rank_lexical(cls, query: str, rows: list[dict], top_n: int) -> list[dict]:
+        """BM25. Was TF-IDF WITHOUT length normalisation (`count * idf`, summed),
+        so a long chunk beat a precise short one on raw term count alone — and
+        chunk lengths were wildly unequal until the size ceiling landed. BM25 is
+        the same shape plus the two constants that fix exactly that."""
         def toks(s: str) -> list[str]:
             return [t for t in re.findall(r"\w+", s.lower()) if len(t) > 1]
+
         q = set(toks(query))
         if not q:
             return rows[:top_n]
         doc_toks = [toks(r["text"]) for r in rows]
         n = len(rows)
-        idf = {t: math.log(1 + n / (1 + sum(1 for dt in doc_toks if t in dt))) for t in q}
+        avgdl = (sum(len(dt) for dt in doc_toks) / n) if n else 0.0
+        df = {t: sum(1 for dt in doc_toks if t in dt) for t in q}
+        # BM25 probabilistic idf, floored at 0 so a term in >half the corpus
+        # cannot subtract score.
+        idf = {t: max(0.0, math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))) for t in q}
+
         scored = []
         for r, dt in zip(rows, doc_toks):
-            score = sum(dt.count(t) * idf[t] for t in q)
+            dl = len(dt) or 1
+            score = 0.0
+            for t in q:
+                f = dt.count(t)
+                if not f:
+                    continue
+                denom = f + cls.BM25_K1 * (1 - cls.BM25_B + cls.BM25_B * dl / (avgdl or dl))
+                score += idf[t] * (f * (cls.BM25_K1 + 1)) / denom
             if score > 0:
                 scored.append((score, r))
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -1251,7 +1372,7 @@ class KnowledgeGraph:
         ).fetchone()[0]
         db_str = str(self._db_path)
         engine = getattr(self, "_engine_name", "Turso (local)")
-        return {
+        out = {
             "engine": engine,
             "turso_errors": getattr(self, "_turso_errors", []),
             "embedder": self._embedder.name,
@@ -1261,8 +1382,29 @@ class KnowledgeGraph:
             "chunks": chunk_count,
             "embedded": embedded,
             "links": self.link_count(),
-            "embedding_dim": 384,
+            # Was hardcoded 384 — wrong the moment the installer let anyone pick
+            # mpnet (768) or e5-large (1024), and this is the number the GUI and
+            # `neurag status` show.
+            "embedding_dim": getattr(self._embedder, "dim", 384),
+            "max_chunk_chars": getattr(self, "_max_chunk_chars", 0),
         }
+        # Lexical-only is a legitimate ANSWER but a terrible accident. Say which
+        # one this is: a standalone NeuRAG used to land here silently, because
+        # fastembed was an optional extra no installer ever requested.
+        if not getattr(self._embedder, "available", False):
+            from neurag.embedder import lexical_only_requested
+            if lexical_only_requested():
+                out["search_mode"] = "lexical (requested)"
+            else:
+                out["search_mode"] = "lexical (DEGRADED)"
+                out["warning"] = (
+                    "An embedding model is configured but the embedder did not "
+                    "load, so search is lexical only — cross-language and "
+                    "paraphrase matches will fail. Fix: pip install "
+                    "'fastembed>=0.5,<1', then `neurag reindex`.")
+        else:
+            out["search_mode"] = "semantic"
+        return out
 
     # -- health: structural integrity (L1, deterministic) -------------------
 

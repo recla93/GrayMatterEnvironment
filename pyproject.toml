@@ -14,6 +14,19 @@ dependencies = [
     # disponibile). Le wheel win_amd64 sono vendored in vendor/ e installate
     # dall'installer via --find-links, così non serve il toolchain Rust/MSVC.
     "pyturso==0.6.1",
+    # Hard dependency, exactly as in Neuron. It was an optional `semantic`
+    # extra, and no installer ever requested that extra — so a STANDALONE
+    # NeuRAG got NullEmbedder and fell back to lexical search. It embedded only
+    # when Neuron happened to be installed beside it, borrowing Neuron's copy.
+    # That made "NeuRAG alone" a degraded mode, which is precisely what it must
+    # not be, and it failed silently: picking multilingual-e5-large at install
+    # time produced worse results than the default, with nothing said.
+    #
+    # This does NOT force a model download. fastembed fetches weights lazily on
+    # the first TextEmbedding(...) construction, so the "none — lexical only, no
+    # model download" answer stays exactly as advertised; it just no longer
+    # decides whether embedding is *possible*.
+    "fastembed>=0.5.0,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -22,8 +35,12 @@ dev = ["pytest>=8.0"]
 pdf = ["PyMuPDF>=1.24.0"]
 docx = ["python-docx>=1.1.0"]
 yaml = ["PyYAML>=6.0"]                  # bulk import mapping
-semantic = ["fastembed>=0.5.0,<1.0"]   # optional: turns on the semantic embedder
-rerank = ["fastembed>=0.5.0,<1.0"]     # optional: cross-encoder reranker (same dep as semantic; self-documenting alias, OFF by default)
+# Kept as no-op aliases: fastembed is a hard dependency now (see above), so
+# `neurag[semantic]` and `neurag[rerank]` still resolve for anyone whose scripts
+# or docs name them. Rerank remains OFF by default — the toggle is the gate, not
+# the package.
+semantic = ["fastembed>=0.5.0,<1.0"]
+rerank = ["fastembed>=0.5.0,<1.0"]
 # GUI opzionale: il control center è UNO (gray_matter.webgui). NeuRAG gira
 # standalone senza; `neurag gui` lo bootstrappa se manca. Il runtime MCP NON
 # dipende da gray-matter (import guardato) — questo extra serve solo alla GUI.

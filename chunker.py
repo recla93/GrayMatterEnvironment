@@ -373,13 +373,13 @@ def chunk_file(filepath: Path, max_chars: "int | None" = None) -> list[Chunk]:
         chunks = chunk_markdown(filepath)
     elif suffix == ".py":
         chunks = chunk_python_ast(filepath)
-    elif suffix in (".kt", ".java", ".ts", ".js", ".rs", ".go"):
+    elif suffix in _GENERIC_CODE_EXTENSIONS:
         chunks = chunk_code_generic(filepath)
     elif suffix == ".pdf":
         chunks = chunk_pdf(filepath)
     elif suffix == ".docx":
         chunks = chunk_docx(filepath)
-    elif suffix in (".txt", ".rst", ".yaml", ".yml", ".toml", ".json", ".xml"):
+    elif suffix in _PLAIN_EXTENSIONS:
         chunks = chunk_lines(filepath)
     else:
         return []
@@ -393,5 +393,20 @@ def scan_directory(root: Path) -> Iterator[Path]:
             yield path
 
 
-_SUPPORTED_EXTENSIONS = {".md", ".py", ".kt", ".java", ".ts", ".js", ".rs", ".go",
-                         ".pdf", ".docx", ".txt", ".rst", ".yaml", ".yml", ".toml", ".json", ".xml"}
+# Definition-aware chunking (_DEF_RE finds the boundaries).
+_GENERIC_CODE_EXTENSIONS = {".kt", ".java", ".ts", ".tsx", ".js", ".jsx", ".rs",
+                            ".go", ".c", ".h", ".cpp", ".hpp", ".cs", ".swift",
+                            ".rb", ".php", ".scala", ".lua", ".dart"}
+
+# No definition structure worth parsing — size-based chunking.
+# Shell/PowerShell matter more here than anywhere: install.ps1 / install.sh are
+# the most-discussed files in this suite, and until they were added a query for
+# `pyvenv.cfg` could not be answered because the only file containing it was
+# never indexed at all.
+_PLAIN_EXTENSIONS = {".txt", ".rst", ".yaml", ".yml", ".toml", ".json", ".xml",
+                     ".sh", ".bash", ".zsh", ".ps1", ".psm1", ".cmd", ".bat",
+                     ".sql", ".ini", ".cfg", ".conf", ".env", ".gradle",
+                     ".dockerfile", ".tf", ".html", ".css", ".scss"}
+
+_SUPPORTED_EXTENSIONS = ({".md", ".py", ".pdf", ".docx"}
+                         | _GENERIC_CODE_EXTENSIONS | _PLAIN_EXTENSIONS)
