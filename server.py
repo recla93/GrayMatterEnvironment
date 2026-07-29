@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import sys
 from pathlib import Path
@@ -220,11 +221,63 @@ async def list_tools() -> list[Tool]:
                 "required": ["mapping"],
             },
         ),
+        Tool(
+            name="skill",
+            description="Return the FULL text of a NeuRAG skill on demand — token-cheap, "
+                        "fetch it only when you need the details. Call once per session "
+                        "after the compact opener to load the retrieval workflow.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "enum": _SKILL_NAMES,
+                        "description": "Which skill: usage (the retrieval workflow — "
+                                       "when to search, how to cite, when NOT to search).",
+                        "default": "usage",
+                    },
+                },
+            },
+        ),
     ]
+
+
+# Skills served as MCP tools, not as client plugin files: a plugin reaches one
+# client (Cowork), a tool reaches every client that speaks MCP. Same reason
+# Neuron serves `skill` — keep the two registries the same shape.
+_SKILLS: dict[str, tuple[str, ...]] = {
+    "usage": ("skills", "usage.md"),
+}
+_SKILL_NAMES = list(_SKILLS)
+
+
+def _read_skill(parts: tuple[str, ...]) -> str:
+    """Read a packaged skill file via importlib.resources (works from the wheel).
+
+    Falls back to the repo-root copy when running from a bare source checkout.
+    Mirrors neuron.funnel._read_skill."""
+    from importlib.resources import files
+    try:
+        return files("neurag").joinpath(*parts).read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 — source checkout without packaged data
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "neurag", *parts), encoding="utf-8") as fh:
+            return fh.read()
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    if name == "skill":
+        which = str(arguments.get("name") or "usage").strip()
+        parts = _SKILLS.get(which)
+        if parts is None:
+            return [TextContent(type="text", text=(
+                f"unknown skill '{which}' — available: {', '.join(_SKILL_NAMES)}"))]
+        try:
+            return [TextContent(type="text", text=_read_skill(parts))]
+        except OSError as exc:
+            return [TextContent(type="text", text=f"skill '{which}' unreadable: {exc}")]
+
     db = _get_db()
 
     if name == "knowledge_neighbors":

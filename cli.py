@@ -17,6 +17,12 @@ from pathlib import Path
 # subcomando qui lo fa comparire da solo anche nel control center.
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="NeuRAG — knowledge RAG CLI (neurag)")
+    # Declared BEFORE the subparsers: `action="version"` prints and exits during
+    # parsing, so it beats `required=True`. Without it `neurag --version` — the
+    # installer's last line, and what the GUI reads — died with an argparse
+    # usage error and left the completion banner showing a blank version.
+    from neurag import __version__
+    parser.add_argument("-V", "--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Show knowledge base status")

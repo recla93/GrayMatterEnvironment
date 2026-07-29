@@ -17,10 +17,49 @@ import os
 # Aligned 2026-07-20 (era all-MiniLM-L6-v2, English-only: spazio DIVERSO da
 # Neuron e cieco sull'italiano). Ordine: override NeuRAG → override Neuron
 # (una sola env governa la suite) → default multilingue IT/EN di Neuron.
-_MODEL = (os.environ.get("NEURAG_EMBED_MODEL")
-          or os.environ.get("NS_EMBED_MODEL")
-          or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-DIM = 384
+_DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+
+def _setting(key: str):
+    """The persisted install-time choice (neurag/settings.py). Never fatal: the
+    embedder must still resolve if the config is missing or unreadable."""
+    try:
+        from neurag import settings
+        return settings.get(key)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _resolve_model() -> str:
+    # env (NeuRAG → Neuron) beats the persisted choice, which beats the default.
+    return (os.environ.get("NEURAG_EMBED_MODEL")
+            or os.environ.get("NS_EMBED_MODEL")
+            or (_setting("embed_model") or "")
+            or _DEFAULT_MODEL)
+
+
+def _resolve_dim() -> int:
+    """384 only because the DEFAULT model is 384-dim. The installer now lets the
+    user pick an mpnet (768) or e5-large (1024), and a hardcoded 384 next to an
+    overridable model silently mis-sizes every vector NeuRAG stores — the shared
+    space with Neuron is the whole point of the model alignment above."""
+    raw = os.environ.get("NEURAG_EMBED_DIM") or os.environ.get("NS_EMBED_DIM") or ""
+    try:
+        if str(raw).strip():
+            return int(str(raw).strip())
+    except (ValueError, TypeError):
+        pass
+    try:
+        cfg = int(_setting("embed_dim") or 0)
+        if cfg > 0:
+            return cfg
+    except (ValueError, TypeError):
+        pass
+    return 384
+
+
+_MODEL = _resolve_model()
+DIM = _resolve_dim()
 
 
 class NullEmbedder:

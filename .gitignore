@@ -35,3 +35,7 @@ graphify-out/
 # modifica dei config dei client MCP).
 *.log
 *.bak
+
+# Launchers are install.cmd / install.sh / install.command — no compiled
+# binary is ever shipped in-tree (a stale NeuronInstaller.exe used to be).
+*.exe

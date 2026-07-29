@@ -16,15 +16,43 @@ import time
 from pathlib import Path
 
 
+def _user_base() -> Path:
+    """Base dati per-OS. Regola IDENTICA a `neuron/config.py:user_data_dir()` e
+    a `gray_matter/paths.py:_user_base()`: è ciò che fa atterrare i tre tool
+    sotto UNA sola radice per utente."""
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home())
+    return Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+
+
+def legacy_data_dir() -> Path:
+    """Dove NeuRAG ha sempre scritto: `~/.local/share/neurag` su OGNI OS."""
+    return Path.home() / ".local" / "share" / "neurag"
+
+
 def data_dir() -> Path:
     """Cartella dati di NeuRAG (dove vivono knowledge.db e config.json).
 
-    Convenzione storica di NeuRAG: ~/.local/share/neurag (coerente su ogni OS —
-    è dove NeuRAG ha sempre scritto, audit compreso). Override: NEURAG_HOME."""
+    Su Linux/macOS il risultato è invariato (`~/.local/share/neurag`, salvo
+    XDG_DATA_HOME): lì la convenzione storica ERA già quella per-OS.
+
+    Su Windows no: `~/.local/share/neurag` è un path POSIX in mezzo al profilo
+    utente, fuori da %LOCALAPPDATA%, dove Neuron e Gray Matter scrivono — e
+    dove il fallback di `gray_matter/paths.py:neurag_db()` va già a cercare
+    (`<base>/neurag/knowledge.db`). Un vault e due posti: la stessa divergenza
+    che il commento su SLUG in gray_matter/paths.py racconta come già successa.
+
+    Il vault ESISTENTE vince sempre: se la posizione storica c'è e la nuova no,
+    si continua a usare quella. Nessuno spostamento automatico di un DB che
+    potrebbe essere aperto — cambiare path non deve poter perdere dati.
+    Override: NEURAG_HOME."""
     env = os.environ.get("NEURAG_HOME")
     if env:
         return Path(env)
-    return Path.home() / ".local" / "share" / "neurag"
+    current, legacy = _user_base() / "neurag", legacy_data_dir()
+    if current != legacy and legacy.exists() and not current.exists():
+        return legacy
+    return current
 
 
 def db_path() -> Path:

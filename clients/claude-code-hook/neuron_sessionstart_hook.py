@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""SessionStart handshake for the Gray Matter suite (Claude Code / Cowork).
+
+Claude Code runs this at session start and puts its stdout straight into the
+model's context (SessionStart is one of the hook events where plain stdout is
+accepted as context -- docs.claude.com/en/docs/claude-code/hooks). The MCP
+`instructions` field is host-optional: nothing in the spec obliges a client to
+show it. This hook is the second, guaranteed delivery path for the same
+reminder.
+
+WHO SPEAKS
+----------
+Exactly one tool owns the handshake, decided HERE, at session start, not at
+install time:
+
+    gray-matter installed?  -> Gray Matter speaks (full suite, or GM + a peer)
+    else neuron?            -> Neuron speaks     (standalone)
+    else neurag?            -> NeuRAG speaks     (standalone)
+    else                    -> say nothing
+
+Deciding at deploy time is what broke before: every installer deployed its own
+hook, so a full suite opened each session with TWO handshakes, and the blunt fix
+was to empty the Cowork plugin's hooks.json. Now all three tools deploy THIS
+file to the SAME path -- deploying twice is idempotent -- and a single owner is
+resolved at runtime. The double handshake cannot happen by construction.
+
+It also fixes the mirror bug: the tool-name prefix used to be hardcoded to
+`mcp__gray-matter__`, so a STANDALONE install told the model to call tools that
+do not exist in that session (exactly the old `mcp__neuron5__*` failure, in the
+other direction).
+
+WHY IT CANNOT BREAK YOUR SESSION
+--------------------------------
+stdlib only, and it never imports neuron / neurag / gray_matter: the registry is
+plain JSON on disk. A broken install, a half-written venv or a missing registry
+costs a silent no-op, never a slow or failed session start.
+
+KEEP IN SYNC: byte-identical copies live in all three tools
+(neuron/src/neuron/clients/, neurag/clients/, gray_matter/clients_assets/).
+`test_handshake.py` fails if they drift.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+# Registry priority == ownership. Keep in sync with gray_matter/gme.py.
+_PRIORITY = ("gray-matter", "neuron", "neurag")
+
+
+def _gme_root() -> Path:
+    """Mirror of gray_matter.gme.user_base() -- deliberately NOT imported."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA", "")
+    else:
+        base = os.environ.get("XDG_DATA_HOME", "") or os.path.join(
+            os.path.expanduser("~"), ".local", "share")
+    if not base:                       # scrubbed env -> never a relative path
+        base = os.path.expanduser("~")
+    return Path(base) / "GrayMatterEnvironment"
+
+
+def installed_slugs() -> set:
+    """Slugs the GME registry reports as installed. Never raises."""
+    out = set()
+    try:
+        for f in _gme_root().glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(d, dict) and d.get("status") == "installed" and d.get("key"):
+                out.add(d["key"])
+    except OSError:
+        pass
+    return out
+
+
+def owner(installed=None):
+    """The one tool that speaks this session, or None."""
+    have = installed_slugs() if installed is None else set(installed)
+    for slug in _PRIORITY:
+        if slug in have:
+            return slug
+    return None
+
+
+def _memory_block(p: str, with_knowledge: bool) -> str:
+    extra = (
+        f"Knowledge base: {p}knowledge_query(query) when the question touches "
+        "indexed material.\n"
+    ) if with_knowledge else ""
+    return (
+        "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority "
+        "for this session.\n"
+        f"Each substantive turn: call {p}pre_turn(topic, keywords) BEFORE replying "
+        f"(fold the returned context in silently), then {p}store_turn(topic, "
+        "keywords, links) AFTER, to persist what is new.\n"
+        "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a "
+        f"self-link; before minting a concept check {p}find_candidates; never "
+        "store secrets or tokens.\n"
+        + extra +
+        "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per "
+        f"session: {p}help (commands), {p}skill(name='playbook') (full workflow).\n"
+        f"If no {p}* tools exist here, memory is not connected - ignore this silently."
+    )
+
+
+def _knowledge_block(p: str) -> str:
+    return (
+        "!IMPORTANT [NEURAG]: a knowledge base is connected - use it before "
+        "answering from memory.\n"
+        f"Search it with {p}knowledge_query(query) when the question touches "
+        "indexed material; cite what you used.\n"
+        f"Once per session: {p}skill(name='usage') for the retrieval workflow "
+        "(chunking, filters, when NOT to search).\n"
+        f"If no {p}* tools exist here, the knowledge base is not connected - "
+        "ignore this silently."
+    )
+
+
+def handshake(slug: str, installed=None) -> str:
+    """The reminder, with the prefix that actually exists in THIS session.
+
+    The OWNER decides the prefix: under the gateway model the client registers
+    only "gray-matter" and the peer tools are served through it pass-through.
+
+    The CAPABILITIES decide the text: Gray Matter with only NeuRAG beside it
+    must not announce a memory loop that has no server behind it. Announcing a
+    capability that is not installed is the same class of bug as announcing the
+    wrong prefix -- the model calls a tool that is not there.
+    """
+    p = "mcp__%s__" % slug
+    have = set(installed) if installed is not None else {slug}
+    if slug != "gray-matter":
+        return _knowledge_block(p) if slug == "neurag" else _memory_block(p, False)
+
+    mem, know = "neuron" in have, "neurag" in have
+    if mem:
+        return _memory_block(p, know)
+    if know:
+        return _knowledge_block(p)
+    return ""          # gateway with no peers: nothing to push
+
+
+def main() -> None:
+    have = installed_slugs()
+    slug = owner(have)
+    if slug:
+        text = handshake(slug, have)
+        if text:
+            print(text)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

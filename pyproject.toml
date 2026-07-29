@@ -43,7 +43,15 @@ neurag = "."
 [tool.setuptools.package-data]
 # Wheel d'emergenza di Gray Matter (fallback offline del bootstrap `neurag gui`).
 # Va ricostruito a ogni release di GM — vedi RELEASE-CHECKLIST.
-neurag = ["_gm_vendor/*.whl"]
+neurag = [
+    "_gm_vendor/*.whl",
+    # Skills served by the `skill` MCP tool — a tool reaches every MCP
+    # client, a plugin file reaches only one.
+    "skills/*.md",
+    # Handshake assets: GM deploys them from whichever peer is installed,
+    # so a GM+NeuRAG install (no neuron package) must carry its own copy.
+    "clients/**/*",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

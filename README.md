@@ -1,4 +1,4 @@
-﻿<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
 <!--                           NEURAG · README                             -->
 <!-- ════════════════════════════════════════════════════════════════════ -->
 
@@ -125,8 +125,8 @@ Pre-built `pyturso` wheels are bundled — no C/Rust compiler needed.
 ### Option B — pip (source checkout)
 
 ```bash
-git clone https://github.com/recla93/Neuron.git
-cd Neuron/neurag
+git clone https://github.com/recla93/neurag.git
+cd neurag
 pip install -e ".[dev]"           # editable install with test deps
 pip install -e ".[semantic]"      # optional: FastEmbed 384-dim vectors
 pip install -e ".[cloud]"         # optional: Turso Cloud support
@@ -433,9 +433,27 @@ when you need different chunk sizes, embedding models, or search behavior.
 **NeuRAG** is designed and built by **Claudio Costantino**.
 
 <a href="https://www.linkedin.com/in/clacosta1999/"><img alt="LinkedIn" src="https://img.shields.io/badge/LinkedIn-Claudio_Costantino-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white"></a>
-<a href="https://github.com/recla93/Neuron"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-recla93/Neuron-181717?style=for-the-badge&logo=github&logoColor=white"></a>
+<a href="https://github.com/recla93/neurag"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-recla93%2Fneurag-181717?style=for-the-badge&logo=github&logoColor=white"></a>
 
 </div>
+
+---
+
+## 🧩 Part of the Gray Matter suite
+
+Three MCP servers that work alone and work better together. Install any
+one of them and it can pull in the others; the gateway then serves all
+three through a **single** connector, so your client registers once.
+
+| Project | What it does |
+|---|---|
+| 🧠 **[Neuron](https://github.com/recla93/Neuron)** | Semantic memory — concepts, links, salience. It <b>learns</b>. |
+| 📚 **[NeuRAG](https://github.com/recla93/neurag)** ← you are here | Hierarchical knowledge vault — nodes, chunks, triggers. It <b>keeps</b>. |
+| ⚡ **[Gray Matter](https://github.com/recla93/gray-matter)** | MCP gateway — one connector, warm workers, cross-store bridges. |
+
+<sub>Whoever is installed first owns the session handshake: the gateway
+when it is present, otherwise the standalone tool — so the model is never
+told to call tools that are not there.</sub>
 
 ---
 

@@ -22,6 +22,12 @@ DEFAULTS = {
     "rerank": False,        # cross-encoder rerank stage (opt-in; adds latency + model DL)
     "rerank_pool": 50,      # candidates retrieved before rerank (top_n picked from these)
     "rerank_model": "",     # override cross-encoder model ("" = reranker default)
+    # Embedding model, chosen at install time. "" = follow Neuron / the built-in
+    # multilingual default, which is what keeps the two in ONE vector space.
+    # embed_dim MUST match embed_model: vectors of different widths are not
+    # comparable, so changing either later means re-indexing the vault.
+    "embed_model": "",
+    "embed_dim": 0,         # 0 = derive from embed_model (384 for the default)
 }
 
 # Per-knob help + suggestions surfaced by the control center (GUI reads these so
@@ -33,6 +39,12 @@ HELP = {
                    "scelgono da questi). Più alto = più recall, più costo.",
     "rerank_model": "Modello cross-encoder. Vuoto = default. Per un vault "
                     "italiano conviene il multilingue.",
+    "embed_model": "Modello di embedding del vault. Vuoto = segue Neuron "
+                   "(stesso spazio vettoriale). Cambiarlo richiede un "
+                   "re-index completo: vettori di modelli diversi non sono "
+                   "confrontabili.",
+    "embed_dim": "Dimensione dei vettori. 0 = derivata da embed_model. Deve "
+                 "combaciare col modello, altrimenti la ricerca è rumore.",
 }
 # Free-text knobs that still have good known values → GUI shows a picker but
 # keeps custom input allowed.
@@ -41,6 +53,14 @@ SUGGEST = {
         "",  # = reranker default (Xenova/ms-marco-MiniLM-L-6-v2, EN-centrico)
         "jinaai/jina-reranker-v2-base-multilingual",  # IT/EN, più pesante
         "BAAI/bge-reranker-base",
+    ],
+    # Keep-in-sync with $EmbedModels in install.ps1 / EM_* in install.sh.
+    "embed_model": [
+        "",  # = segue Neuron (multilingue 384-dim)
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",  # 384
+        "sentence-transformers/all-MiniLM-L6-v2",                       # 384, solo EN
+        "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",  # 768
+        "intfloat/multilingual-e5-large",                               # 1024
     ],
 }
 
