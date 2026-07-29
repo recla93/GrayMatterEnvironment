@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -70,12 +71,94 @@ def _claude_desktop_paths() -> list[str]:
     return [_home(".config", "Claude", "claude_desktop_config.json")]
 
 
-def _vscode_paths() -> list[str]:
+def _vscode_user_dir() -> str:
     if _env("APPDATA"):
-        return [os.path.join(_env("APPDATA"), "Code", "User", "settings.json")]
+        return os.path.join(_env("APPDATA"), "Code", "User")
     if sys.platform == "darwin":
-        return [_home("Library", "Application Support", "Code", "User", "settings.json")]
-    return [_home(".config", "Code", "User", "settings.json")]
+        return _home("Library", "Application Support", "Code", "User")
+    return _home(".config", "Code", "User")
+
+
+def _vscode_paths() -> list[str]:
+    """`mcp.json` FIRST, then `settings.json`.
+
+    VS Code 1.102 moved MCP servers into a dedicated `User/mcp.json`. Targeting
+    only settings.json wrote the gateway entry where a current VS Code never
+    looks, and deregister could not SEE a server living in mcp.json — so an
+    uninstall left it behind. Keep-in-sync with neuron/ and neurag/clients.py.
+    """
+    d = _vscode_user_dir()
+    return [os.path.join(d, "mcp.json"), os.path.join(d, "settings.json")]
+
+
+def _vscode_keys_for(path: str) -> list[str]:
+    """mcp.json IS the MCP file → servers sit at the root."""
+    return ["servers"] if os.path.basename(path).lower() == "mcp.json" else ["mcp", "servers"]
+
+
+def keys_for(spec: dict, path: str) -> list[str]:
+    """Nested path to the server map for THIS file (see _vscode_paths)."""
+    fn = spec.get("keys_for")
+    return fn(path) if fn else spec["keys"]
+
+
+def _windsurf_paths() -> list[str]:
+    """Windsurf (Cognition). Primary is Codeium's own MCP file; the second is
+    the VS Code-fork layout (Windsurf is a VS Code fork). Not verifiable here —
+    which is why both are probed and nothing is ever created: a wrong guess
+    costs a "skipped", never a config written to the wrong place."""
+    cands = [_home(".codeium", "windsurf", "mcp_config.json")]
+    if _env("APPDATA"):
+        cands.append(os.path.join(_env("APPDATA"), "Windsurf", "User", "mcp.json"))
+    elif sys.platform == "darwin":
+        cands.append(_home("Library", "Application Support", "Windsurf", "User", "mcp.json"))
+    else:
+        cands.append(_home(".config", "Windsurf", "User", "mcp.json"))
+    return cands
+
+
+def _toml_upsert_section(text: str, section: str, body_lines: list[str]) -> str:
+    """Replace the ``[section]`` block if present, else append it; everything
+    else stays byte-for-byte. Keep-in-sync with neuron/clients.py."""
+    new_block = f"[{section}]\n" + "\n".join(body_lines) + "\n"
+    pattern = re.compile(r"(?ms)^\[" + re.escape(section) + r"\]\s*?\n.*?(?=^\[|\Z)")
+    if pattern.search(text):
+        # lambda: the block holds Windows backslashes re.sub would eat.
+        return pattern.sub(lambda _m: new_block, text, count=1)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + ("\n" if text.strip() else "") + new_block
+
+
+def _register_toml(spec: dict, path: str, servers: list[str], py: str,
+                   evict: tuple = ()) -> dict:
+    """Codex CLI. Section-targeted upsert + removal of evicted slugs, so the
+    rest of config.toml (other MCP servers, user settings) is never touched."""
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig") if os.path.exists(path) else ""
+    except OSError:
+        return {"client": spec["label"], "ok": False, "action": "manual", "detail": path}
+    root = spec["keys"][0]
+    for s_ in servers:
+        text = _toml_upsert_section(
+            text, f"{root}.{s_}",
+            ["command = " + json.dumps(py), "args = " + json.dumps(SERVERS[s_])])
+    for s_ in evict:
+        text = re.sub(r"(?ms)^\[" + re.escape(f"{root}.{s_}") + r"\]\s*?\r?\n.*?(?=^\[|\Z)",
+                      "", text)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path):
+            Path(path + ".bak").write_text(
+                Path(path).read_text(encoding="utf-8-sig"), encoding="utf-8")
+        Path(path).write_text(text, encoding="utf-8")
+    except OSError as e:
+        return {"client": spec["label"], "ok": False, "action": "error", "detail": str(e)}
+    after = Path(path).read_text(encoding="utf-8-sig")
+    if any(f"[{root}.{s_}]" not in after for s_ in servers):
+        return {"client": spec["label"], "ok": False, "action": "error",
+                "detail": "write verification failed"}
+    return {"client": spec["label"], "ok": True, "action": "registered", "detail": path}
 
 
 def _zed_paths() -> list[str]:
@@ -94,11 +177,17 @@ CLIENTS: dict[str, dict] = {
     "cursor": {"label": "Cursor", "paths": lambda: [_home(".cursor", "mcp.json")],
                "keys": ["mcpServers"], "style": "args", "create": True},
     "vscode": {"label": "VS Code", "paths": _vscode_paths,
-               "keys": ["mcp", "servers"], "style": "stdio", "create": False},
+               "keys": ["mcp", "servers"], "keys_for": _vscode_keys_for,
+               "style": "stdio", "create": False},
     "zed": {"label": "Zed", "paths": _zed_paths,
             "keys": ["context_servers"], "style": "args", "create": False},
     "opencode": {"label": "OpenCode", "paths": lambda: [_home(".config", "opencode", "opencode.json")],
                  "keys": ["mcp"], "style": "local", "create": True},
+    "windsurf": {"label": "Windsurf", "paths": _windsurf_paths,
+                 "keys": ["mcpServers"], "style": "args", "create_if_missing": False},
+    "codex": {"label": "Codex CLI", "paths": lambda: [_home(".codex", "config.toml")],
+              "keys": ["mcp_servers"], "style": "args", "format": "toml",
+              "create_if_missing": False},
 }
 
 
@@ -139,7 +228,7 @@ def _register_json(spec: dict, path: str, servers: list[str], py: str,
         return {"client": spec["label"], "ok": False, "action": "manual",
                 "detail": path, "snippet": json.dumps(snippet, indent=2)}
     node = data
-    for k in spec["keys"]:
+    for k in keys_for(spec, path):
         node = node.setdefault(k, {})
         if not isinstance(node, dict):
             return {"client": spec["label"], "ok": False, "action": "error",
@@ -214,6 +303,71 @@ def _register_claude_cli(spec: dict, servers: list[str], py: str,
     return out
 
 
+def detected_clients() -> list[str]:
+    """Clients whose config actually exists on this machine."""
+    return [k for k, spec in CLIENTS.items()
+            if any(os.path.exists(p) for p in spec["paths"]())]
+
+
+def resolve_clients(selector: str, *, interactive: bool = True) -> "list[str] | None":
+    """'all' | 'detected' | 'ask' | 'a,b,c'. None = the user aborted.
+
+    Keep-in-sync with neuron/clients.py and neurag/clients.py. Feeds
+    ``register(only=...)``, which already existed but had no CLI surface."""
+    selector = (selector or "all").strip()
+    if selector == "all":
+        return list(CLIENTS)
+    if selector == "detected":
+        return detected_clients()
+    if selector == "ask":
+        if not interactive or not sys.stdin or not sys.stdin.isatty():
+            return detected_clients()
+        return _pick_clients_interactively()
+    names = [n.strip() for n in selector.split(",") if n.strip()]
+    unknown = [n for n in names if n not in CLIENTS]
+    if unknown:
+        raise ValueError(f"unknown client(s): {', '.join(unknown)} — "
+                         f"known: {', '.join(sorted(CLIENTS))}")
+    return names
+
+
+def _pick_clients_interactively() -> "list[str] | None":
+    found = set(detected_clients())
+    names = list(CLIENTS)
+    print("\n  Register the MCP gateway in which clients?")
+    for i, name in enumerate(names, 1):
+        mark = "x" if name in found else " "
+        note = "" if name in found else "   (not detected)"
+        print(f"    [{mark}] {i}) {CLIENTS[name]['label']}{note}")
+    print("\n  Enter = the detected ones, 'all', 'none', or numbers like 1,3,4")
+    try:
+        raw = input("  Choice [detected]: ").strip().lower()
+    except EOFError:
+        # Nobody there to answer: safe default beats registering NOTHING.
+        print("detected (no input available)")
+        return sorted(found, key=names.index)
+    except KeyboardInterrupt:
+        print()
+        return None
+    if not raw or raw == "detected":
+        return sorted(found, key=names.index)
+    if raw == "all":
+        return names
+    if raw in ("none", "skip", "-"):
+        return []
+    picked = []
+    for tok in raw.replace(" ", ",").split(","):
+        if not tok:
+            continue
+        if tok.isdigit() and 1 <= int(tok) <= len(names):
+            picked.append(names[int(tok) - 1])
+        elif tok in CLIENTS:
+            picked.append(tok)
+        else:
+            print(f"  (ignoring '{tok}' — not a client)")
+    return list(dict.fromkeys(picked))
+
+
 def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
              only: "list[str] | None" = None, gateway: bool = False) -> list[dict]:
     """Register ``servers`` (default: all installed) into detected clients.
@@ -253,8 +407,9 @@ def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
         # Every existing config for this client (Claude Desktop MSIX keeps a
         # second one in LocalCache) — updating only the newest leaves the other
         # stale and the old servers still spawning.
+        writer = _register_toml if spec.get("format") == "toml" else _register_json
         for path in paths:
-            results.append(_register_json(spec, path, servers, py, evict))
+            results.append(writer(spec, path, servers, py, evict))
     return results
 
 
@@ -287,7 +442,7 @@ def deregister(servers: "list[str] | None" = None) -> list[dict]:
                                 "action": "manual", "detail": path})
                 continue
             node = data
-            for k in spec["keys"]:
+            for k in keys_for(spec, path):
                 node = node.get(k) if isinstance(node, dict) else None
                 if node is None:
                     break
@@ -404,7 +559,7 @@ def doctor(py: "str | None" = None) -> list[dict]:
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8-sig") or "{}")
             node = data
-            for k in spec["keys"]:
+            for k in keys_for(spec, path):
                 node = node.get(k, {}) if isinstance(node, dict) else {}
             present = [s for s in SERVERS if isinstance(node, dict) and s in node]
         except (json.JSONDecodeError, OSError):

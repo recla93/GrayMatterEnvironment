@@ -264,7 +264,71 @@ fi
 
 # Gateway model (INSTALLER-UX): register ONLY gray-matter, deploy hooks, manifest.
 echo "Installing the gateway (register + hooks + manifest)..."
-"$VPY" -m gray_matter.cli install || "$VPY" -m gray_matter.cli register || true
+# Embedding model — asked HERE because the full-suite path installs Neuron
+# without ever running Neuron's own installer, so these users were never given
+# the choice. Keep in sync with $EmbedModels in install.ps1 and with
+# neuron/install.sh.
+GM_EM_1="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - default"
+GM_EM_2="sentence-transformers/all-MiniLM-L6-v2|384|90 MB|English only - smallest and fastest"
+GM_EM_3="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger"
+GM_EM_4="intfloat/multilingual-e5-large|1024|2.2 GB|multilingual, best quality - heavy"
+GM_MODEL=""; GM_DIM=""; GM_SIZE=""
+_gm_set() { GM_MODEL="${1%%|*}"; _r="${1#*|}"; GM_DIM="${_r%%|*}"; _r="${_r#*|}"; GM_SIZE="${_r%%|*}"; }
+gm_select_embed_model() {
+    if [ -n "${GM_EMBED_MODEL:-}" ]; then
+        for e in "$GM_EM_1" "$GM_EM_2" "$GM_EM_3" "$GM_EM_4"; do
+            [ "${e%%|*}" = "$GM_EMBED_MODEL" ] && { _gm_set "$e"; return; }
+        done
+        GM_MODEL="$GM_EMBED_MODEL"; GM_DIM=0; GM_SIZE="?"; return
+    fi
+    if [ ! -t 0 ]; then _gm_set "$GM_EM_1"; return; fi
+    echo ""
+    echo "  Embedding model (downloaded once, defines the memory's vector space):"
+    i=1
+    for e in "$GM_EM_1" "$GM_EM_2" "$GM_EM_3" "$GM_EM_4"; do
+        _rest="${e#*|}"; _d="${_rest%%|*}"; _rest="${_rest#*|}"; _sz="${_rest%%|*}"; _n="${_rest#*|}"
+        echo "    [$i] $_n"
+        echo "        ${e%%|*}  (${_d}-dim, ${_sz})"
+        i=$((i + 1))
+    done
+    echo ""
+    echo "  Changing this later requires re-embedding the whole store."
+    printf "  Choice [1]: "; read -r mc || mc=""
+    case "$mc" in
+        2) _gm_set "$GM_EM_2" ;; 3) _gm_set "$GM_EM_3" ;; 4) _gm_set "$GM_EM_4" ;;
+        *) _gm_set "$GM_EM_1" ;;
+    esac
+}
+gm_save_embed_model() {   # $1 = venv python
+    # Never fatal (set -e is on): the model is refetched lazily on first use.
+    "$1" -c "from neuron.config import set_user_env
+print(set_user_env(NS_EMBED_MODEL='$GM_MODEL', NS_EMBED_DIM='$GM_DIM'))" >/dev/null 2>&1 || {
+        echo "  (embedding model choice not saved - default stays active)"; return 0; }
+    echo ""
+    echo "  Downloading the embedding model ($GM_SIZE, one-time)."
+    echo "  Large models take several minutes - this is NOT frozen."
+    if HF_HUB_DISABLE_PROGRESS_BARS=1 "$1" -W ignore -c "from neuron.server import _get_embedder
+_get_embedder()
+print('EMBED_MODEL_READY')" 2>&1 | sed 's/^/    /'; then
+        echo "  [OK] $GM_MODEL cached."
+    else
+        echo "  [!] download failed - Neuron retries on first use (install continues)."
+    fi
+}
+
+# Embedding model for Neuron (full-suite users never see neuron/install.sh).
+if [ -n "$NEURON_DIR" ]; then
+    gm_select_embed_model
+    gm_save_embed_model "$VPY"
+fi
+
+# Where to register: GM_CLIENT wins, else ask on a tty, else "detected" (never
+# touches a client the user does not have).
+if [ -n "${GM_CLIENT:-}" ]; then CLIENT_SEL="$GM_CLIENT"
+elif [ -t 0 ]; then CLIENT_SEL="ask"
+else CLIENT_SEL="detected"; fi
+"$VPY" -m gray_matter.cli install --client "$CLIENT_SEL" \
+    || "$VPY" -m gray_matter.cli register --gateway --client "$CLIENT_SEL" || true
 
 # Registro path sorgente (SoC): ogni componente registra il PROPRIO sorgente nel
 # proprio registro; GM li scopre chiedendo ai peer. Riscritto a ogni install.
@@ -291,6 +355,16 @@ if [ -d "$HOME/Desktop" ]; then
 fi
 
 echo ""
+# An explicit, affirmative terminator: callers could not tell "finished
+# successfully" from "still working" or "died quietly".
+GM_VER=$("$VPY" -m gray_matter.cli --version 2>/dev/null | tail -1)
+[ -n "$GM_VER" ] || GM_VER="?"
+echo ""
+echo "  ============================================================"
+echo "  [OK] INSTALL COMPLETE - Gray Matter $GM_VER"
+echo "  ============================================================"
+[ -n "$NEURON_DIR" ] && echo "  Neuron:  installed"
+[ -n "$NEURAG_DIR" ] && echo "  NeuRAG:  installed"
 echo "Done. Restart your AI apps to load the servers."
 echo "Control center: the 'Gray-Matter-GUI' icon on your Desktop"
 echo "                (or run: gray-matter gui)"

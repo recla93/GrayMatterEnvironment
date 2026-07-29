@@ -58,6 +58,42 @@ def test_line_endings(project, suffix):
 
 
 @pytest.mark.parametrize("project", PROJECTS)
+def test_cmd_has_no_bom_and_is_pure_ascii(project):
+    r"""cmd.exe does not understand a UTF-8 BOM: it becomes part of the first
+    token, so `@echo off` turns into an unknown command and every later `rem`
+    echoes to the screen. It also reads the file in the OEM codepage, so a
+    UTF-8 em dash renders as mojibake (`ÔÇö`). Really happened — a line-ending
+    normalisation wrote these with utf-8-sig and broke all three launchers.
+
+    .ps1 is the OPPOSITE (see the next test): PowerShell 5.1 needs the BOM."""
+    raw = _bytes(project, ".cmd")
+    assert not raw.startswith(b"\xef\xbb\xbf"), (
+        "install.cmd must NOT start with a UTF-8 BOM — cmd.exe chokes on it")
+    try:
+        raw.decode("ascii")
+    except UnicodeDecodeError as e:
+        raise AssertionError(
+            f"install.cmd must be pure ASCII (cmd.exe reads it in the OEM "
+            f"codepage, so anything else is mojibake): {e}") from None
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_ps1_keeps_its_bom(project):
+    """The mirror rule. Windows PowerShell 5.1 decodes a BOM-less script as
+    ANSI, so the accented comments and box-drawing output come out wrong."""
+    assert _bytes(project, ".ps1").startswith(b"\xef\xbb\xbf"), (
+        "install.ps1 must keep its UTF-8 BOM for PowerShell 5.1")
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("suffix", POSIX)
+def test_posix_launchers_have_no_bom(project, suffix):
+    """`sh` would try to execute the BOM as part of the shebang line."""
+    assert not _bytes(project, suffix).startswith(b"\xef\xbb\xbf"), (
+        f"install{suffix} must not have a BOM")
+
+
+@pytest.mark.parametrize("project", PROJECTS)
 def test_cmd_forwards_args_and_exit_code(project):
     body = _read(project, ".cmd")
     assert "%*" in body, "must forward its arguments to install.ps1"
@@ -136,6 +172,62 @@ def test_gm_stops_processes_again_after_every_prompt():
         first_pip = next(i for i, l in enumerate(ps1[stop:], stop) if "pip install" in l)
         assert prompt < stop < first_pip, (
             f"{project}: a prompt slipped between the stop and the first pip")
+
+
+# --- feature parity: no installer may fall behind the others ----------------
+#
+# Gray Matter's installer is the one most users run (it bundles the suite), and
+# it was the one missing every hardening the peers grew: the prompt gate, the
+# embedding-model question, the client picker, the completion banner. Drift in
+# the direction of "the main entry point is the stale one" is exactly what this
+# file exists to catch, so the features are asserted, not just the shapes.
+
+PS1_FEATURES = {
+    "a prompt gate so no Read-Host can hang a console-less caller": "$Ask",
+    "the embedding-model question": "EmbedModel",
+    "a client picker (WHERE to register)": "--client",
+    "an affirmative completion banner": "INSTALL COMPLETE",
+}
+SH_FEATURES = {
+    "a tty check so no prompt blocks a piped run": "-t 0",
+    "the embedding-model question": "EMBED_MODEL",
+    "a client picker (WHERE to register)": "--client",
+    "an affirmative completion banner": "INSTALL COMPLETE",
+}
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("why,token", sorted(PS1_FEATURES.items()))
+def test_every_ps1_has_every_feature(project, why, token):
+    assert token in _read(project, ".ps1"), f"{project}/install.ps1 is missing {why}"
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("why,token", sorted(SH_FEATURES.items()))
+def test_every_sh_has_every_feature(project, why, token):
+    assert token in _read(project, ".sh"), f"{project}/install.sh is missing {why}"
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_every_installer_agrees_on_one_vector_space(project):
+    """Vectors from different models are not comparable, so the three tools must
+    land in ONE space. Two legitimate ways to say that:
+
+    * name the 384-dim multilingual default (Neuron, and Gray Matter which
+      installs Neuron in the full-suite path);
+    * defer to Neuron explicitly (NeuRAG — its picker's first option is
+      "follow Neuron", and its embedder reads NS_EMBED_MODEL).
+
+    What must never appear is a THIRD answer: a different default of its own.
+    """
+    default = "paraphrase-multilingual-MiniLM-L12-v2"
+    for suffix in (".ps1", ".sh"):
+        body = _read(project, suffix)
+        names_default = default in body
+        defers = "Follow Neuron" in body or "following Neuron" in body
+        assert names_default or defers, (
+            f"{project}/install{suffix}: neither names the shared default "
+            f"({default}) nor defers to Neuron — that is a third vector space")
 
 
 @pytest.mark.parametrize("project", PROJECTS)

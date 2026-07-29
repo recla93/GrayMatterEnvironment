@@ -20,7 +20,10 @@
 # install as usual (implies -Force). For the states no reinstall can repair: a
 # half-written venv, a broken interpreter, a dependency pinned wrong. Removes
 # CODE only — graphs, knowledge.db, bridges and the GME registry are untouched.
-param([switch]$Force, [switch]$Clear)
+#   -EmbedModel <name>  -> embedding model for Neuron (skips the prompt)
+#   -Client <sel>       -> where to register: all|detected|ask|a,b,c
+param([switch]$Force, [switch]$Clear, [string]$EmbedModel = "",
+      [string]$Client = "")
 if ($Clear) { $Force = $true }
 $ErrorActionPreference = "Stop"
 
@@ -211,6 +214,12 @@ if (-not (Test-Path $Venv)) {
     }
 }
 $VPy = Join-Path $Venv "Scripts\python.exe"
+# -Yes / GM_YES = "don't ask me anything": ONE gate for every prompt below.
+# Needed by any caller without a usable stdin (CI, scheduled task, a GUI that
+# redirects streams). UserInteractive cannot carry this — it describes the
+# session, not the console, so it stays TRUE exactly when Read-Host would hang.
+$Ask = ([Environment]::UserInteractive -and -not $Force -and
+        -not $env:GM_YES -and ($args -notcontains "-Yes"))
 # pip self-upgrade is non-critical: never let it abort the install.
 & $VPy -m pip install --upgrade pip --quiet | Out-Null
 
@@ -251,7 +260,12 @@ function Prompt-InstallChoice([string]$label, [string]$ver) {
     Write-Host "  [R]einstall - reinstall (same version, fresh copy)"
     Write-Host "  [C]lean    - remove venv and reinstall from scratch"
     Write-Host "  [S]kip     - keep current installation"
-    $ans = Read-Host "Choice"
+    # No console (GUI installer: CreateNoWindow, stdin not redirected) => Read-Host
+    # throws, and ErrorActionPreference=Stop would abort the whole install. The
+    # UserInteractive gate is deliberately NOT back (it was wrong: it is true in
+    # that very case); catching the failure delivers the documented "skip".
+    try { $ans = Read-Host "Choice" }
+    catch { Write-Host "  (no console for the prompt - keeping the current install)"; return "skip" }
     switch -Regex ($ans) {
         '^(r|reinstall)$' { return "reinstall" }
         '^(c|clean)$'     { return "clean" }
@@ -331,20 +345,33 @@ if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml
     # Detect other peers as siblings of the calling peer's parent
     $PeerParent = Split-Path -Parent $env:GM_PEER_DIR
     $OtherPeers = @()
-    if ($PeerLabel -ne "neuron" -and $PeerLabel -ne "Neuron") {
+    # GM_NO_NEURON / GM_NO_NEURAG were honoured only in the full-suite branch
+    # below, so a caller that set them here got asked anyway — and the caller
+    # that matters is a GUI installer with no stdin, where Read-Host hangs.
+    # Same env contract in both branches now.
+    if ($PeerLabel -ne "neuron" -and $PeerLabel -ne "Neuron" -and -not $env:GM_NO_NEURON) {
         $nd = Find-PeerIn @("neuron", "Neuron") $PeerParent
         if ($nd) { $OtherPeers += @{dir=$nd; label="Neuron"} }
     }
-    if ($PeerLabel -ne "neurag" -and $PeerLabel -ne "Neurag") {
+    if ($PeerLabel -ne "neurag" -and $PeerLabel -ne "Neurag" -and -not $env:GM_NO_NEURAG) {
         $nd = Find-PeerIn @("neurag", "Neurag") $PeerParent
         if ($nd) { $OtherPeers += @{dir=$nd; label="NeuRAG"} }
     }
+    # -Yes / GM_YES = "don't ask": include what was found (the recommended
+    # answer) instead of blocking on a prompt nobody can see. Opting a peer
+    # OUT is what GM_NO_<PEER> is for.
+    $GmAsk = $Ask   # one gate for every prompt (defined near the top)
     foreach ($op in $OtherPeers) {
         $opVer = Test-AlreadyInstalled $op.label.ToLower() $op.dir
         if ($opVer) {
             Write-Host "`n  $($op.label) $opVer detected alongside $PeerLabel."
         } else {
             Write-Host "`n  $($op.label) source found alongside $PeerLabel."
+        }
+        if (-not $GmAsk) {
+            Write-Host "  Including $($op.label) (non-interactive; set GM_NO_$($op.label.ToUpper())=1 to skip)."
+            Install-Peer $op.dir $op.label
+            continue
         }
         Write-Host "  [Y]es — add $($op.label) to the suite"
         Write-Host "  [N]o  — keep $PeerLabel standalone"
@@ -438,8 +465,69 @@ if ($NeuronDir) {
         }
     }
 }
+# Embedding model — asked HERE because the full-suite path installs Neuron
+# without ever running Neuron's own installer, so these users were never given
+# the choice. Same list and same persistence (neuron.config.set_user_env) as
+# neuron/install.ps1 — keep the two in sync.
+$EmbedModels = @(
+    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - default, best size/quality" },
+    @{ name = "sentence-transformers/all-MiniLM-L6-v2";                      dim = 384;  size = "90 MB";  note = "English only - smallest and fastest" },
+    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual, stronger - 2x storage per vector" },
+    @{ name = "intfloat/multilingual-e5-large";                              dim = 1024; size = "2.2 GB"; note = "multilingual, best quality - heavy (RAM + disk)" }
+)
+function Select-GmEmbedModel {
+    if ($EmbedModel) {
+        foreach ($m in $EmbedModels) { if ($m.name -eq $EmbedModel) { return $m } }
+        return @{ name = $EmbedModel; dim = 0; size = "?"; note = "custom" }
+    }
+    if (-not $Ask) { return $EmbedModels[0] }
+    Write-Host "`n  Embedding model (downloaded once, defines the memory's vector space):"
+    for ($i = 0; $i -lt $EmbedModels.Count; $i++) {
+        $m = $EmbedModels[$i]
+        Write-Host ("    [{0}] {1}" -f ($i + 1), $m.note)
+        Write-Host ("        {0}  ({1}-dim, {2})" -f $m.name, $m.dim, $m.size)
+    }
+    Write-Host ""
+    Write-Host "  Changing this later requires re-embedding the whole store."
+    try { $a = Read-Host "  Choice [1]" } catch { $a = "" }
+    if ($a -match '^[1-9][0-9]*$' -and [int]$a -le $EmbedModels.Count) { return $EmbedModels[[int]$a - 1] }
+    return $EmbedModels[0]
+}
+function Save-GmEmbedModel([string]$Vpy, $Model) {
+    # Never fatal: a wrong/absent model choice must not take the install down.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Vpy -c "from neuron.config import set_user_env
+print(set_user_env(NS_EMBED_MODEL='$($Model.name)', NS_EMBED_DIM='$($Model.dim)'))"
+        if ($LASTEXITCODE -ne 0) { Write-Host "  (embedding model choice not saved - default stays active)"; return }
+        Write-Host "`n  Downloading the embedding model ($($Model.size), one-time)."
+        Write-Host "  Large models take several minutes - this is NOT frozen."
+        $prevBars = $env:HF_HUB_DISABLE_PROGRESS_BARS
+        $env:HF_HUB_DISABLE_PROGRESS_BARS = "1"
+        & $Vpy -W "ignore" -c "from neuron.server import _get_embedder
+_get_embedder()
+print('EMBED_MODEL_READY')"
+        $env:HF_HUB_DISABLE_PROGRESS_BARS = $prevBars
+        if ($LASTEXITCODE -eq 0) { Write-Host "  [OK] $($Model.name) cached." }
+        else { Write-Host "  [!] download failed - Neuron retries on first use (install continues)." }
+    } catch {
+        Write-Host "  [!] embedding step skipped: $($_.Exception.Message)"
+    } finally { $ErrorActionPreference = $prevEap }
+}
+
 Write-Host "Installing the gateway (register + hooks + manifest)..."
-try { & $VPy -m gray_matter.cli install } catch { & $VPy -m gray_matter.cli register }
+# Where to register: explicit -Client wins, else ask when there is a console,
+# else "detected" (never touches a client the user does not have).
+$ClientSel = if ($Client) { $Client } elseif ($Ask) { "ask" } else { "detected" }
+try { & $VPy -m gray_matter.cli install --client $ClientSel }
+catch { & $VPy -m gray_matter.cli register --gateway --client $ClientSel }
+
+# Embedding model for Neuron (full-suite users never see neuron/install.ps1).
+if ($NeuronDir) {
+    $GmChosen = Select-GmEmbedModel
+    Save-GmEmbedModel $VPy $GmChosen
+}
 
 # Registro path sorgente (SoC): ogni componente registra il PROPRIO sorgente nel
 # proprio registro; GM li scopre chiedendo ai peer. Si riscrive a ogni install.
@@ -498,7 +586,21 @@ if ($Desk) {
     }
 }
 
+# An explicit, affirmative terminator: callers (and the user) could not tell
+# "finished successfully" from "still working" or "died quietly".
+$GmVer = "?"
+try {
+    $prevEap2 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    $GmVer = (& $VPy -m gray_matter.cli --version | Select-Object -Last 1)
+    $ErrorActionPreference = $prevEap2
+} catch { }
+if (-not "$GmVer".Trim()) { $GmVer = "?" }
 Write-Host ""
+Write-Host "  ============================================================"
+Write-Host "  [OK] INSTALL COMPLETE - Gray Matter $GmVer"
+Write-Host "  ============================================================"
+if ($NeuronDir) { Write-Host "  Neuron:  installed" }
+if ($NeuragDir) { Write-Host "  NeuRAG:  installed" }
 Write-Host "Done. Restart your AI apps to load the servers."
 Write-Host "Control center: double-click 'Gray Matter' on your Desktop"
 Write-Host "                (or run: $VPy -m gray_matter.cli gui)"

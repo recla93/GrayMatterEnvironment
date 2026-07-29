@@ -375,7 +375,7 @@ def cmd_mode(mode: str) -> None:
     print(f"Mode: {mode} (all servers).")
 
 
-def cmd_register(gateway: bool = False) -> None:
+def cmd_register(gateway: bool = False, client: str = "all") -> None:
     """Register every installed trio server in the detected MCP clients.
 
     --gateway: proxy model — register ONLY gray-matter, evict neuron/neurag
@@ -391,7 +391,18 @@ def cmd_register(gateway: bool = False) -> None:
         # Round-trip del go-standalone: tornare al gateway riprende in gestione
         # TUTTI i tool (azzera la lista unmanaged) ed evict le entry dirette.
         clients.clear_unmanaged()
-    for r in clients.register(servers, gateway=gateway):
+    try:
+        only = clients.resolve_clients(client)
+    except ValueError as e:
+        print(f"gray-matter register: {e}")
+        return
+    if only is None:
+        print("  Aborted — nothing was registered.")
+        return
+    if not only:
+        print("  No clients selected — nothing was registered.")
+        return
+    for r in clients.register(servers, gateway=gateway, only=only):
         mark = "OK" if r.get("ok") else ("--" if r.get("action") == "skipped" else "!!")
         line = f"  [{mark}] {r['client']}: {r['action']}"
         if r.get("detail"):
@@ -497,12 +508,26 @@ def _print_results(results: list) -> None:
                   + (f" — {s['detail']}" if s.get("detail") else ""))
 
 
-def cmd_install(dry_run: bool = False) -> None:
+def cmd_install(dry_run: bool = False, client: str = "all") -> None:
     """Idempotent install: reap orphans, ensure data dirs, register ONLY the
-    gateway, deploy per-client hooks, write manifest (INSTALLER-UX §5)."""
+    gateway, deploy per-client hooks, write manifest (INSTALLER-UX §5).
+
+    ``client`` picks WHERE the gateway is registered — 'all' | 'detected' |
+    'ask' | a comma-separated list."""
+    from gray_matter import clients as _clients
     from gray_matter import executor
+    only = None
+    if client and client != "all":
+        try:
+            only = _clients.resolve_clients(client)
+        except ValueError as e:
+            print(f"gray-matter install: {e}")
+            return
+        if only is None:
+            print("  Aborted — nothing was installed.")
+            return
     print(("[dry-run] " if dry_run else "") + "Installing (gateway model)...")
-    _print_results(executor.execute_install(dry_run=dry_run))
+    _print_results(executor.execute_install(dry_run=dry_run, only=only))
     print("Done." + ("" if dry_run else " Restart your AI apps."))
 
 
@@ -805,6 +830,11 @@ def cmd_gm_neurag(tool: str, args_json: str) -> None:
 # ispeziona invece di riscriverne una copia (gray_matter/catalog.py).
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Gray-Matter control")
+    # Before the subparsers on purpose: `action="version"` exits during parsing,
+    # so it beats `required=True`. All three CLIs answer `--version` the same
+    # way now — the installers and the GUI read it, and an argparse usage error
+    # there is indistinguishable from a broken install.
+    parser.add_argument("-V", "--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Show Gray-Matter status and registered servers")
@@ -828,6 +858,9 @@ def build_parser() -> argparse.ArgumentParser:
     gui_p = sub.add_parser("gui", help="Open the unified web control center")
     gui_p.add_argument("--classic", action="store_true", help=argparse.SUPPRESS)
     reg_p = sub.add_parser("register", help="Register installed trio servers in your MCP clients")
+    reg_p.add_argument("--client", default="all",
+                       help="'all', 'detected' (only configs that exist), 'ask' "
+                            "(interactive picker), or a comma-separated list")
     reg_p.add_argument("--gateway", action="store_true",
                        help="Proxy model: register ONLY gray-matter, remove neuron/neurag from clients")
     der_p = sub.add_parser("deregister",
@@ -846,6 +879,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Show what would happen without changing anything")
     ins_p = sub.add_parser("install", help="Idempotent gateway install (reap, register GM, deploy hooks, manifest)")
     ins_p.add_argument("--dry-run", action="store_true", help="Show actions without doing them")
+    ins_p.add_argument("--client", default="all",
+                       help="where to register the gateway: 'all', 'detected', "
+                            "'ask' (interactive picker), or a comma-separated list")
     uni_p = sub.add_parser("uninstall", help="Remove GM (interactive on the memory)")
     uni_p.add_argument("--purge-data", action="store_true", help="Also wipe memory WITHOUT asking")
     uni_p.add_argument("--yes", action="store_true", help="Answer yes to every prompt")
@@ -1011,13 +1047,13 @@ def main() -> None:
         from gray_matter.webgui import main as gui_main
         gui_main()
     elif args.command == "register":
-        cmd_register(args.gateway)
+        cmd_register(args.gateway, getattr(args, "client", "all"))
     elif args.command == "deregister":
         cmd_deregister(args.tool)
     elif args.command == "link":
         cmd_link(args.tools, args.list_only, args.json, args.dry_run)
     elif args.command == "install":
-        cmd_install(args.dry_run)
+        cmd_install(args.dry_run, getattr(args, "client", "all"))
     elif args.command == "uninstall":
         cmd_uninstall(args.purge_data, args.yes, args.dry_run,
                       args.list_only, args.json)

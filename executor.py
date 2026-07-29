@@ -263,14 +263,18 @@ def _find_clients_root() -> Path:
     env_dir = os.environ.get("GM_NEURON_CLIENTS")
     if env_dir and _has_assets(Path(env_dir)):
         return Path(env_dir)
-    # 2. Installed neuron package (wheel OR editable): <neuron>/clients.
+    # 2. Installed peer package (wheel OR editable): <peer>/clients.
+    #    NeuRAG is probed too, not just Neuron: a GM + NeuRAG install has no
+    #    `neuron` package at all, so looking only there left that combination
+    #    with no handshake assets — and therefore no handshake.
     try:
         import importlib.util
-        spec = importlib.util.find_spec("neuron")
-        for loc in (spec.submodule_search_locations or []) if spec else []:
-            cand = Path(loc) / "clients"
-            if _has_assets(cand):
-                return cand
+        for peer in ("neuron", "neurag"):
+            spec = importlib.util.find_spec(peer)
+            for loc in (spec.submodule_search_locations or []) if spec else []:
+                cand = Path(loc) / "clients"
+                if _has_assets(cand):
+                    return cand
     except Exception:  # noqa: BLE001 — import machinery must never break install
         pass
     # 3. Dev/source layouts (no neuron installed): new in-package location, then
@@ -299,11 +303,16 @@ def _find_clients_root() -> Path:
 # --------------------------------------------------------------------------
 
 def execute_install(state: dict | None = None, *, assets_root=None,
-                    dry_run: bool = False) -> list[dict]:
+                    dry_run: bool = False, only: "list[str] | None" = None) -> list[dict]:
     """Run `installer.plan(state)` for real. Returns one result dict per action.
 
     ``assets_root`` = directory containing `Neuron/clients` assets (defaults to
     the repo's Neuron/clients next to this package, if present).
+
+    ``only`` = the clients the USER picked. It overrides the plan's detected
+    list rather than intersecting with it: someone who explicitly names a
+    client means it, even if its config does not exist yet. ``None`` keeps the
+    historic behaviour (every detected client).
     """
     from gray_matter import clients as _clients
     state = state if state is not None else detect_state()
@@ -323,8 +332,9 @@ def execute_install(state: dict | None = None, *, assets_root=None,
                 results.append({"action": "register", "ok": True,
                                 "detail": f"would register {act['target']} in {act['clients']}"})
             else:
-                only = [c for c in act["clients"] if c in _clients.CLIENTS] or None
-                regs = _clients.register(gateway=True, only=only)
+                picked = (list(only) if only is not None
+                          else [c for c in act["clients"] if c in _clients.CLIENTS] or None)
+                regs = _clients.register(gateway=True, only=picked)
                 # "skipped: client not found" is not a failure of the install
                 ok = all(r.get("ok") or r.get("action") == "skipped" for r in regs)
                 results.append({"action": "register", "ok": ok, "clients": regs})

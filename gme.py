@@ -77,24 +77,50 @@ __all__ = [
 # Path helpers
 # ---------------------------------------------------------------------------
 
-def gme_root() -> Path:
-    """GME folder location — platform-specific, follows XDG on Linux."""
+def user_base() -> Path:
+    """Per-OS user-data base — THE rule, shared by every location in the suite.
+
+    Deliberately no `darwin` branch. `~/Library/Application Support` is the
+    Apple convention and this function used to follow it, but it was the only
+    place in the suite that did: `neuron/config.py`, `neuron/paths.py`,
+    `neuron/project.py`, `neuron/tunnel.py`, `neurag/paths.py` and
+    `gray_matter/paths.py` all resolve `~/.local/share` on macOS. So a Mac had
+    the tool REGISTRY in Library and every byte of tool DATA in .local/share —
+    two roots, and `tunnel.py` writing `GrayMatterEnvironment/tunnel.json` into
+    the folder the registry was *not* in. One root beats the more idiomatic one.
+    """
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA", "")
-    elif sys.platform == "darwin":
-        base = os.path.join(os.path.expanduser("~"), "Library",
-                            "Application Support")
     else:
-        base = os.environ.get("XDG_DATA_HOME",
-                              os.path.join(os.path.expanduser("~"),
-                                           ".local", "share"))
+        base = os.environ.get("XDG_DATA_HOME", "") or os.path.join(
+            os.path.expanduser("~"), ".local", "share")
     # LOCALAPPDATA/XDG_DATA_HOME vuoti (servizio, scheduled task, env ripulito)
     # davano `Path("") / "GrayMatterEnvironment"` = path RELATIVO: il registro
     # dei tool finiva nella cwd del processo di turno. Non è teorico — la cartella
     # `GrayMatterEnvironment/` comparsa nella root del workspace veniva da qui.
     if not base:
         base = os.path.expanduser("~")
-    return Path(base) / "GrayMatterEnvironment"
+    return Path(base)
+
+
+def _legacy_macos_root() -> Path:
+    """Where macOS installs before this alignment put the registry."""
+    return (Path(os.path.expanduser("~")) / "Library" / "Application Support"
+            / "GrayMatterEnvironment")
+
+
+def gme_root() -> Path:
+    """GME folder location. Same per-OS rule as the rest of the suite.
+
+    An existing registry always wins: a Mac that already registered its tools
+    under `~/Library/Application Support` keeps being read there, so aligning
+    the rule cannot make the GUI suddenly report "no tools installed"."""
+    current = user_base() / "GrayMatterEnvironment"
+    if sys.platform == "darwin":
+        legacy = _legacy_macos_root()
+        if legacy != current and legacy.is_dir() and not current.is_dir():
+            return legacy
+    return current
 
 
 def ensure_gme() -> Path:
@@ -337,13 +363,9 @@ def _find_venv_for(key: str) -> str | None:
     1. Known locations (VENV_CANDIDATES)
     2. Fallback: check if current Python is inside a venv for this tool
     """
-    if sys.platform == "win32":
-        local = os.environ.get("LOCALAPPDATA", "")
-    elif sys.platform == "darwin":
-        local = os.path.join(os.path.expanduser("~"), "Library",
-                             "Application Support")
-    else:
-        local = os.path.join(os.path.expanduser("~"), ".local", "share")
+    # Was a second, hand-rolled copy of the per-OS rule — and it drifted from
+    # gme_root() the moment either changed. One resolver, used by both.
+    local = str(user_base())
 
     for pattern in _VENV_CANDIDATES.get(key, []):
         path = pattern.replace("{localappdata}", local)

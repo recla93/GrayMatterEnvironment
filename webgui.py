@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -784,6 +785,112 @@ class Api:
 
         return {"ok": True, "databases": dbs}
 
+    # -- MCP clients: detect / verify / merge --------------------------------
+    def clients_state(self, _args: str = "") -> dict:
+        """DETECT + VERIFY every MCP client, including what is WRONG.
+
+        This is the error register: a config we cannot parse, or one pointing at
+        an interpreter that no longer exists, is reported instead of silently
+        skipped. Nothing is written here — this call is read-only.
+        """
+        try:
+            from gray_matter import clients as C
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+        me = _python()
+        out = []
+        for key, spec in C.CLIENTS.items():
+            try:
+                paths = [p for p in spec["paths"]() if os.path.exists(p)]
+            except Exception as exc:  # noqa: BLE001 — a broken path lambda
+                out.append({"key": key, "label": spec["label"], "detected": False,
+                            "problem": f"path probe failed: {exc}"})
+                continue
+            if not paths:
+                out.append({"key": key, "label": spec["label"], "detected": False,
+                            "registered": False, "problem": None})
+                continue
+
+            files = []
+            for p in paths:
+                info = {"path": p, "readable": True, "registered": False,
+                        "command": None, "problem": None}
+                try:
+                    raw = Path(p).read_text(encoding="utf-8-sig")
+                except OSError as exc:
+                    info.update(readable=False, problem=f"unreadable: {exc}")
+                    files.append(info)
+                    continue
+                if spec.get("format") == "toml":
+                    info["registered"] = "[mcp_servers.gray-matter]" in raw
+                    m = re.search(r"(?ms)^\[mcp_servers\.gray-matter\].*?^command\s*=\s*\"(.*?)\"",
+                                  raw)
+                    info["command"] = m.group(1).replace("\\\\", "\\") if m else None
+                else:
+                    try:
+                        data = json.loads(raw) if raw.strip() else {}
+                    except json.JSONDecodeError:
+                        # JSONC or genuinely broken. We never rewrite these —
+                        # say so, loudly, instead of pretending it is fine.
+                        info.update(readable=False,
+                                    problem="not plain JSON (comments/trailing commas?) — "
+                                            "this config is never rewritten automatically")
+                        files.append(info)
+                        continue
+                    node = data
+                    for k in C.keys_for(spec, p):
+                        node = node.get(k) if isinstance(node, dict) else None
+                    if isinstance(node, dict) and "gray-matter" in node:
+                        info["registered"] = True
+                        cmd = node["gray-matter"].get("command")
+                        info["command"] = cmd[0] if isinstance(cmd, list) else cmd
+                if info["registered"] and info["command"]:
+                    if not os.path.exists(info["command"]):
+                        info["problem"] = ("registered, but the interpreter is GONE: "
+                                           f"{info['command']}")
+                    elif me and os.path.normcase(info["command"]) != os.path.normcase(me):
+                        info["problem"] = ("points at a DIFFERENT install: "
+                                           f"{info['command']}")
+                files.append(info)
+
+            out.append({
+                "key": key, "label": spec["label"], "detected": True,
+                "registered": any(f["registered"] for f in files),
+                "problem": next((f["problem"] for f in files if f["problem"]), None),
+                "files": files,
+            })
+        problems = [c for c in out if c.get("problem")]
+        return {"ok": True, "python": me, "clients": out,
+                "problem_count": len(problems)}
+
+    def clients_register(self, args: str = "") -> dict:
+        """MERGE the gateway entry into the selected clients. Never destructive:
+        `clients.register` backs up, merges into the existing config and verifies
+        the write. Every per-client outcome is returned, failures included.
+
+        Args (JSON): {"clients": ["cursor", ...], "gateway": true}
+        """
+        try:
+            from gray_matter import clients as C
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        try:
+            payload = json.loads(args) if args.strip() else {}
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "error": f"bad request: {exc}"}
+        picked = payload.get("clients") or []
+        if not isinstance(picked, list) or not picked:
+            return {"ok": False, "error": "select at least one client"}
+        unknown = [c for c in picked if c not in C.CLIENTS]
+        if unknown:
+            return {"ok": False, "error": f"unknown client(s): {', '.join(unknown)}"}
+
+        results = C.register(gateway=bool(payload.get("gateway", True)),
+                             py=_python(), only=picked)
+        failed = [r for r in results if not r.get("ok") and r.get("action") != "skipped"]
+        return {"ok": not failed, "results": results, "failed": len(failed)}
+
     # -- migration ----------------------------------------------------------
     def migrate(self, args: str = "") -> dict:
         """Migrate old installs to GME registry.
@@ -867,6 +974,16 @@ def _build_server(api: Api):
             self.end_headers()
 
         def do_GET(self):
+            # The page is served over http, not file://, so a relative path to
+            # assets/ would 404. One tiny route beats inlining a 1.4 MB logo as
+            # base64 into every page load.
+            if self.path.split("?", 1)[0] == "/logo.png":
+                logo = Path(__file__).with_name("assets") / "GM.png"
+                try:
+                    self._send(200, logo.read_bytes(), "image/png")
+                except OSError:
+                    self._send(404, b"", "image/png")   # header hides it via onerror
+                return
             self._send(200, holder["html"].encode("utf-8"), "text/html; charset=utf-8")
 
         def do_POST(self):
@@ -927,8 +1044,26 @@ def main(argv: "list[str] | None" = None) -> int:
         width=1180, height=780, min_size=(940, 620),
         background_color="#1a1b26")
     if os.environ.get("GM_GUI_SELFTEST"):
+        # Close only once the page is actually LOADED. The old fixed 1.0s slept
+        # straight through a WebView2 cold start (several seconds on first run)
+        # and destroyed the window mid-initialisation, so the self-test — the
+        # one tool for verifying the GUI — ended in an E_ABORT stack trace on a
+        # perfectly healthy install. A verifier that cries wolf is worse than
+        # none. Env-tunable, and the timeout is still a hard backstop so a truly
+        # hung WebView2 cannot wedge the process forever.
+        _budget = float(os.environ.get("GM_GUI_SELFTEST_TIMEOUT", "45"))
+        _loaded = threading.Event()
+        try:
+            window.events.loaded += _loaded.set
+        except Exception:  # noqa: BLE001 — older pywebview: fall back to the timer
+            pass
+
         def _close():
-            time.sleep(1.0)
+            if not _loaded.wait(_budget):
+                _say("[selftest] page never signalled 'loaded' — closing anyway.")
+            else:
+                _say("[selftest] page loaded — closing.")
+                time.sleep(0.5)     # let the first paint land before teardown
             try:
                 window.destroy()
             except Exception:  # noqa: BLE001

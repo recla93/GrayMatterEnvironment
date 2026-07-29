@@ -1,4 +1,4 @@
-﻿<!-- ════════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════════════════════════════════════════════════════════ -->
 <!--                         GRAY MATTER · README                          -->
 <!-- ════════════════════════════════════════════════════════════════════ -->
 
@@ -135,8 +135,8 @@ Pre-built `pyturso` wheels are bundled — no C/Rust compiler needed.
 ### Option B — pip (source checkout)
 
 ```bash
-git clone https://github.com/recla93/Neuron.git
-cd Neuron/gray_matter
+git clone https://github.com/recla93/gray-matter.git
+cd gray-matter
 pip install -e ".[dev]"             # editable install with test deps
 pip install -e ".[cloud,rag,gui]"   # optional: Turso, NeuRAG, web GUI
 ```
@@ -387,9 +387,52 @@ These are not yet exposed via config. Change them in `server.py` / `bridges.py` 
 **Gray Matter** is designed and built by **Claudio Costantino**.
 
 <a href="https://www.linkedin.com/in/clacosta1999/"><img alt="LinkedIn" src="https://img.shields.io/badge/LinkedIn-Claudio_Costantino-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white"></a>
-<a href="https://github.com/recla93/Neuron"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-recla93/Neuron-181717?style=for-the-badge&logo=github&logoColor=white"></a>
+<a href="https://github.com/recla93/gray-matter"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-recla93%2Fgray--matter-181717?style=for-the-badge&logo=github&logoColor=white"></a>
 
 </div>
+
+---
+
+## 🔌 What it orchestrates
+
+Gray Matter is the gateway — on its own it routes, caches and bridges, but the
+memory lives in the two servers it manages. Your client registers **one**
+connector; both peers arrive through it as warm workers.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🧠 [Neuron](https://github.com/recla93/Neuron)
+**Semantic memory — it learns.**
+
+Concepts, typed links, salience and decay in a living graph. Answers
+*"what did we decide, and why?"*
+
+`pre_turn` · `store_turn` · `recall` · `find_candidates`
+
+</td>
+<td width="50%" valign="top">
+
+### 📚 [NeuRAG](https://github.com/recla93/neurag)
+**Knowledge vault — it keeps.**
+
+A hierarchy of nodes and chunks, trigger-navigable. No decay: facts stay put.
+Answers *"what do my documents say?"*
+
+`knowledge_query` · `knowledge_ingest` · `knowledge_tree`
+
+</td>
+</tr>
+</table>
+
+Install either one next to Gray Matter and its installer picks it up
+automatically. Neither is required: with one peer missing GM runs fine, just
+with that half of the memory absent — and the session handshake announces only
+the capabilities actually installed, never a tool that is not there.
+
+Both are optional at runtime too — `gray-matter status` shows which are live,
+and `gray_matter_pulse(topic)` merges whatever is present into one answer.
 
 ---
 

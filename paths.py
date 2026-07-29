@@ -59,20 +59,37 @@ def neuron_graphs() -> Path:
         return _user_base() / SLUG / "graphs"
 
 
+def _neurag_dir_fallback() -> Path:
+    """Come NeuRAG risolve la SUA cartella, senza poterlo importare.
+
+    Deve restare allineato a `neurag/paths.py:data_dir()`, inclusa la regola
+    "il vault esistente vince": NeuRAG ha scritto per anni in
+    `~/.local/share/neurag` su OGNI OS, quindi su Windows indovinare solo
+    `%LOCALAPPDATA%\\neurag` puntava a una cartella vuota mentre il vault vero
+    stava altrove."""
+    if os.environ.get("NEURAG_HOME"):
+        return Path(os.environ["NEURAG_HOME"])
+    current = _user_base() / "neurag"
+    legacy = Path.home() / ".local" / "share" / "neurag"
+    if current != legacy and legacy.exists() and not current.exists():
+        return legacy
+    return current
+
+
 def neurag_db() -> Path:
     try:
         from neurag import paths as _rp
         return _rp.db_path()
     except Exception:  # noqa: BLE001 — NeuRAG non installato: fallback storico
-        return _user_base() / "neurag" / "knowledge.db"
+        return _neurag_dir_fallback() / "knowledge.db"
 
 
 def neurag_config() -> Path:
     try:
         from neurag import paths as _rp
         return _rp.config_path()
-    except Exception:  # noqa: BLE001
-        return _user_base() / "neurag" / "config.json"
+    except Exception:  # noqa: BLE001 — stessa regola del vault (vedi sopra)
+        return _neurag_dir_fallback() / "config.json"
 
 
 def gm_bridges() -> Path:    return gm_home() / "bridges.db"   # was bridges.json (migrated once)
