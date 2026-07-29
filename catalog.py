@@ -341,6 +341,19 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Graphs a folder automatically: nodes from its structure, chunks, embeddings and links. Just give it a path.",
         "The normal way to fill the vault. Prefer it over add-node/add-chunks by hand.",
     ),
+    ("neurag", "reindex"): (
+        "Ricalcola i vettori di TUTTI i chunk con il modello di embedding attivo. "
+        "Testo, nodi e link non vengono toccati e i file sorgente non servono.",
+        "Dopo aver cambiato embed_model: i vettori di due modelli non sono "
+        "confrontabili, quindi finché non rifai l'indice la ricerca semantica "
+        "restituisce rumore. Se invece hai cambiato la DIMENSIONE dei chunk, usa "
+        "'ingest' (ri-spezzetta leggendo i file).",
+        "Recomputes the vectors for EVERY chunk with the active embedding model. "
+        "Text, nodes and links are untouched, and the source files are not needed.",
+        "After changing embed_model: vectors from two models are not comparable, so "
+        "semantic search returns noise until the vault is rebuilt. If you changed the "
+        "chunk SIZE instead, use 'ingest' (it re-chunks from the files).",
+    ),
     ("neurag", "chunk"): (
         "Prova di spezzettamento di un file o cartella. Non salva nulla.",
         "Prima di un ingest, per vedere come verrebbe tagliato un documento.",
