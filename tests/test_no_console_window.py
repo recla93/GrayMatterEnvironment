@@ -64,6 +64,20 @@ def test_daemon_spawn_flags_do_not_create_a_visible_console(tmp_path):
     assert _spawn_and_ask(flags, tmp_path) == "HIDDEN"
 
 
+def _runner_has_a_visible_console() -> bool:
+    """La controprova misura una finestra EREDITATA: se chi lancia i test non
+    ha console propria (CI, servizio, agente, `pythonw`), il figlio staccato
+    non ne fa comparire nessuna e l'asserzione fallisce per il posto in cui
+    gira, non per il codice."""
+    if os.name != "nt":
+        return False
+    import ctypes
+    hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+    return bool(hwnd) and bool(ctypes.windll.user32.IsWindowVisible(hwnd))
+
+
+@pytest.mark.skipif(not _runner_has_a_visible_console(),
+                    reason="controprova valida solo da una console visibile")
 def test_detached_process_is_what_made_the_window_appear(tmp_path):
     """Controprova: la combinazione vecchia produce davvero la finestra. Senza
     questa, il test sopra potrebbe passare per il motivo sbagliato."""
