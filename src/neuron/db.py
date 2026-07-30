@@ -290,6 +290,42 @@ class RemoteTursoConnection:
         self._client.close()
 
 
+# A malformed store surfaces under several spellings depending on which tier
+# opened it (pyturso vs sqlite3) and how far the header got parsed.
+_CORRUPT_MARKERS = (
+    "file is not a database",
+    "database disk image is malformed",
+    "invalid page size",
+    "malformed database schema",
+)
+
+
+def corrupt_store_hint(exc: BaseException, path: str = "") -> str:
+    """A sentence naming the cause and the cure, or "" if this is another error.
+
+    A corrupt graph.db reaches the user as a bare
+    ``DatabaseError: file is not a database``. That names the symptom, points at
+    no file, and suggests nothing — the same dead end NeuRAG closed in 1.1.1 and
+    this side never got, being the keep-in-sync twin of that db.py.
+
+    A hint rather than an exception class: Neuron's store is loaded and saved
+    through many call sites and `server.call_tool` already funnels every failure
+    into text, so classifying at the boundary changes one place instead of
+    thirty. Neuron's memory is rebuildable — that is the whole point of a
+    decaying store — so the recovery really is this cheap, and saying so is
+    worth more than the traceback alone.
+    """
+    text = f"{exc}".lower()
+    if not any(m in text for m in _CORRUPT_MARKERS):
+        return ""
+    where = f" ({path})" if path else ""
+    return (f"the graph store{where} is corrupt and could not be opened: {exc}. "
+            f"Run `neuron doctor` for the details; if it cannot be repaired, "
+            f"move the file aside and Neuron will start a new graph — the store "
+            f"is a memory, not a source of truth, and the seed knowledge is "
+            f"reinstalled with it.")
+
+
 def _split_sql(script: str) -> list[str]:
     """Split a SQL script into executable statements.
 

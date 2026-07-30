@@ -349,23 +349,37 @@ def _start_cli(argv) -> int:
         # avoid. CREATE_NEW_PROCESS_GROUP just keeps it out of this console's
         # Ctrl-C, same fix already proven in gray_matter/server.py's own spawn.
         flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    # NON DEVNULL: l'output del figlio è l'unico resoconto del perché è morto, e
+    # buttarlo via rendeva la diagnosi impossibile dall'esterno. Il bridge muore
+    # se `uvx mcp-proxy` non è disponibile, e l'utente vedeva solo "avviato"
+    # seguito da "not running". keep-in-sync con neurag/cli.py `_cmd_start`.
+    log = pid_file.parent / "neuron_server.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
     try:
-        proc = subprocess.Popen(
-            full,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=flags,
-        )
+        with open(log, "w", encoding="utf-8") as fh:
+            proc = subprocess.Popen(
+                full,
+                stdin=subprocess.DEVNULL,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+            )
     except FileNotFoundError as exc:
         print(f"Could not start: {exc}", file=sys.stderr)
         return 1
 
-    pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(proc.pid), encoding="utf-8")
-    time.sleep(1.0)
+    # Un secondo fisso dormiva attraverso il fallimento che doveva cogliere.
+    for _ in range(50):
+        time.sleep(0.1)
+        if proc.poll() is not None:
+            break
     if proc.poll() is not None:
         print(f"Neuron server è fallito subito (exit {proc.returncode}).")
+        tail = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-12:]
+        if tail:
+            print("--- " + str(log) + " ---", file=sys.stderr)
+            print("\n".join(tail), file=sys.stderr)
         pid_file.unlink(missing_ok=True)
         return 1
     print(f"Neuron server avviato (PID {proc.pid}) su http://{args.host}:{args.port}/mcp")
