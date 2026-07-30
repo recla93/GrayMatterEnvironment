@@ -11,8 +11,8 @@ Sostituisce, per questa sessione, `feat_graph_and_chunk_ceiling__summary.md`
 
 | Suite | Esito |
 |---|---|
-| `pytest neurag/tests` | **260 passed**, 1 skipped |
-| `pytest gray_matter/tests` | **383 passed**, 1 skipped |
+| `pytest neurag/tests` | **262 passed**, 1 skipped |
+| `pytest gray_matter/tests` | **399 passed**, 1 skipped |
 | `pytest neuron/tests` | **312 passed** |
 
 I tre vanno lanciati in **processi separati** (vedi `pytest.ini`): `neuron/tests/_mockdeps.py`
@@ -31,7 +31,7 @@ console visibile. Quello in neurag è pre-esistente.
 | P3 | Retrieval ibrido | ✅ (precedenti) |
 | P4 | **Layers** | ✅ questa sessione |
 | P5 | Brain — `origin`, Hebbian on confirm, spreading activation | ✅ questa sessione |
-| P6 | Cross-tool (solo GM) | ⬜ |
+| P6 | Cross-tool (solo GM) | 🟡 **1 di 3** — vedi sotto |
 | P7 | Installer + GUI | ⬜ parzialmente anticipata (vedi sotto) |
 
 ## Cosa è cambiato
@@ -93,6 +93,33 @@ console visibile. Quello in neurag è pre-esistente.
   line ending invariati.
 - Due test che **passavano sul codice rotto** sono stati corretti e ri-verificati
   reintroducendo il bug (vedi TODO-6 per la lezione generale).
+
+## P6 — dove si è arrivati
+
+La riga di fase chiede tre cose. Una è fatta, due no.
+
+1. ✅ **I bridge fanno join su identità di tag** (`15ff245` GM, `b8f1d17` neurag).
+   `bridges_for` matchava con `endpoint in topic or topic in endpoint`: `ast`
+   matchava "fastembed install", `cache` matchava "cached". E siccome far emergere
+   un bridge in una pulse lo **rinforza**, un bridge rumoroso si promuoveva da
+   solo. Ora: run di token interi, più il join per identità sui nomi canonici dei
+   tag, che NeuRAG manda a bordo della risposta `knowledge_neighbors` già
+   richiesta dalla pulse (nessun round-trip in più, solo un riordino).
+2. ⬜ **Consolidazione CLS Neuron→NeuRAG** (§5.3). `sleep_maybe()` consolida
+   Neuron dentro sé stesso e non scrive mai in NeuRAG: un concetto rinforzato per
+   200 turni resta nello store che decade e non diventa mai conoscenza
+   permanente. Deliverable: promuovere i concetti sopra una soglia
+   salienza × trust × età in nodi NeuRAG, taggati col tag che già condividono.
+   **Report-only per primo** (§8.2), come `park`: le soglie non sono misurate.
+   I dati ci sono — `neuron.models.Node` ha `salience:int`, `trust:float` e
+   `turn`, e l'età è `turn_count - node.turn`.
+3. ⬜ **Stimoli arricchiti con knowledge**. Oggi GM ha solo la *safety net* dello
+   stimulus (`stimulus_safety_net`/`_gap`): rilancia lo stimolo di Neuron se tace,
+   ma non gli attacca niente da NeuRAG. Lo stimolo esce come lo ha fatto Neuron.
+
+Entrambi i pezzi mancanti sono sottosistemi lato GM, non rifiniture: vanno
+affrontati uno per volta con il loro gate, non infilati in coda a un altro
+commit.
 
 ## TODO
 
