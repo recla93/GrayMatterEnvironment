@@ -400,9 +400,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         response = "\n---\n".join(context_parts) if context_parts else "No results."
 
+        # D3 — knowledge proattiva: vicini strutturati del nodo NeuRAG matchato
+        # (parent/children/links, depth 2) non già presenti nella risposta.
+        # JSON dal tool knowledge_neighbors: niente parsing di prosa (anti-F15).
+        # Va PRIMA dei bridge: la stessa risposta porta i tag canonici del nodo,
+        # ed è su quelli che i bridge fanno il join (§4). Un secondo round-trip
+        # solo per chiedere quattro parole non lo vogliamo nella pulse.
+        neurag_tags: set[str] = set()
+        if neurag_hit:
+            try:
+                import json as _json
+                raw = await _call_server_async(
+                    "neurag", "knowledge_neighbors",
+                    {"query": topic, "depth": 2, "limit": 5})
+                data = _json.loads(raw)
+                neurag_tags = {str(t) for t in (data.get("tags") or [])}
+                fresh = [n["name"] for n in data.get("neighbors", [])
+                         if n.get("name") and n["name"].lower() not in response.lower()][:3]
+                if fresh:
+                    response += "\n\n💡 Potrebbe interessarti: " + ", ".join(fresh)
+            except Exception:  # noqa: BLE001 — proattiva = best-effort, mai bloccare la pulse
+                pass
+
         # Cross-store bridges the orchestrator has persisted for this topic.
+        # Matched on whole tokens AND on the tag identity above — a bridge to a
+        # node whose NAME says nothing about the topic is reachable through its
+        # tags, which is the whole point of the substrate.
         from gray_matter.bridges import bridges_for
-        rel = bridges_for(topic)
+        rel = bridges_for(topic, tags=neurag_tags)
         if rel:
             response += "\n\n" + "\n".join(
                 f"🔗 {b['neuron']} ↔ {b['neurag']}" + (f" — {b['rationale']}" if b.get("rationale") else "")
@@ -416,23 +441,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                                              {"keywords": promoted, "confidence": 0.5})
                 except Exception:  # noqa: BLE001
                     pass
-
-        # D3 — knowledge proattiva: vicini strutturati del nodo NeuRAG matchato
-        # (parent/children/links, depth 2) non già presenti nella risposta.
-        # JSON dal tool knowledge_neighbors: niente parsing di prosa (anti-F15).
-        if neurag_hit:
-            try:
-                import json as _json
-                raw = await _call_server_async(
-                    "neurag", "knowledge_neighbors",
-                    {"query": topic, "depth": 2, "limit": 5})
-                data = _json.loads(raw)
-                fresh = [n["name"] for n in data.get("neighbors", [])
-                         if n.get("name") and n["name"].lower() not in response.lower()][:3]
-                if fresh:
-                    response += "\n\n💡 Potrebbe interessarti: " + ", ".join(fresh)
-            except Exception:  # noqa: BLE001 — proattiva = best-effort, mai bloccare la pulse
-                pass
 
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
         flash_note, concept = await _maybe_flash(topic)

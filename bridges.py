@@ -257,6 +257,19 @@ def _valid_endpoint(s: str) -> bool:
     return _MIN_LEN <= len(s) <= _MAX_LEN
 
 
+def _tokens(s: str) -> list[str]:
+    return re.findall(r"\w+", (s or "").lower())
+
+
+def _token_run(needle: list[str], haystack: list[str]) -> bool:
+    """True when `needle` appears in `haystack` as a CONTIGUOUS run of whole
+    tokens — `["ast"]` matches "the ast walker" and not "fastembed"."""
+    n = len(needle)
+    if not n or n > len(haystack):
+        return False
+    return any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
+
+
 def _db_path() -> Path:
     """Local store path. GRAY_MATTER_BRIDGES override: a `.json` value is treated
     as legacy → we store in its `.db` sibling and migrate the json once."""
@@ -415,23 +428,45 @@ def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "") -> bo
         conn.close()
 
 
-def bridges_for(topic: str) -> list[dict]:
-    """Bridges whose Neuron or NeuRAG endpoint overlaps the topic (either
-    direction). Surfacing a bridge in a pulse *is* using it -> reinforce. The match
-    is bidirectional substring, so we scan (bridges are few) and filter in Python.
+def bridges_for(topic: str, tags: "set[str] | None" = None) -> list[dict]:
+    """Bridges whose Neuron or NeuRAG endpoint matches the topic (either
+    direction). Surfacing a bridge in a pulse *is* using it -> reinforce.
     Returned strongest-first; a just-crossed-threshold bridge is flagged
-    `_just_promoted` (in-memory only, never persisted)."""
-    t = topic.strip().lower()
-    if not t:
+    `_just_promoted` (in-memory only, never persisted).
+
+    Two ways to match, and neither is substring containment any more:
+
+    * **whole-token runs.** The match used to be `endpoint in topic or topic in
+      endpoint`, which is how an endpoint called `ast` matched "fastembed
+      install" and `cache` matched "cached" — the same defect the crossref cue
+      scan had before P0, on the same kind of short technical word. An endpoint
+      now has to appear as a contiguous run of whole tokens.
+    * **tag identity** (`tags`), which is the join DESIGN-EVOLUTION §4 asked
+      for. The caller passes the NORMALIZED tag names NeuRAG resolved for this
+      topic — from the `tags` table, the one object all three stores agree on —
+      and an endpoint matches by being one of them. That reaches a bridge whose
+      node NAME says nothing about the topic while its tags do, which no amount
+      of string matching on the name could find.
+
+    `tags` is passed in rather than looked up here on purpose: this runs in
+    GM's pulse, and opening a NeuRAG vault (and its embedder) per pulse to
+    resolve four words would be a poor trade. The caller already has the handle.
+    """
+    t_tokens = _tokens(topic)
+    if not t_tokens:
         return []
+    tagset = {(x or "").strip().lower() for x in (tags or set())} - {""}
     now = time.time()
     conn = _connect()
     try:
         rows = [dict(r) for r in conn.execute("SELECT * FROM bridges").fetchall()]
         out = []
         for b in rows:
-            n, r = b["neuron"].lower(), b["neurag"].lower()
-            if not (n in t or r in t or t in n or t in r):
+            n_tok, r_tok = _tokens(b["neuron"]), _tokens(b["neurag"])
+            hit = (_token_run(n_tok, t_tokens) or _token_run(r_tok, t_tokens)
+                   or _token_run(t_tokens, n_tok) or _token_run(t_tokens, r_tok)
+                   or b["neuron_key"] in tagset or b["neurag_key"] in tagset)
+            if not hit:
                 continue
             just = (min(b["weight"] + 1, _WEIGHT_CAP) >= _PROMOTE_AT) and not b["promoted"]
             conn.execute(
