@@ -295,7 +295,13 @@ def _cmd_start() -> None:
         except (ValueError, OSError):
             pass  # PID file corrotto: ignora, sovrascriverà
 
-    cmd = [sys.executable, "-m", "neurag.server"]
+    # The HTTP bridge, not `neurag.server`. `server` is the STDIO transport: it
+    # reads a client off stdin, and this spawns it with stdin=DEVNULL, so it
+    # saw EOF and exited cleanly every single time — a daemon that cannot
+    # possibly stay up. Neuron's `start` has always launched `neuron.bridge`
+    # (port 8000); this is its twin on 8001, which is also what `webgui.py`
+    # already expects for NeuRAG.
+    cmd = [sys.executable, "-m", "neurag.bridge"]
     flags = 0
     if os.name == "nt":
         # NOT DETACHED_PROCESS: Windows ignores CREATE_NO_WINDOW when combined
@@ -304,26 +310,42 @@ def _cmd_start() -> None:
         # avoid. CREATE_NEW_PROCESS_GROUP just keeps it out of this console's
         # Ctrl-C, same fix already proven in gray_matter/server.py's own spawn.
         flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    # NOT DEVNULL. The child's output is the only account of why it died, and
+    # throwing it away is what made this unfixable from the outside: the server
+    # crashed on an MCP handshake error and all the user ever saw was "avviato"
+    # followed by "not running".
+    log = _paths.data_dir() / "neurag_server.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=flags,
-        )
+        with open(log, "w", encoding="utf-8") as fh:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+            )
     except FileNotFoundError as exc:
         print(f"Could not start: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(proc.pid), encoding="utf-8")
-    time.sleep(1.0)
+    # A fixed 1s slept straight through the failure it was meant to catch: the
+    # crash landed at ~1.5s, after the import of the embedder. Watch for a few
+    # seconds instead of guessing one, and stop as soon as it is settled.
+    for _ in range(50):
+        time.sleep(0.1)
+        if proc.poll() is not None:
+            break
     if proc.poll() is not None:
         print(f"NeuRAG server è fallito subito (exit {proc.returncode}).")
+        tail = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-12:]
+        if tail:
+            print("--- " + str(log) + " ---", file=sys.stderr)
+            print("\n".join(tail), file=sys.stderr)
         pid_file.unlink(missing_ok=True)
         sys.exit(1)
-    print(f"NeuRAG server avviato (PID {proc.pid})")
+    print(f"NeuRAG server avviato (PID {proc.pid}) — log: {log}")
 
 
 def _cmd_stop() -> None:
@@ -703,6 +725,21 @@ def _run_via_gm(tool: str, tool_args: dict) -> bool:
 
 
 def main() -> None:
+    """Entry point. Thin on purpose — see `_dispatch` for the actual commands.
+
+    A corrupt vault is the one failure every command shares, and it used to
+    arrive as a raw pyturso traceback naming a missing table. `VaultUnavailable`
+    already carries the cause and the recovery command, so all this has to do is
+    stop it from being printed as a crash."""
+    from neurag.db import VaultUnavailable
+    try:
+        _dispatch()
+    except VaultUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+
+
+def _dispatch() -> None:
     from neurag.db import KnowledgeGraph
     from neurag.chunker import chunk_file, scan_directory
 

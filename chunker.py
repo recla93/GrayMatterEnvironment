@@ -35,6 +35,13 @@ DEFAULT_MAX_CHARS = 400
 # so an overlapped chunk still fits the window.
 OVERLAP_RATIO = 0.12
 
+# Below this a chunk carries no retrievable content — the three `flush()`
+# helpers here have always refused to emit one, and `db.health()` counts any
+# that exist as a SERIOUS issue. Named so the splitter can honour the same rule
+# the emitters do: it used to create runts after the fact, so a vault could
+# fail an audit against a threshold the chunker believed it was enforcing.
+MIN_CHUNK_CHARS = 20
+
 # Sub-words that make poor triggers (too generic to disambiguate a topic).
 _STOP = {"the", "and", "def", "class", "self", "init", "main", "get", "set",
          "str", "int", "list", "dict", "none", "true", "false", "test", "value",
@@ -102,9 +109,24 @@ def _split_text(text: str, max_chars: int, overlap: int = 0) -> list[str]:
             cand = unit if not buf else buf + sep + unit
             if len(cand) <= budget:
                 buf = cand
+            elif len(buf) < MIN_CHUNK_CHARS:
+                # Flushing now would emit a runt. In practice that runt is a
+                # lone heading: a section starts with one, and the paragraph
+                # after it is often a whole budget by itself, so the greedy
+                # pack closed after 18 characters. `## 7. Verification` then
+                # became a chunk that states a title and says nothing — 13 of
+                # them on this repo, every one enough to hold `health()["ok"]`
+                # at False, which made the whole signal unreadable.
+                #
+                # Carry it into the oversized candidate instead. The recursion
+                # below re-splits that at a finer separator, so the heading
+                # rides with the text it introduces and no character is lost —
+                # dropping the runt would have been shorter, but a runt is only
+                # PROBABLY a heading, and the one time it is a real sentence
+                # that is silent data loss.
+                buf = cand
             else:
-                if buf:
-                    pieces.append(buf)
+                pieces.append(buf)
                 buf = unit
         if buf:
             pieces.append(buf)
@@ -169,7 +191,7 @@ def chunk_markdown(filepath: Path) -> list[Chunk]:
     def flush():
         nonlocal chunk_index
         text = "\n".join(current_lines).strip()
-        if len(text) > 20:
+        if len(text) > MIN_CHUNK_CHARS:
             chunks.append(Chunk(text=text, source=str(filepath),
                                 section=current_section, chunk_index=chunk_index,
                                 tags=_phrase_tags(current_section)))
@@ -217,7 +239,7 @@ def chunk_python_ast(filepath: Path) -> list[Chunk]:
     def flush_module():
         nonlocal idx
         text = "\n".join(module_buf).strip()
-        if len(text) > 20:
+        if len(text) > MIN_CHUNK_CHARS:
             chunks.append(Chunk(text=text, source=str(filepath), section="module",
                                 chunk_index=idx, tags=_module_tags(text)))
             idx += 1
@@ -344,7 +366,7 @@ def chunk_docx(filepath: Path) -> list[Chunk]:
     def flush():
         nonlocal chunk_index
         text = "\n".join(current_lines).strip()
-        if len(text) > 20:
+        if len(text) > MIN_CHUNK_CHARS:
             chunks.append(Chunk(text=text, source=str(filepath),
                                 section=current_section, chunk_index=chunk_index,
                                 tags=_phrase_tags(current_section)))

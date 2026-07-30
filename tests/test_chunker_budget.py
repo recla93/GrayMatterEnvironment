@@ -18,7 +18,8 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from neurag.chunker import (DEFAULT_MAX_CHARS, OVERLAP_RATIO, _split_text,
+from neurag.chunker import (DEFAULT_MAX_CHARS, MIN_CHUNK_CHARS, OVERLAP_RATIO,
+                            _split_text,
                             chunk_file, chunk_markdown, enforce_budget)
 from neurag.models import Chunk
 
@@ -173,3 +174,38 @@ def test_ingest_skips_generated_artefact_dirs(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --- the splitter must not create what the emitters refuse to emit -----------
+
+def test_a_heading_is_never_left_as_a_chunk_of_its_own():
+    """The greedy pack closed after the heading whenever the paragraph that
+    follows was a whole budget by itself, so `## 7. Verification` became a
+    chunk stating a title and saying nothing. Thirteen of those on this repo,
+    and `health()` counts every one as SERIOUS -- which pinned `ok` to False on
+    every real vault and made the whole signal unreadable."""
+    text = "## 7. Verification\n\n" + LONG_PARAGRAPH
+    parts = _split_text(text, BUDGET, overlap=0)
+    assert len(parts) > 1, "fixture too short to exercise the split"
+    assert all(len(p.strip()) >= MIN_CHUNK_CHARS for p in parts), \
+        [p for p in parts if len(p.strip()) < MIN_CHUNK_CHARS]
+    assert parts[0].startswith("## 7. Verification"), \
+        "the heading rides with the text it introduces"
+
+
+def test_no_character_is_lost_when_a_runt_is_carried_forward():
+    """Dropping the runt would have been a shorter fix. It is also wrong: a
+    runt is only PROBABLY a heading, and the once it is a real short sentence
+    that is silent data loss."""
+    text = "# H\n\n" + LONG_PARAGRAPH
+    joined = "".join(_split_text(text, BUDGET, overlap=0))
+    for word in ("salienza", "retrieval", "vault"):
+        assert word in joined
+    assert "# H" in joined
+
+
+def test_carrying_forward_still_respects_the_ceiling():
+    """The runt rides along, but the piece it rides in is re-split -- otherwise
+    this would reintroduce exactly the truncation P2 removed."""
+    text = "### Algoritmo\n\n" + LONG_PARAGRAPH * 3
+    assert all(len(p) <= BUDGET for p in _split_text(text, BUDGET, overlap=0))

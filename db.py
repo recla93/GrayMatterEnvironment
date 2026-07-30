@@ -295,7 +295,7 @@ def _ensure_parent_dir(path: str) -> None:
 _turso_conn_cache: dict[str, object] = {}
 
 
-def _open_local_turso(path: str):
+def _open_local_turso(path: str, errors: "list[str] | None" = None):
     """Open the local pyturso engine with a process-level connection cache.
 
     Uses a module-level cache so multiple KnowledgeGraph instances sharing the
@@ -303,6 +303,11 @@ def _open_local_turso(path: str):
     lock — a second open to the same file fails). On cache miss, retries a few
     times then returns None so the caller logs an error.
     keep-in-sync with Neuron/db.py _open_local_engine.
+
+    `errors` collects WHY. The reason used to be swallowed whole, so the caller
+    could not tell "another process holds the lock" — the normal case when the
+    MCP server is up — from "this file is damaged", and the two have opposite
+    cures. One of them is `--wipe-knowledge`.
     """
     # Cache hit: reuse existing connection
     cached = _turso_conn_cache.get(path)
@@ -319,16 +324,23 @@ def _open_local_turso(path: str):
         conn = turso_connect(path)
         _turso_conn_cache[path] = conn
         return conn
-    except Exception:  # noqa: BLE001
-        for attempt in range(2):
+    except Exception as e:  # noqa: BLE001
+        last = e
+        # The retries exist for a transient race (parent dir not ready yet). A
+        # lock is not transient: pyturso holds it for the owning process's whole
+        # life, so sleeping and asking again is guaranteed waste on the case
+        # that happens most — every CLI command while the MCP server is up.
+        for attempt in range(0 if is_lock_error(f"{e}") else 2):
             _t.sleep(0.05 * (attempt + 1))
             _ensure_parent_dir(path)
             try:
                 conn = turso_connect(path)
                 _turso_conn_cache[path] = conn
                 return conn
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e2:  # noqa: BLE001
+                last = e2
+        if errors is not None:
+            errors.append(f"pyturso open KO: {last}")
     return None
 
 
@@ -437,6 +449,16 @@ CREATE TABLE IF NOT EXISTS tags (
 -- delete_node), so every delete site cleans these rows explicitly instead.
 CREATE TABLE IF NOT EXISTS node_tags  (node_id  INTEGER NOT NULL, tag_id INTEGER NOT NULL,
                                        PRIMARY KEY (node_id, tag_id));
+-- PARKED, 2026-07-30 (DESIGN-EVOLUTION §8.4 asked for this to be measured at
+-- P3 and it never was). Measured: 9360 rows for 2117 chunks, ~4.4 per chunk,
+-- and not one reader in any of the three repos -- linking reads `node_tags`,
+-- IDF (`tags.uses`) counts `node_tags`, and Gray Matter's tag join goes through
+-- `node_tag_names`, which is also `node_tags`. So it was write cost and disk
+-- for a join nobody made. `add_chunk` no longer writes it.
+-- Parked, not dropped: the table and any existing rows stay (I5), the delete
+-- sites below still clean legacy rows, and `health()` still audits them. A
+-- reader that wants chunk-level tags re-populates by re-ingesting -- the data
+-- is derived from `chunker` tags, so nothing here is a source of truth.
 CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER NOT NULL, tag_id INTEGER NOT NULL,
                                        PRIMARY KEY (chunk_id, tag_id));
 CREATE INDEX IF NOT EXISTS idx_node_tags_tag  ON node_tags(tag_id);
@@ -491,6 +513,110 @@ class _CompatRow:
         return self._cols
 
 
+class VaultUnavailable(RuntimeError):
+    """The vault did not open, and the caller asked it to do work anyway."""
+
+
+# A lock and a corrupt file are opposite problems: one clears by itself when the
+# other process lets go, the other is only fixed by replacing the file. Telling
+# them apart matters because the second cure is `--wipe-knowledge`, and handing
+# that to someone whose vault is merely busy destroys a healthy one.
+_LOCK_MARKERS = ("locking error", "database is locked", "os error 33",
+                 "another process", "resource busy", "being used by another")
+
+
+def is_lock_error(err: str) -> bool:
+    """Is this "someone else owns the file" rather than "the file is broken"?"""
+    return any(m in err.lower() for m in _LOCK_MARKERS)
+
+
+def open_failure_message(err: str) -> str:
+    """What went wrong opening the vault, and what to do about it."""
+    if is_lock_error(err):
+        return (f"the vault is open in another process and locked: {err}. "
+                f"Nothing is damaged and nothing needs repairing — stop the "
+                f"other process (`neurag stop`, or the Gray Matter worker that "
+                f"fronts it) and try again.")
+    return (f"knowledge.db could not be opened: {err}. Run `neurag doctor` for "
+            f"the details, or `neurag repair --wipe-knowledge` to start the "
+            f"vault over — the sources on disk are untouched.")
+
+
+class _ReadOnlyConnection:
+    """A borrowed view of a vault another process owns.
+
+    pyturso takes an EXCLUSIVE lock for the life of the connection (0.6.1 does
+    not even release it on `close()` — see `_turso_conn_cache`), so while the
+    MCP server is up no second process can have that tier. Falling back to
+    sqlite3 makes reads work again, which is the whole point... but sqlite3 will
+    also happily WRITE to that file, and then two engines with two different WAL
+    implementations are writing one database. The exclusive lock had been
+    enforcing the single-writer rule by accident; the fallback removed it.
+
+    So the borrowed tier reads and refuses to write. Writes already have a
+    correct route — `_run_via_gm` sends them to the worker that owns the file —
+    and this points at it instead of quietly racing.
+
+    Only for the LOCKED case. A machine with no pyturso at all gets a plain,
+    fully writable sqlite3 connection: that is standalone NeuRAG (I2), not a
+    borrowed vault.
+    """
+
+    def __init__(self, conn, err: str):
+        self._conn = conn
+        self._err = err
+
+    def execute(self, sql, *a, **kw):
+        if _is_write_sql(sql):
+            raise VaultUnavailable(
+                f"this vault is owned by another process, so this connection is "
+                f"read-only ({self._err}). Reads work; writes must go through "
+                f"the process that holds it — Gray Matter routes them there "
+                f"automatically (`_run_via_gm`). Stop that process to write "
+                f"directly.")
+        return self._conn.execute(sql, *a, **kw)
+
+    def commit(self) -> None:
+        """Nothing was written, so there is nothing to commit."""
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _CorruptConnection:
+    """Stands in for the connection when the vault did not open.
+
+    `_init_schema` swallows every schema error into `self._corrupt` so that the
+    diagnostics can RUN and report it instead of the whole CLI dying on a
+    malformed file (audit 2026-07-22). The cost of that choice was paid by
+    everything else: `search`, `park` and `query` went on to use a connection
+    with no tables and surfaced a raw pyturso "no such table" traceback, which
+    names the symptom and not the cause. In one session that silence hid two
+    schema errors, and the second was only found by driving the CLI by hand.
+
+    So the flag now has teeth in exactly one place. Substituting the connection
+    beats a `_require_healthy()` call at the top of thirty methods: there is no
+    single function they all pass through, but there IS a single object, and a
+    method added next year is covered without anyone remembering to guard it.
+    `status`/`health`/`doctor` return before touching `_conn`, which is what
+    keeps them able to report — and repair runs before the DB is opened at all.
+    """
+
+    def __init__(self, err: str):
+        self._err = err
+
+    def _raise(self, *_a, **_kw):
+        raise VaultUnavailable(open_failure_message(self._err))
+
+    execute = executemany = commit = _raise
+
+    def close(self) -> None:
+        """Closing something that never opened is not an error."""
+
+
 class KnowledgeGraph:
     """Hierarchical knowledge graph with vector search.
 
@@ -518,6 +644,9 @@ class KnowledgeGraph:
         self._connect()
         self._ensure_turso(db_path)
         self._init_schema()
+        # After _init_schema, because that is where corruption is detected.
+        if self._corrupt:
+            self._conn = _CorruptConnection(self._corrupt_err)
         self._embedder = get_embedder()  # auto: fastembed if present, else null (lexical)
         self._reranker = get_reranker()  # OFF by default → NullReranker (zero cost)
         # Chunk ceiling comes from the LIVE model's tokenizer, not a constant:
@@ -543,7 +672,9 @@ class KnowledgeGraph:
             self._engine_name = "Turso (cloud)"
             return  # remote: pragmas are no-ops, rows already name-accessible
         _ensure_parent_dir(db_str)
-        conn = _open_local_turso(db_str) if TURSO_AVAILABLE else None
+        self._open_errors: list[str] = []
+        self._read_only = False
+        conn = _open_local_turso(db_str, self._open_errors) if TURSO_AVAILABLE else None
         if conn is not None:
             self._conn = conn
             self._vector_sql = True
@@ -555,10 +686,39 @@ class KnowledgeGraph:
                 return _CompatRow(cols, row)
             self._conn.row_factory = _row_factory
         else:
-            # turso not importable (missing wheel) — log and let _ensure_turso fix it
-            self._conn = None
+            # The sqlite3 tier, which until 2026-07-30 did not exist.
+            #
+            # I4 calls sqlite3 "a degraded fallback", `_ensure_turso` prints
+            # "degrado a sqlite3", `status`/`doctor` report it and
+            # `_vector_candidates` has a Python-cosine branch commented "only
+            # the sqlite3 tier lands here" — and `sqlite3.connect` was never
+            # called anywhere in this file. The branch left `_conn = None`, so
+            # `_init_schema` failed with "'NoneType' object has no attribute
+            # 'execute'", was caught, and the vault was reported CORRUPT.
+            #
+            # Which is how a healthy vault came to be diagnosed as damaged: the
+            # MCP server holds a pyturso lock on it (pyturso takes an exclusive
+            # one), a second process could not open that tier, and instead of
+            # degrading it declared the file broken. sqlite3 opens and reads the
+            # very same file without complaint — measured, not assumed.
+            #
+            # Neuron never had this bug: `_open_local_engine` ends with
+            # `return _sqlite3.connect(path)`, its "L2 guard". This file is the
+            # keep-in-sync port of that one and dropped exactly that last line —
+            # the failure mode of porting by hand, where the shape survives, the
+            # guard does not, and every comment goes on describing the original.
+            conn = sqlite3.connect(db_str)
+            conn.row_factory = sqlite3.Row
             self._vector_sql = False
-            self._engine_name = "Turso (pending)"
+            why = "; ".join(self._open_errors)
+            if why and is_lock_error(why):
+                # Borrowed, not owned: read, never write. See _ReadOnlyConnection.
+                self._conn = _ReadOnlyConnection(conn, why)
+                self._read_only = True
+                self._engine_name = "SQLite (read-only: owned by another process)"
+            else:
+                self._conn = conn
+                self._engine_name = "SQLite (degraded)"
         # WAL + busy_timeout: letture concorrenti non bloccano lo scrittore e gli
         # scrittori si accodano invece di corrompersi (audit 2026-07-22). Su un
         # file già malformato anche la PRAGMA può sollevare → flag, non crash.
@@ -670,8 +830,20 @@ class KnowledgeGraph:
                 self._connect()
                 if getattr(self, "_vector_sql", False):
                     return  # riuscito → siamo su Turso
+                # Con il MOTIVO: "open locale fallito" da solo manda a cercare
+                # una wheel rotta quando quasi sempre è il lock del server MCP
+                # (pyturso ne prende uno esclusivo), che non è un guasto.
+                why = "; ".join(getattr(self, "_open_errors", [])) or "n/d"
                 self._turso_errors.append(
-                    f"tentativo {i}: turso importato ma open locale fallito")
+                    f"tentativo {i}: turso importato ma open locale fallito ({why})")
+                if is_lock_error(why):
+                    # Un lock non si sblocca ritentando: pyturso lo tiene per
+                    # tutta la vita del processo proprietario (0.6.1 non lo
+                    # molla nemmeno sulla close()). Ritentare due volte ancora
+                    # costava ~1.3s misurati a ogni comando CLI con il server
+                    # acceso — cioè nel caso NORMALE — per zero possibilità di
+                    # riuscita. Il tier di sola lettura è già quello giusto.
+                    break
 
         # Esauriti i tentativi → fallback documentato su sqlite3.
         self._turso_degraded = True
@@ -682,6 +854,13 @@ class KnowledgeGraph:
               file=_sys.stderr)
 
     def _init_schema(self) -> None:
+        # A borrowed vault already has its schema, and the process that owns it
+        # is the one allowed to migrate it. Without this the CREATE TABLE IF NOT
+        # EXISTS run would hit the read-only guard, be caught below, and mark a
+        # perfectly readable vault corrupt — the exact misdiagnosis this tier
+        # exists to end.
+        if self._read_only:
+            return
         try:
             for stmt in _split_sql(SCHEMA_SQL):
                 self._conn.execute(stmt)
@@ -801,16 +980,6 @@ class KnowledgeGraph:
             self._conn.execute(
                 "DELETE FROM node_tags WHERE node_id = ? AND tag_id = ?", (node_id, tid))
         self._refresh_tag_uses(want ^ have)
-        if commit:
-            self._conn.commit()
-
-    def _sync_chunk_tags(self, chunk_id: int, names: list[str],
-                         commit: bool = True) -> None:
-        """Chunks are replaced, never edited, so this side is insert-only."""
-        for tid in {t for t in (self._tag_id(n) for n in names or []) if t}:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO chunk_tags (chunk_id, tag_id) VALUES (?, ?)",
-                (chunk_id, tid))
         if commit:
             self._conn.commit()
 
@@ -1031,8 +1200,9 @@ class KnowledgeGraph:
             (node_id, text, source, section, chunk_index, blob),
         )
         self._conn.commit()
-        if tags:
-            self._sync_chunk_tags(cur.lastrowid, tags)
+        # `tags` still shapes the NODE's tags (`index_into_node` pools them into
+        # `add_tags`), which is the side everything reads. The per-chunk copy is
+        # parked — see the `chunk_tags` note in SCHEMA_SQL.
         return cur.lastrowid
 
     def get_chunks(self, node_id: int) -> list[dict]:
@@ -1978,6 +2148,7 @@ class KnowledgeGraph:
         and decay measure; `touch=False` is for callers that are inspecting the
         vault rather than consulting it, so a diagnostic cannot keep a node
         warm just by looking at it.
+
         """
         rr = getattr(self, "_reranker", None)
         rerank_on = bool(rr is not None and getattr(rr, "available", False))
@@ -2111,7 +2282,18 @@ class KnowledgeGraph:
         Reciprocal Rank Fusion needs no score calibration — it combines the two
         RANKINGS, so a cosine in [0,1] and an unbounded BM25 score can be merged
         without normalising either. That is what makes running both cheap enough
-        to always do."""
+        to always do.
+
+        A third leg — the link graph voting via spreading activation — was built
+        here, measured, and REMOVED (2026-07-30): recall@5 0.967 -> 0.867 and
+        MRR@10 0.823 -> 0.606, with 13 of 15 moved queries moving down. The
+        numbers and the two reasons (no confirmed links yet, and a node
+        distribution where the godnode holds 70% of chunks) are in the CHANGELOG.
+        It is gone rather than left switched off because an unused branch on the
+        hot retrieval path is a maintenance cost the measurement does not
+        justify. `related` / `knowledge_related` still expose activation where a
+        user asks for it directly, which is the part that works.
+        """
         scope = self._scope_ids(node_id)
         # Asking for a subtree by name IS the explicit request §3 lists next to
         # `deep` and `recall`: someone who names a node already knows it exists.
@@ -2120,6 +2302,12 @@ class KnowledgeGraph:
         vector = self._vector_candidates(qv, top_n, scope, deep)
         lexical = self._lexical_candidates(query, top_n, scope, deep)
 
+        # ponytail: the single-leg paths return unfused, so they skip the graph
+        # vote — their rows carry a raw cosine/BM25 score and folding a ranking
+        # in would change the scale without a fusion to change it to. Only a
+        # vault with `embed_model none` lands here (fastembed is a hard
+        # dependency since 1.2.2). Give them the vote by fusing every leg that
+        # exists, once something needs it.
         if not vector:
             return lexical[:top_n]
         if not lexical:
@@ -2135,8 +2323,11 @@ class KnowledgeGraph:
         order = sorted(fused, key=lambda c: fused[c], reverse=True)
         # The fused score REPLACES the leg's own: a row that surfaced from the
         # vector leg used to keep its cosine while a BM25-only neighbour had no
-        # score at all, so the caller saw a ranking it could not read.
+        # score at all, so the caller saw a ranking it could not read. Still
+        # `rrf` with the graph folded in — it is the same scale, three rankings
+        # instead of two.
         return [_scored(rows_by_id[c], fused[c], "rrf") for c in order[:top_n]]
+
 
     # BM25 constants. k1 damps term-frequency saturation, b controls how much
     # document length is penalised. 1.5/0.75 are the standard defaults.
@@ -2192,8 +2383,10 @@ class KnowledgeGraph:
                 "error": self._corrupt_err,
                 "nodes": 0, "chunks": 0, "embedded": 0, "links": 0, "tags": 0,
                 "embedding_dim": 384,
-                "hint": "knowledge.db corrotto — ripristina un backup o rifai "
-                        "l'ingest (le fonti su disco sono intatte).",
+                # Same classifier the guard uses, so the diagnostic and the
+                # error never disagree about whether the file is damaged or
+                # merely busy — only one of those is fixed by deleting it.
+                "hint": open_failure_message(self._corrupt_err),
             }
         node_count = self._conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         chunk_count = self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
@@ -2257,8 +2450,10 @@ class KnowledgeGraph:
                 "serious_count": 1,
                 "error": self._corrupt_err,
                 "issues": {}, "warnings": {},
-                "hint": "knowledge.db corrotto — ripristina un backup o rifai "
-                        "l'ingest (le fonti su disco sono intatte).",
+                # Same classifier the guard uses, so the diagnostic and the
+                # error never disagree about whether the file is damaged or
+                # merely busy — only one of those is fixed by deleting it.
+                "hint": open_failure_message(self._corrupt_err),
             }
         c = self._conn
         rows = lambda sql: [dict(r) for r in c.execute(sql).fetchall()]

@@ -35,12 +35,21 @@ def test_cache_prevents_duplicate_connections(tmp_path):
     conn1.execute("SELECT 1")
 
 
-def test_second_process_cannot_open_locked_file(tmp_path):
-    """Process A holds pyturso lock, process B gets 'Turso (pending)' for same file.
+def test_second_process_degrades_to_sqlite_instead_of_having_no_connection(tmp_path):
+    """Process A holds the pyturso lock; process B must still be able to READ.
 
-    Confirms pyturso on Windows uses an exclusive lock — cross-process concurrent
-    access is impossible. This is why GM routes writes through _run_via_gm and
-    reads go through the GM server's cached connection."""
+    The lock is real — pyturso on Windows takes an exclusive one, which is why
+    GM routes writes through `_run_via_gm`. What was wrong was the consequence:
+    this test used to assert `Turso (pending)`, i.e. process B ending up with
+    `_conn = None`, and called that the expected outcome. It was the symptom of
+    a fallback that did not exist. `_connect` never called `sqlite3.connect`
+    anywhere, so B went on to fail `_init_schema` with "'NoneType' object has
+    no attribute 'execute'" and report the vault CORRUPT — a healthy file, held
+    by a healthy server, diagnosed as damaged.
+
+    sqlite3 opens the very same file pyturso refused (measured against the live
+    vault while the MCP server held it), so the assertion is now the stronger
+    one: B degrades a tier and keeps working."""
     path = tmp_path / "lock_test.db"
     script_a = textwrap.dedent(
         "import time\n"
@@ -58,6 +67,13 @@ def test_second_process_cannot_open_locked_file(tmp_path):
         "time.sleep(1)\n"
         "kg = KnowledgeGraph(db_path=Path(r'%s'))\n"
         "print('ENGINE', kg._engine_name, flush=True)\n"
+        "print('CORRUPT', kg._corrupt, flush=True)\n"
+        "print('NODES', kg.status()['nodes'], flush=True)\n"
+        "try:\n"
+        "    kg.add_node('B', 'godnode')\n"
+        "    print('WROTE yes', flush=True)\n"
+        "except Exception as e:\n"
+        "    print('WROTE no', type(e).__name__, flush=True)\n"
     ) % str(path)
     a = subprocess.Popen([sys.executable, "-c", script_a], stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, text=True)
@@ -66,7 +82,15 @@ def test_second_process_cannot_open_locked_file(tmp_path):
     a_out = a.stdout.read()
     a.wait(timeout=10)
     assert "READY" in a_out, f"process A failed: {a.stderr.read()!r}"
-    # B can't open the file held by A → "Turso (pending)" (connection failed)
-    assert "Turso (pending)" in b.stdout, (
-        f"expected 'Turso (pending)' when file is locked: stdout={b.stdout!r} stderr={b.stderr!r}"
-    )
+    ctx = f"stdout={b.stdout!r} stderr={b.stderr!r}"
+    # The lock still holds: B does not get the Turso tier...
+    assert "Turso (local)" not in b.stdout, f"expected the lock to hold: {ctx}"
+    # ...it degrades to a tier that works, rather than to no connection...
+    assert "read-only" in b.stdout, ctx
+    assert "CORRUPT False" in b.stdout, f"a locked vault is not a damaged one: {ctx}"
+    assert "NODES" in b.stdout, f"the borrowed tier must actually read: {ctx}"
+    # ...and it does NOT write. The exclusive lock was enforcing single-writer
+    # by accident; the fallback removed that, letting two engines with two WAL
+    # implementations write one file. Reads were the point, writes were the bug.
+    assert "WROTE no" in b.stdout, (
+        f"a borrowed vault must refuse writes -- they belong to its owner: {ctx}")

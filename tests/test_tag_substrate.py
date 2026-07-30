@@ -171,24 +171,51 @@ def test_suppression_does_not_touch_the_similarity_measure():
     kg.close()
 
 
-# ---------- chunk_tags ----------
+# ---------- chunk_tags: parked ----------
 
-def test_chunk_tags_written_and_replaced_on_reingest(tmp_path):
+def test_chunk_tags_is_no_longer_written(tmp_path):
+    """§8.4 asked whether chunk-level tags earn their storage. Measured on a
+    real vault: 9360 rows for 2117 chunks and no reader anywhere in the three
+    repos -- linking and IDF read `node_tags`, and Gray Matter's tag join goes
+    through `node_tag_names`, which is also `node_tags`.
+
+    So the answer is no, and the write is gone. The TABLE stays (I5) and so do
+    any rows an older vault already has; the data is derived from chunker tags,
+    so a future reader repopulates by re-ingesting."""
     src = tmp_path / "mod.py"
     src.write_text("def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n",
                    encoding="utf-8")
     kg = _kg()
     node = kg.add_node("Code", "fundamental", parent_id=0)
     kg.index_into_node(src, node)
-    rows = kg._conn.execute("SELECT COUNT(*) FROM chunk_tags").fetchone()[0]
-    assert rows > 0
 
-    kg.index_into_node(src, node)             # idempotent re-ingest
-    assert kg._conn.execute("SELECT COUNT(*) FROM chunk_tags").fetchone()[0] == rows
-    # no join row survives its chunk
+    assert kg._conn.execute("SELECT COUNT(*) FROM chunk_tags").fetchone()[0] == 0
+    # the node side -- the one everything actually reads -- is unaffected
+    assert kg.node_tag_names(node), "parking the chunk copy took the node tags with it"
+    kg.close()
+
+
+def test_legacy_chunk_tag_rows_are_still_cleaned_up(tmp_path):
+    """Parked means "no new rows", not "stop maintaining the old ones". A vault
+    written before this still has them, and the delete sites have to keep
+    clearing them or `health()` starts reporting dangling rows that the vault
+    can never shed."""
+    src = tmp_path / "mod.py"
+    src.write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    kg = _kg()
+    node = kg.add_node("Code", "fundamental", parent_id=0)
+    kg.index_into_node(src, node)
+    chunk_id = kg._conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()[0]
+    tag_id = kg._tag_id("legacy")
+    kg._conn.execute("INSERT INTO chunk_tags (chunk_id, tag_id) VALUES (?, ?)",
+                     (chunk_id, tag_id))
+    kg._conn.commit()
+
+    kg.index_into_node(src, node)             # re-ingest replaces this source
     assert kg._conn.execute(
         "SELECT COUNT(*) FROM chunk_tags WHERE chunk_id NOT IN "
         "(SELECT id FROM chunks)").fetchone()[0] == 0
+    assert kg.health()["warnings"]["dangling_tag_links"] == 0
     kg.close()
 
 
