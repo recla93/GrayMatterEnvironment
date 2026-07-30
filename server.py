@@ -222,6 +222,43 @@ _BRIDGES_PER_PULSE = 5
 _BRIDGE_WHY_CHARS = 80
 
 
+async def _do_promote(apply: bool = False) -> dict:
+    """CLS consolidation, dry run unless `apply` (§5.3, §8.2).
+
+    Reads Neuron through its `export` tool and writes NeuRAG through
+    `knowledge_add_node`: two public surfaces, no vault opened here.
+    """
+    import json as _json
+
+    from gray_matter import promote as _promote
+
+    try:
+        raw = await _call_server_async("neuron", "export", {})
+        export = _json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Neuron non raggiungibile o export illeggibile: {exc}"}
+
+    cands = _promote.candidates(export)
+    written, skipped = [], []
+    if apply:
+        for c in cands:
+            try:
+                # The tags it already shares travel with it — that is what makes
+                # a promotion a JOIN between the two graphs instead of an orphan
+                # dropped into NeuRAG (§4).
+                res = await _call_server_async("neurag", "knowledge_add_node", {
+                    "name": c["keyword"], "node_type": "fundamental",
+                    "triggers": c["tags"] or [c["keyword"]],
+                })
+                (written if "not found" not in str(res).lower() else skipped).append(
+                    c["keyword"])
+            except Exception as exc:  # noqa: BLE001 — un nodo rotto non ferma il resto
+                skipped.append(f"{c['keyword']}: {exc}")
+    return {"applied": apply, "count": len(cands), "candidates": cands,
+            "written": written, "skipped": skipped,
+            "rules": _promote.PROMOTE_RULES}
+
+
 def _fit(budget: int, blocks: list[str]) -> tuple[str, int]:
     """Take blocks in priority order, keeping each that still fits in `budget`.
 
@@ -1061,6 +1098,12 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                             response = {"result": result}
                         except Exception as e:
                             response = {"error": str(e)}
+                    elif action == "promote":
+                        # CLS (§5.3): memory that proved itself becomes
+                        # knowledge. Runs HERE, in the daemon, because it needs
+                        # both workers — and because GM must never open someone
+                        # else's vault itself (I3, and the single-writer lock).
+                        response = await _do_promote(bool(msg.get("apply")))
                     elif action == "gm-neuron":
                         tool_name = msg.get("tool")
                         tool_args = msg.get("args", {})

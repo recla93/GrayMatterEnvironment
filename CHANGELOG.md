@@ -1,6 +1,34 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **`gray-matter promote` — consolidazione CLS (DESIGN-EVOLUTION §5.3).** Il
+  modello di McClelland/O'Reilly, di cui la suite era già due terzi: ippocampo
+  (rapido, episodico, decade) = Neuron, neocorteccia (lenta, semantica,
+  permanente) = NeuRAG, **consolidazione = mancante**. `sleep_maybe()` consolida
+  Neuron dentro sé stesso e non scrive mai in NeuRAG, quindi un concetto
+  rinforzato per 200 turni resta nello store che decade e non diventa mai
+  conoscenza permanente. I bridge *osservavano* quella correlazione; questo ci
+  **agisce**.
+  - **Dry run se non passi `--apply`**, come `neurag park`: le soglie non sono
+    misurate su un grafo reale e un nodo promosso, al contrario di un bridge,
+    **non decade** — promuovere rumore costa più che non promuovere niente.
+  - Soglie in `PROMOTE_RULES` (§8.2, costanti non letterali): salienza ≥ 5,
+    trust ≥ 0.5, età ≥ 50 turni. **Tre pavimenti in AND, non un prodotto**: il
+    design descrive la soglia come "salienza × trust × età" e quel prodotto
+    ordina il report, ma un numero solo nasconde *quale* fattore ha portato il
+    candidato — un concetto può arrivare a un prodotto alto sulla sola salienza
+    senza essere mai stato confermato, ed è esattamente ciò da non rendere
+    permanente. L'età si conta in **turni** del grafo, non in wall-clock: un
+    grafo rimasto fermo un mese non ha per questo concetti più stabili.
+  - **I tag viaggiano col concetto**: §4 ha fatto del tag l'unico oggetto su cui
+    i due store concordano, quindi una promozione è un *join* fra i due grafi e
+    non un nodo orfano lasciato cadere in NeuRAG.
+  - Gira nel daemon, l'unico posto col canale verso i due worker: GM legge Neuron
+    via `export` e scrive NeuRAG via `knowledge_add_node`, senza aprire mai il
+    vault di nessun altro (I3, e il lock a scrittore unico).
+  - Se il daemon in esecuzione è più vecchio della CLI, il comando lo **dice** e
+    suggerisce il riavvio, invece di lasciare un "Unknown action" che sembra un
+    bug del comando appena installato.
 - **Quanto contesto GM inietta è ora un budget, non un effetto collaterale.**
   Il senso del progetto è far risparmiare token, e il blocco **proattivo** della
   pulse — bridge, vicini, flash: roba che nessuno ha chiesto — non aveva alcun

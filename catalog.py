@@ -317,6 +317,22 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Searches the knowledge base. Type your question in the query field.",
         "To see what your AI would find, before you trust the vault.",
     ),
+    ("gray-matter", "promote"): (
+        "Promuove in conoscenza permanente (NeuRAG) i concetti che si sono "
+        "dimostrati validi nella memoria (Neuron): molto rinforzati, confermati "
+        "utili e stabili nel tempo. NON scrive niente finché non passi --apply.",
+        "Su una memoria vissuta: un concetto ripetuto per centinaia di turni "
+        "resta nello store che decade e non diventa mai conoscenza. Lancialo "
+        "prima senza --apply e leggi la lista — un nodo promosso non decade, "
+        "quindi promuovere rumore è più costoso che non promuovere niente.",
+        "Promotes concepts that proved themselves in memory (Neuron) into "
+        "permanent knowledge (NeuRAG): heavily reinforced, confirmed useful and "
+        "stable over time. Writes NOTHING unless you pass --apply.",
+        "On a memory with history: a concept repeated across hundreds of turns "
+        "stays in the decaying store and never becomes knowledge. Run it without "
+        "--apply first and read the list — a promoted node does not decay, so "
+        "promoting noise costs more than promoting nothing.",
+    ),
     ("neurag", "confirm"): (
         "Segnala che due o più nodi sono stati utili INSIEME: i collegamenti fra "
         "loro si rinforzano e sopravvivono al prossimo ingest.",

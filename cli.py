@@ -266,6 +266,34 @@ def cmd_reap(dry_run: bool = False, all_procs: bool = False) -> None:
     print(f"Reaped {len(targets)} process(es).")
 
 
+def cmd_promote(apply: bool = False, as_json: bool = False) -> None:
+    """CLS consolidation (§5.3): concepts that proved themselves in Neuron
+    become permanent NeuRAG knowledge. Dry run unless `apply`."""
+    from gray_matter.promote import report_lines
+    r = _send_ipc({"action": "promote", "apply": bool(apply)}, timeout=IPC_TOOL_TIMEOUT)
+    if "error" in r:
+        err = str(r["error"])
+        print(f"promote: {err}", file=sys.stderr)
+        # "Unknown action" da un daemon vivo significa che gira una build più
+        # vecchia di questa CLI: dirlo, invece di lasciare l'utente davanti a un
+        # messaggio che sembra un bug del comando appena installato.
+        if "unknown action" in err.lower():
+            print("  Il daemon in esecuzione è più vecchio di questa CLI. "
+                  "Riavvialo: gray-matter stop && gray-matter start", file=sys.stderr)
+        elif "refused" in err.lower() or "no response" in err.lower():
+            print("  Gray-Matter non è in esecuzione: gray-matter start",
+                  file=sys.stderr)
+        sys.exit(1)
+    if as_json:
+        print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
+        return
+    for line in report_lines(r.get("candidates", []), applied=r.get("applied", False)):
+        print(line)
+    if r.get("applied"):
+        print(f"  scritti: {len(r.get('written', []))}"
+              + (f" | saltati: {len(r.get('skipped', []))}" if r.get("skipped") else ""))
+
+
 def _knob_dict(k, cfg, settings) -> dict:
     """Metadati di un knob per la GUI (SSOT: vivono nel tool che li possiede)."""
     d = settings.DEFAULTS[k]
@@ -927,6 +955,13 @@ def build_parser() -> argparse.ArgumentParser:
     log_p.add_argument("--follow", "-f", action="store_true", help="Keep following (Ctrl-C to stop)")
     log_p.add_argument("--lines", "-n", type=int, default=50, help="Tail size (default 50)")
 
+    prm_p = sub.add_parser("promote",
+                           help="Promote proven Neuron concepts into NeuRAG "
+                                "knowledge (CLS). DRY RUN unless --apply")
+    prm_p.add_argument("--apply", action="store_true",
+                       help="Actually create the nodes (default: only report)")
+    prm_p.add_argument("--json", action="store_true", help="Structured JSON output")
+
     sub.add_parser("bridges", help="List persisted cross-store bridges")
 
     brt_p = sub.add_parser("bridges-transfer",
@@ -1069,6 +1104,8 @@ def main() -> None:
                   no_cli_install=args.no_cli_install, assume_yes=args.yes)
     elif args.command == "logs":
         cmd_logs(args.follow, args.lines)
+    elif args.command == "promote":
+        cmd_promote(apply=args.apply, as_json=args.json)
     elif args.command == "bridges":
         cmd_bridges()
     elif args.command == "bridges-transfer":
