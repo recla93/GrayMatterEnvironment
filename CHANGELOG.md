@@ -1,6 +1,38 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **Layer L1-L4 (DESIGN-EVOLUTION §3, P4)**: nessun layer è una tomba. Un nodo
+  parcheggiato perde solo il diritto di essere scandito di default — chunk, link
+  e tag restano dove sono, e `recall` arriva ovunque.
+  - **`neurag park`** riporta i nodi abbastanza inattivi da scendere di layer.
+    **Dry run** se non passi `--apply`: i punti di taglio non sono mai stati
+    misurati su un corpus vero, e il modo in cui sbagliarli fa danno è una
+    libreria che smette silenziosamente di offrire metà di sé. Regola:
+    inattività × peso del link (`PARK_RULES`), mai l'età del contenuto. Un nodo
+    ben collegato non si parcheggia: raggiungibile è raggiungibile.
+  - **`neurag recall`** cerca in tutti i layer. `neurag query --deep` è lo stesso
+    con l'intento non dichiarato; anche chiedere un sottoalbero per nome raggiunge
+    un nodo dormiente, perché chi lo nomina sa già che esiste.
+  - **`neurag decay`** indebolisce peso dei link e salienza dei tag per emivita.
+    Il tempo trascorso si legge da `meta.decayed_at`, non dal timestamp di ogni
+    riga: lanciarlo due volte in un giorno non è lanciarlo due volte in un anno.
+    C'è un pavimento — sotto quello una rotta sarebbe sparita, non debole.
+  - **L1**: working set di sessione persistito, TTL in query **e** in ore. Quello
+    di Neuron vive in un processo acceso; questo sopravvive al processo, quindi
+    senza il bound sull'orologio un vault interrogato due volte a sei mesi di
+    distanza avrebbe ancora considerato "caldo" il primo risultato — e siccome il
+    working set non si parcheggia mai, una singola query avrebbe protetto un nodo
+    per sempre.
+  - `search()` marca ciò che risponde (`last_used`, salienza dei tag): è l'unico
+    scrittore di `salience`, altrimenti il decay dimezzerebbe un numero che
+    nessuno alza. `touch=False` per chi ispeziona invece di consultare.
+  - **Prima migrazione di colonna** (`_ensure_columns`): `CREATE TABLE IF NOT
+    EXISTS` non tocca una tabella che esiste già, quindi una colonna nuova
+    raggiunge un vault vecchio solo di lì. Gli indici girano **dopo**: un indice
+    su una colonna appena aggiunta, lasciato in `SCHEMA_SQL`, fallisce con "no
+    such column" su ogni vault esistente e — dato che gli errori di schema
+    finiscono in `_corrupt` — si porta dietro la migrazione in silenzio.
+  - Nessun knob nuovo: costanti e flag CLI, quindi i 6 installer non cambiano.
 - **Il substrato dei tag è visibile alle diagnostiche**: `status()` riporta
   `tags`, e `health()` conta `dangling_tag_links` — righe di `node_tags`/
   `chunk_tags` che puntano a id morti. Quelle tabelle non hanno foreign key

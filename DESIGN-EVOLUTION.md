@@ -349,7 +349,7 @@ Each phase ships green, standalone (I2), and with the GUI verified (I7).
 | **P1** ✅ | **Tag substrate.** `tags`/`node_tags`/`chunk_tags` + idempotent migration from the legacy JSON column (`meta.tags_migrated`); names normalized so they are a real join key; IDF suppression at `MAX_TAG_NODE_RATIO=0.5` / `MIN_TAG_NODE_FLOOR=50`; `build_tag_links` reads the index instead of parsing every node. `salience`/`last_used` columns exist with no writer yet — P5 owns the Hebbian half. Legacy columns kept as read path. | `neurag/db.py`, `tests/test_tag_substrate.py` | ✅ migration idempotent (asserted on a reopened file vault); link count identical to the legacy JSON computation on the same fixture. 206 passed |
 | **P2** ✅ | **Encoding.** Ceiling derived from the live tokenizer (`embedder.max_chars_for`), breadcrumb `section` embedded with the body, 12% overlap taken *out* of the budget, H1–H6 split, single enforcement point at `chunk_file`. Plus: idempotent re-ingest, and generated-artefact dirs skipped. | `neurag/chunker.py`, `embedder.py`, `db.py`, `ingest.py`, `settings.py` | ✅ 77.3% of corpus text was unreachable → 0%. `neurag/tests` 154 passed |
 | **P3** ✅ | **Retrieval.** RRF hybrid (both rankers always run), BM25 replacing length-unnormalised TF-IDF, `node_id` subtree scope, MMR (λ=0.7), e5 `query:`/`passage:` prefixes, `.sh`/`.ps1`/`.sql`/`.c`/`.cs`/… made indexable, plus `reindex` + the embed-model guard. | `neurag/db.py`, `embedder.py`, `chunker.py`, `cli.py`, `server.py`, `gray_matter/catalog.py` | ✅ recall@5 **67% → 94%** vs the shipped vector-only. 195 passed |
-| **P4** | **Layers.** L1 session cache (port from Neuron), L3/L4 parking, link/tag decay, `recall`. | `neurag/db.py`, `settings.py`, `cli.py` | every parked item returns byte-identical via `recall` (I5) |
+| **P4** ✅ | **Layers.** `nodes.layer`/`last_used` + `_ensure_columns` (the first column migration); L1 session cache ported from Neuron, with a wall-clock bound it does not need; parking by inactivity × link weight, DRY RUN unless `--apply`; half-life decay of link weight and tag salience, reinforced by use; `recall` = search across every layer. CLI: `park`, `unpark`, `decay`, `recall`, `query --deep`. No new settings knob, so the 6 installers are untouched. | `neurag/db.py`, `cli.py`, `tests/test_layers.py` | ✅ I5 asserted: park → re-ingest → rebuild → decay → restart → `recall` returns byte-identical. 239 passed |
 | **P5** | **Brain.** `origin` column, Hebbian on confirm, spreading-activation expansion. | `neurag/db.py`, `server.py` | curated links survive re-ingest |
 | **P6** | **Cross-tool (GM only).** CLS consolidation Neuron→NeuRAG; bridges join on tag ids; stimuli enriched with knowledge. | `gray_matter/bridges.py`, `server.py`, `neuron/…/stimulus.py` | all of P0–P5 still green with GM absent |
 | **P7** | **Installers + GUI.** Any new knob → 6 scripts + parity features; GUI panels for reindex, tags, link health. | `install.ps1`/`.sh` ×3, `webgui.*`, `settings.py` | `test_installer_parity.py` extended in the same commit |
@@ -458,6 +458,16 @@ tests caught it; keep every threshold in §8 on the same "report before act" dis
    reluctantly than Neuron (§3). The cut points need real corpus data, so ship P4 with
    parking disabled by default and a `--dry-run` report first. Constants, not literals,
    in the shape of `RANK_WEIGHTS`.
+
+   **First corpus data (2026-07-30, the `neurag/` tree: 16 nodes, 2117 chunks).** With
+   `max_link_weight = 0.25`, *every node that holds chunks is above the threshold* —
+   0.458 for the godnode, 0.571–1.0 for the rest — so parking cannot fire at all. Only
+   the two empty directories (`_gm_vendor`, `assets`) were ever candidates. That is the
+   reluctance working as intended on a small densely cross-referenced repo, but it means
+   the current cut points are untested against the case they exist for: a large vault of
+   loosely related documents, where `cross_ref` weights are far lower. The threshold to
+   revisit first is `max_link_weight`, and the number to collect is the distribution of
+   `MAX(weight)` per node on a real personal vault — not another repo.
 2. **Promotion threshold for CLS** (P6) — salience × trust × age. Same approach: report
    first, act later, tunable constants like `RANK_WEIGHTS`.
 3. **Re-index cost at scale.** A model change on a 50k-chunk vault is a long job. Needs

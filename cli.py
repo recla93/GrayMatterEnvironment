@@ -44,6 +44,30 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("query", help="Search topic")
     q.add_argument("--top-n", type=int, default=5, help="Number of results (default 5)")
     q.add_argument("--json", action="store_true", help="Output as JSON")
+    q.add_argument("--deep", action="store_true",
+                   help="Include parked (dormant) nodes — see `recall`")
+
+    rc = sub.add_parser("recall",
+                        help="Search EVERY layer, parked nodes included "
+                             "(nothing is ever deleted, only parked)")
+    rc.add_argument("query", help="Search topic")
+    rc.add_argument("--top-n", type=int, default=5, help="Number of results (default 5)")
+    rc.add_argument("--json", action="store_true", help="Output as JSON")
+
+    pk = sub.add_parser("park",
+                        help="Report nodes idle enough to move to a dormant "
+                             "layer. DRY RUN unless --apply")
+    pk.add_argument("--apply", action="store_true",
+                    help="Actually move them (default: only report)")
+    pk.add_argument("--json", action="store_true", help="Output as JSON")
+
+    up = sub.add_parser("unpark", help="Bring a parked node back to the active vault")
+    up.add_argument("name", help="Node name")
+
+    dc = sub.add_parser("decay",
+                        help="Weaken link weights and tag salience by the time "
+                             "elapsed since the last run")
+    dc.add_argument("--json", action="store_true", help="Output as JSON")
 
     sub.add_parser("tree", help="Show node hierarchy")
 
@@ -856,11 +880,12 @@ def main() -> None:
                 for r in rows:
                     chunks.extend(db.get_chunks(r["id"]))
         if not chunks:
-            chunks = db.search(args.query, args.top_n)
+            chunks = db.search(args.query, args.top_n, deep=args.deep)
         chunks = chunks[:args.top_n]
 
         if not chunks:
-            print("No results.")
+            print("No results." if args.deep else
+                  "No results. Parked nodes are excluded — try `neurag recall`.")
             return
 
         if args.json:
@@ -872,6 +897,58 @@ def main() -> None:
             print(f"  [{i+1}] {c['source']} :: {c['section'] or ''}")
             print(f"       {text.encode('cp1252', errors='replace').decode('cp1252')}...")
             print()
+
+    elif args.command == "recall":
+        hits = db.recall(args.query, args.top_n)
+        if not hits:
+            print("No results, in any layer.")
+            return
+        if args.json:
+            print(json_mod.dumps(hits, ensure_ascii=False, indent=2, default=str))
+            return
+        parked = {n["id"]: n["layer"] for n in
+                  (db.get_node(h["node_id"]) or {"id": 0, "layer": 2} for h in hits)}
+        for i, c in enumerate(hits):
+            layer = parked.get(c["node_id"], db.LAYER_ACTIVE) or db.LAYER_ACTIVE
+            mark = "" if layer <= db.LAYER_ACTIVE else f"  [L{layer} dormant]"
+            text = c["text"][:200].replace(chr(10), " ")
+            print(f"  [{i+1}] {c['source']} :: {c['section'] or ''}{mark}")
+            print(f"       {text.encode('cp1252', errors='replace').decode('cp1252')}...")
+            print()
+
+    elif args.command == "park":
+        report = db.park(apply=args.apply)
+        if args.json:
+            print(json_mod.dumps(report, ensure_ascii=False, indent=2, default=str))
+            return
+        if not report["count"]:
+            print("[ok] Nothing idle enough to park.")
+        else:
+            verb = "Parked" if report["applied"] else "Would park (dry run)"
+            print(f"{verb}: {report['count']} node(s)")
+            for c in report["candidates"][:40]:
+                print(f"  L{c['from_layer']} -> L{c['to_layer']}  {c['path']}  "
+                      f"(idle {c['idle_days']}d, max link {c['max_link_weight']})")
+            if not report["applied"]:
+                print("\nNothing was changed. Re-run with --apply to move them.")
+                print("Parked nodes stay searchable via `neurag recall`.")
+        print(f"layers: {db.layer_counts()}")
+
+    elif args.command == "unpark":
+        node = db.get_node_by_name(args.name)
+        if not node:
+            print(f"Node '{args.name}' not found.", file=sys.stderr)
+            sys.exit(1)
+        db.unpark(node["id"])
+        print(f"[ok] '{args.name}' back in the active vault (L2).")
+
+    elif args.command == "decay":
+        report = db.decay()
+        if args.json:
+            print(json_mod.dumps(report, ensure_ascii=False, indent=2, default=str))
+            return
+        print(f"[ok] {report['days']} day(s) elapsed -> "
+              f"{report['links']} link(s), {report['tags']} tag(s) weakened.")
 
     elif args.command == "tree":
         print(db.node_tree())

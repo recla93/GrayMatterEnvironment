@@ -14,6 +14,7 @@ import re
 import sqlite3
 import struct
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -359,7 +360,15 @@ CREATE TABLE IF NOT EXISTS nodes (
     path        TEXT    NOT NULL,   -- materialised path: /BackEndNotes/Java/SpringBoot
     tags        TEXT    DEFAULT '[]',  -- JSON array
     triggers    TEXT    DEFAULT '[]',  -- JSON array
-    created_at  TEXT    DEFAULT (datetime('now'))
+    created_at  TEXT    DEFAULT (datetime('now')),
+    -- Activation layer (DESIGN-EVOLUTION §3). 2 = active vault, 3 = dormant,
+    -- 4 = deep dormant. No layer is a grave: a parked node keeps its chunks,
+    -- its links and its tags, and `recall` reaches every layer. What changes
+    -- is only whether it is scanned by default.
+    layer       INTEGER DEFAULT 2,
+    -- When this node last ANSWERED something. Parking reads inactivity from
+    -- here, never from created_at: a document is not stale because it is old.
+    last_used   TEXT
 );
 
 -- Absolute root (id=0, path='/', parent_id=NULL).
@@ -422,6 +431,25 @@ CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER NOT NULL, tag_id INTEGER
                                        PRIMARY KEY (chunk_id, tag_id));
 CREATE INDEX IF NOT EXISTS idx_node_tags_tag  ON node_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag_id);
+"""
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS is a no-op
+# on a vault that already has the table, so a new column reaches an existing
+# vault only through here. Applied by `_ensure_columns`, which is idempotent.
+# Every entry needs a DEFAULT that means "behave as before": SQLite backfills
+# it into the existing rows and that value is what an old vault wakes up with.
+ADDED_COLUMNS = (
+    ("nodes", "layer", "INTEGER DEFAULT 2"),
+    ("nodes", "last_used", "TEXT"),
+)
+
+# Indexes run LAST, after ADDED_COLUMNS. An index over a column added by that
+# step cannot live in SCHEMA_SQL: on an existing vault the CREATE INDEX would
+# run first, fail with "no such column", and — because _init_schema swallows
+# schema errors into `_corrupt` — take the column migration down with it in
+# silence. That is exactly what happened to `idx_nodes_layer`.
+INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_nodes_layer ON nodes(layer);
 """
 
 
@@ -645,6 +673,10 @@ class KnowledgeGraph:
             for stmt in _split_sql(SCHEMA_SQL):
                 self._conn.execute(stmt)
             self._conn.commit()
+            self._ensure_columns()          # before the indexes that use them
+            for stmt in _split_sql(INDEXES_SQL):
+                self._conn.execute(stmt)
+            self._conn.commit()
             self._migrate_tags()
         except Exception as e:  # noqa: BLE001 — "file is not a database" & simili
             # DB malformato: non alziamo qui, così i comandi diagnostici
@@ -768,6 +800,18 @@ class KnowledgeGraph:
                 (chunk_id, tid))
         if commit:
             self._conn.commit()
+
+    def _ensure_columns(self) -> None:
+        """Add columns a released vault predates. Idempotent, and never
+        rewrites a row: SQLite backfills the DEFAULT for existing rows, which
+        is why every added column must have one that means "as before"."""
+        for table, column, decl in ADDED_COLUMNS:
+            have = {r[1] for r in self._conn.execute(
+                f"PRAGMA table_info({table})").fetchall()}
+            if column not in have:
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        self._conn.commit()
 
     def _migrate_tags(self) -> None:
         """Backfill node_tags from the legacy `nodes.tags` JSON column.
@@ -1295,6 +1339,234 @@ class KnowledgeGraph:
         self._conn.commit()
         return added
 
+    # -- L1..L4: the activation gradient (DESIGN-EVOLUTION §3) ---------------
+    #
+    # No layer is a grave. Every layer is a parking level and `recall` reaches
+    # all of them; what a lower layer loses is only the right to be scanned by
+    # default. Same mechanism as Neuron's graveyard, different pressure:
+    # Neuron parks aggressively because a live memory that stays hot is a log,
+    # NeuRAG parks reluctantly because a library's job is availability.
+
+    LAYER_ACTIVE, LAYER_DORMANT, LAYER_DEEP = 2, 3, 4
+
+    # Cut points, as constants in the shape of Neuron's RANK_WEIGHTS (§8.1):
+    # they need real corpus data and they WILL move, so they are one dict to
+    # tune rather than numbers buried in a query.
+    PARK_RULES = {
+        "idle_days_dormant": 180,   # not consulted in half a year
+        "idle_days_deep": 540,      # nor in the year after that
+        "max_link_weight": 0.25,    # a well-connected node is never parked
+    }
+
+    # What decays is the ROUTE, not the trace: a link gets weaker and a tag
+    # less salient, so a dormant thing is harder to reach spontaneously —
+    # never impossible, never removed. The floor is the point of the design:
+    # below it a route would be gone rather than faint.
+    DECAY = {
+        "link_half_life_days": 365,
+        "tag_half_life_days": 180,
+        "floor": 0.05,
+    }
+
+    # L1. Same shape as Neuron's `_session_cache` (models.py): TTL in queries
+    # rather than wall-clock, FIFO eviction at the cap, persisted so it
+    # survives the process — a CLI invocation is a whole process life here.
+    SESSION_CACHE_QUERIES = 10
+    SESSION_CACHE_MAX = 8
+    # ...and a wall-clock bound, which Neuron's does not need. Its cache lives
+    # in a running process; this one is persisted, so a vault queried twice six
+    # months apart would still call the first result "warm" — and since parking
+    # never touches the working set, one query would have protected a node from
+    # ever being parked again.
+    SESSION_CACHE_HOURS = 12
+    SALIENCE_BUMP = 0.15
+
+    def _meta_get(self, key: str, default=None):
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def _meta_set(self, key: str, value: str, commit: bool = True) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, str(value)))
+        if commit:
+            self._conn.commit()
+
+    # -- L1: session working set --------------------------------------------
+
+    def session_cache(self) -> dict:
+        """{node_id: {"q": query_index, "t": iso, "score": float}} — the warm
+        set, with entries past either bound already dropped."""
+        try:
+            raw = {int(k): v for k, v in
+                   json.loads(self._meta_get("session_cache", "{}")).items()}
+        except (TypeError, ValueError):
+            return {}
+        q = int(self._meta_get("query_count", "0") or 0)
+        now = datetime.now(timezone.utc)
+        live = {}
+        for nid, e in raw.items():
+            if q - e.get("q", 0) > self.SESSION_CACHE_QUERIES:
+                continue
+            try:
+                age_h = (now - datetime.fromisoformat(e["t"])).total_seconds() / 3600.0
+            except (KeyError, TypeError, ValueError):
+                continue                    # no timestamp: pre-P4 entry, let it go
+            if age_h <= self.SESSION_CACHE_HOURS:
+                live[nid] = e
+        return live
+
+    def cache_add(self, node_ids, score: float = 1.0) -> None:
+        """Mark nodes as warm for this session, then expire and evict.
+
+        Eviction is not loss: the node stays exactly where it is, it just
+        stops being in the working set."""
+        q = int(self._meta_get("query_count", "0") or 0) + 1
+        self._meta_set("query_count", q, commit=False)
+        cache = self.session_cache()                 # expires both ways first
+        now = datetime.now(timezone.utc).isoformat()
+        for nid in node_ids:
+            cache[int(nid)] = {"q": q, "t": now, "score": max(0.0, min(1.0, score))}
+        while len(cache) > self.SESSION_CACHE_MAX:
+            del cache[min(cache, key=lambda k: cache[k]["q"])]      # FIFO
+        self._meta_set("session_cache", json.dumps(cache))
+
+    # -- activity: what parking and decay actually measure -------------------
+
+    def touch_nodes(self, node_ids) -> None:
+        """Record that these nodes just answered something, and reinforce the
+        tags that got there. This is the only writer of `salience`: without it
+        decay would be halving a number nothing ever raises."""
+        ids = sorted({int(n) for n in node_ids})
+        if not ids:
+            return
+        marks = ",".join("?" * len(ids))
+        self._conn.execute(
+            f"UPDATE nodes SET last_used = datetime('now') WHERE id IN ({marks})", ids)
+        self._conn.execute(
+            f"""UPDATE tags SET last_used = datetime('now'),
+                    salience = MIN(1.0, salience + ?)
+                 WHERE id IN (SELECT tag_id FROM node_tags
+                              WHERE node_id IN ({marks}))""", [self.SALIENCE_BUMP, *ids])
+        self._conn.commit()
+
+    # -- decay ---------------------------------------------------------------
+
+    def decay(self) -> dict:
+        """Weaken every route by the time elapsed since the last decay.
+
+        Elapsed time is read from `meta.decayed_at`, not from each row's own
+        timestamp, so running this twice in a day is not the same as running
+        it twice in a year — the second call finds ~0 days elapsed and changes
+        nothing. That is what makes it safe to call from any maintenance path.
+
+        Reinforcement is the other half: `touch_nodes` raises salience on what
+        gets used, so the net effect is the usual "decay everything, keep what
+        is used" and not a slow slide to the floor."""
+        now = datetime.now(timezone.utc)
+        last = self._meta_get("decayed_at")
+        try:
+            days = (now - datetime.fromisoformat(last)).total_seconds() / 86400.0
+        except (TypeError, ValueError):
+            days = 0.0                      # first run: start the clock, decay nothing
+        floor = self.DECAY["floor"]
+        out = {"days": round(days, 3), "links": 0, "tags": 0}
+        if days > 0:
+            lf = 0.5 ** (days / self.DECAY["link_half_life_days"])
+            tf = 0.5 ** (days / self.DECAY["tag_half_life_days"])
+            for row in self._conn.execute(
+                    "SELECT source_id, target_id, link_type, weight FROM node_links"
+            ).fetchall():
+                new = max(floor, row["weight"] * lf)
+                if new != row["weight"]:
+                    self._conn.execute(
+                        "UPDATE node_links SET weight = ? WHERE source_id = ? "
+                        "AND target_id = ? AND link_type = ?",
+                        (new, row["source_id"], row["target_id"], row["link_type"]))
+                    out["links"] += 1
+            for row in self._conn.execute(
+                    "SELECT id, salience FROM tags WHERE salience > 0").fetchall():
+                new = max(0.0, row["salience"] * tf)
+                if new != row["salience"]:
+                    self._conn.execute("UPDATE tags SET salience = ? WHERE id = ?",
+                                       (new, row["id"]))
+                    out["tags"] += 1
+        self._meta_set("decayed_at", now.isoformat())
+        return out
+
+    # -- L3/L4: parking ------------------------------------------------------
+
+    def park_candidates(self) -> list[dict]:
+        """Nodes the rules would move down a layer, with the reason.
+
+        Idle time is `now - COALESCE(last_used, created_at)`. The fallback is
+        not "content age" smuggled back in: a node that has never answered
+        anything since it was ingested has no activity signal, and how long it
+        has sat there unconsulted IS its inactivity. What is never consulted
+        is the age of the DOCUMENT — a decade-old spec that answers a query
+        every week stays in L2 forever."""
+        warm = set(self.session_cache())
+        rules = self.PARK_RULES
+        best_link: dict[int, float] = {}
+        for row in self._conn.execute(
+                "SELECT source_id, target_id, weight FROM node_links").fetchall():
+            for nid in (row["source_id"], row["target_id"]):
+                best_link[nid] = max(best_link.get(nid, 0.0), row["weight"] or 0.0)
+
+        out = []
+        for row in self._conn.execute(
+                "SELECT id, name, path, layer, "
+                "       CAST(julianday('now') - julianday(COALESCE(last_used, created_at)) "
+                "            AS REAL) AS idle_days "
+                "FROM nodes WHERE id != 0 ORDER BY idle_days DESC").fetchall():
+            layer = row["layer"] or self.LAYER_ACTIVE
+            if layer >= self.LAYER_DEEP:
+                continue
+            idle = row["idle_days"] or 0.0
+            target = (self.LAYER_DEEP if idle >= rules["idle_days_deep"]
+                      else self.LAYER_DORMANT if idle >= rules["idle_days_dormant"]
+                      else None)
+            if target is None or target <= layer:
+                continue
+            if row["id"] in warm:
+                continue                     # in the working set: not a candidate
+            link = best_link.get(row["id"], 0.0)
+            if link > rules["max_link_weight"]:
+                continue                     # well connected: reachable, keep it hot
+            out.append({"id": row["id"], "name": row["name"], "path": row["path"],
+                        "from_layer": layer, "to_layer": target,
+                        "idle_days": round(idle, 1), "max_link_weight": round(link, 3)})
+        return out
+
+    def park(self, apply: bool = False) -> dict:
+        """Move idle, weakly-linked nodes down a layer. DRY RUN by default.
+
+        Parking is off unless someone asks for it (§8.1): the cut points have
+        never been measured on a real corpus, and the failure mode of guessing
+        them is a library that quietly stops offering half of itself."""
+        cands = self.park_candidates()
+        if apply:
+            for c in cands:
+                self._conn.execute("UPDATE nodes SET layer = ? WHERE id = ?",
+                                   (c["to_layer"], c["id"]))
+            self._conn.commit()
+        return {"applied": apply, "count": len(cands), "candidates": cands}
+
+    def unpark(self, node_id: int) -> bool:
+        """Back to L2 by hand. `recall` already reaches a parked node; this is
+        for when it should stop being parked at all."""
+        cur = self._conn.execute(
+            "UPDATE nodes SET layer = ?, last_used = datetime('now') WHERE id = ?",
+            (self.LAYER_ACTIVE, node_id))
+        self._conn.commit()
+        return bool(getattr(cur, "rowcount", 0))
+
+    def layer_counts(self) -> dict:
+        rows = self._conn.execute(
+            "SELECT COALESCE(layer, 2) AS l, COUNT(*) AS n FROM nodes "
+            "WHERE id != 0 GROUP BY l").fetchall()
+        return {f"L{r['l']}": r["n"] for r in rows}
+
     def rebuild_links(self) -> dict:
         """Clear all links and rebuild from tags + cross-refs."""
         self._conn.execute("DELETE FROM node_links")
@@ -1477,7 +1749,8 @@ class KnowledgeGraph:
     MMR_LAMBDA = 0.7        # 1.0 = pure relevance, 0.0 = pure diversity
 
     def search(self, query: str, top_n: int = 5, node_id: "int | None" = None,
-               diversify: bool = True) -> list[dict]:
+               diversify: bool = True, deep: bool = False,
+               touch: bool = True) -> list[dict]:
         """Rank chunks for a free-text query, best first.
 
         Hybrid by default. It used to be either/or — vector if embeddings
@@ -1497,6 +1770,12 @@ class KnowledgeGraph:
         `rrf` | `cross-encoder`) — the number and the scale of the stage that
         ranked it. Diversification reorders without rescoring, so with
         `diversify=True` the order is deliberately not the score order.
+
+        `deep` includes parked (L3/L4) nodes — see `recall`, which is this with
+        the intent named. Answering marks the nodes used, which is what parking
+        and decay measure; `touch=False` is for callers that are inspecting the
+        vault rather than consulting it, so a diagnostic cannot keep a node
+        warm just by looking at it.
         """
         rr = getattr(self, "_reranker", None)
         rerank_on = bool(rr is not None and getattr(rr, "available", False))
@@ -1504,12 +1783,27 @@ class KnowledgeGraph:
         pool = max(top_n * 4, int(_st.get("rerank_pool") or 50)) if rerank_on \
             else max(top_n * 4, 20)
 
-        results = self._retrieve(query, pool, node_id=node_id)
+        results = self._retrieve(query, pool, node_id=node_id, deep=deep)
         if rerank_on and results:
             results = rr.rerank(query, results, max(top_n * 2, top_n))
         if diversify and len(results) > top_n:
             results = self._mmr(query, results, top_n)
-        return [_without_vector(r) for r in results[:top_n]]
+        final = [_without_vector(r) for r in results[:top_n]]
+        if touch and final:
+            hit_nodes = {r["node_id"] for r in final}
+            self.touch_nodes(hit_nodes)
+            self.cache_add(hit_nodes)
+        return final
+
+    def recall(self, query: str, top_n: int = 5) -> list[dict]:
+        """Search every layer, parked ones included.
+
+        The guarantee behind I5: whatever was parked comes back through here,
+        byte-identical, because parking never touched the content — only the
+        node's right to be scanned by default. This is `search(deep=True)` with
+        the intent in the name, so a caller does not have to know that L3 and
+        L4 exist to reach what is in them."""
+        return self.search(query, top_n=top_n, deep=True)
 
     def _scope_ids(self, node_id: "int | None") -> "list[int] | None":
         """The node and its whole subtree, or None for "the entire vault"."""
@@ -1555,13 +1849,25 @@ class KnowledgeGraph:
         # Anything without a vector keeps its original order behind the picks.
         return picked + [r for r in rows if r not in picked]
 
+    def _layer_clause(self, deep: bool) -> str:
+        """Keep parked nodes out of the default candidate scan (§3).
+
+        A subquery rather than an id list: the parked set can be most of a
+        mature vault, and an `IN (?,?,...)` of that size is a different kind of
+        problem. `deep` drops the clause entirely — that is what makes L3/L4 a
+        parking level and not a grave."""
+        return "" if deep else (
+            f" AND node_id IN (SELECT id FROM nodes "
+            f"WHERE COALESCE(layer, {self.LAYER_ACTIVE}) <= {self.LAYER_ACTIVE})")
+
     def _vector_candidates(self, qv, top_n: int,
-                           scope: "list[int] | None") -> list[dict]:
+                           scope: "list[int] | None",
+                           deep: bool = False) -> list[dict]:
         """Vector ranking. Turso does it in SQL (`vector_distance_cos`), which is
         why pyturso is the default tier; sqlite3 falls back to Python cosine."""
         if not qv:
             return []
-        where = "embedding IS NOT NULL"
+        where = "embedding IS NOT NULL" + self._layer_clause(deep)
         params: list = [self._pack_vec(qv)]
         if scope:
             where += f" AND node_id IN ({','.join('?' * len(scope))})"
@@ -1586,17 +1892,18 @@ class KnowledgeGraph:
         return [_scored(r, sim, "cosine") for sim, r in scored[:top_n]]
 
     def _lexical_candidates(self, query: str, top_n: int,
-                            scope: "list[int] | None") -> list[dict]:
-        sql = "SELECT * FROM chunks"
+                            scope: "list[int] | None",
+                            deep: bool = False) -> list[dict]:
+        sql = "SELECT * FROM chunks WHERE 1=1" + self._layer_clause(deep)
         params: tuple = ()
         if scope:
-            sql += f" WHERE node_id IN ({','.join('?' * len(scope))})"
+            sql += f" AND node_id IN ({','.join('?' * len(scope))})"
             params = tuple(scope)
         rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
         return self._rank_lexical(query, rows, top_n) if rows else []
 
     def _retrieve(self, query: str, top_n: int = 5,
-                  node_id: "int | None" = None) -> list[dict]:
+                  node_id: "int | None" = None, deep: bool = False) -> list[dict]:
         """First-stage retrieval: vector AND lexical, fused with RRF.
 
         Reciprocal Rank Fusion needs no score calibration — it combines the two
@@ -1604,9 +1911,12 @@ class KnowledgeGraph:
         without normalising either. That is what makes running both cheap enough
         to always do."""
         scope = self._scope_ids(node_id)
+        # Asking for a subtree by name IS the explicit request §3 lists next to
+        # `deep` and `recall`: someone who names a node already knows it exists.
+        deep = deep or scope is not None
         qv = self._get_query_embedding(query)
-        vector = self._vector_candidates(qv, top_n, scope)
-        lexical = self._lexical_candidates(query, top_n, scope)
+        vector = self._vector_candidates(qv, top_n, scope, deep)
+        lexical = self._lexical_candidates(query, top_n, scope, deep)
 
         if not vector:
             return lexical[:top_n]
@@ -1702,6 +2012,8 @@ class KnowledgeGraph:
             "embedded": embedded,
             "links": self.link_count(),
             "tags": tag_count,
+            "layers": self.layer_counts(),
+            "session_cache": len(self.session_cache()),
             # Was hardcoded 384 — wrong the moment the installer let anyone pick
             # mpnet (768) or e5-large (1024), and this is the number the GUI and
             # `neurag status` show.
