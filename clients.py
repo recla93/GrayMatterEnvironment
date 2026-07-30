@@ -171,18 +171,18 @@ def _zed_paths() -> list[str]:
 # server map; create=True means we may create the file if absent.
 CLIENTS: dict[str, dict] = {
     "claude-desktop": {"label": "Claude Desktop", "paths": _claude_desktop_paths,
-                       "keys": ["mcpServers"], "style": "args", "create": False},
+                       "keys": ["mcpServers"], "style": "args", "create_if_missing": False},
     "claude-code": {"label": "Claude Code", "paths": lambda: [_home(".claude.json")],
-                    "keys": ["mcpServers"], "style": "args", "create": False, "cli": True},
+                    "keys": ["mcpServers"], "style": "args", "create_if_missing": False, "cli": True},
     "cursor": {"label": "Cursor", "paths": lambda: [_home(".cursor", "mcp.json")],
-               "keys": ["mcpServers"], "style": "args", "create": True},
+               "keys": ["mcpServers"], "style": "args", "create_if_missing": False},
     "vscode": {"label": "VS Code", "paths": _vscode_paths,
                "keys": ["mcp", "servers"], "keys_for": _vscode_keys_for,
-               "style": "stdio", "create": False},
+               "style": "stdio", "create_if_missing": False},
     "zed": {"label": "Zed", "paths": _zed_paths,
-            "keys": ["context_servers"], "style": "args", "create": False},
+            "keys": ["context_servers"], "style": "args", "create_if_missing": False},
     "opencode": {"label": "OpenCode", "paths": lambda: [_home(".config", "opencode", "opencode.json")],
-                 "keys": ["mcp"], "style": "local", "create": True},
+                 "keys": ["mcp"], "style": "local", "create_if_missing": False},
     "windsurf": {"label": "Windsurf", "paths": _windsurf_paths,
                  "keys": ["mcpServers"], "style": "args", "create_if_missing": False},
     "codex": {"label": "Codex CLI", "paths": lambda: [_home(".codex", "config.toml")],
@@ -390,11 +390,17 @@ def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
         if only and ckey not in only:
             continue
         paths = [p for p in spec["paths"]() if os.path.exists(p)]
-        # "create_if_missing", the key neuron/clients.py and neurag/clients.py
-        # actually use. This read "create", which no spec anywhere defines — so
-        # the opt-in was unreachable here while the two peers honoured it and
-        # created configs for apps that are not installed. Same key, same
-        # default (False), one behaviour across the three.
+        # One key across the three repos (I6): the peers read and write
+        # `create_if_missing`, and now so do these specs. They used to say
+        # `create`, which this reader never looked at — so `cursor` and
+        # `opencode`, both set to True, were dead letters.
+        #
+        # Renaming them is NOT permission to switch them on. Every flag here is
+        # False on purpose: `test_no_client_config_is_created_for_an_app_that_is
+        # _not_installed` forbids inventing a config for an app that is absent,
+        # because `executor.detect_state()` then counts that client as present
+        # forever and keeps deploying hooks into it. GM happened to comply while
+        # the key was dead; now it complies because it says so.
         if not paths and not spec.get("create_if_missing"):
             results.append({"client": spec["label"], "ok": False,
                             "action": "skipped", "detail": "client not found"})

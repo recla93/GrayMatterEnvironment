@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from collections import deque
 from pathlib import Path
 
@@ -997,7 +998,17 @@ def _build_server(api: Api):
             try:
                 result = fn(raw) if raw else fn()
             except Exception as exc:  # noqa: BLE001
-                result = {"error": str(exc)}
+                # `str(exc)` alone is a symptom with no address. "'str' object
+                # has no attribute 'get'" was reported from the clients panel
+                # and cost an hour of guessing, because the one thing that says
+                # WHERE — the traceback — was discarded here, at the only point
+                # where it still exists. The panel keeps showing the short
+                # message; `where` gives whoever is debugging the file and line,
+                # and the console line survives even if the browser is closed.
+                tb = traceback.format_exc()
+                print(f"[gui] {name} failed:\n{tb}", file=sys.stderr, flush=True)
+                result = {"error": str(exc), "endpoint": name,
+                          "where": tb.strip().splitlines()[-3:]}
             self._send(200, json.dumps(result).encode("utf-8"), "application/json")
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
