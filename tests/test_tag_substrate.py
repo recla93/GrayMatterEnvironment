@@ -192,6 +192,34 @@ def test_chunk_tags_written_and_replaced_on_reingest(tmp_path):
     kg.close()
 
 
+# ---------- the substrate is visible to the diagnostics ----------
+
+def test_status_counts_tags():
+    kg = _kg()
+    assert kg.status()["tags"] == 0
+    kg.add_node("A", "fundamental", parent_id=0, tags=["x", "y"])
+    assert kg.status()["tags"] == 2
+    kg.close()
+
+
+def test_health_audits_the_join_tables_that_have_no_foreign_key():
+    """delete_node and the per-file re-ingest clean these rows by hand, because
+    pyturso stack-overflows on cascade triggers. A missed delete site leaves a
+    row pointing at a dead id, and nothing else would ever say so."""
+    kg = _kg()
+    a = kg.add_node("A", "fundamental", parent_id=0, tags=["x"])
+    assert kg.health()["warnings"]["dangling_tag_links"] == 0
+    kg._conn.execute("INSERT INTO node_tags (node_id, tag_id) VALUES (?, ?)",
+                     (9999, kg._tag_id("x")))
+    kg._conn.execute("INSERT INTO chunk_tags (chunk_id, tag_id) VALUES (?, ?)",
+                     (9999, kg._tag_id("x")))
+    kg._conn.commit()
+    assert kg.health()["warnings"]["dangling_tag_links"] == 2
+    kg.delete_node(a)
+    assert kg.health()["warnings"]["dangling_tag_links"] == 2   # only the fakes
+    kg.close()
+
+
 # ---------- the phase gate: link count within 2x of the legacy path ----------
 
 def test_link_count_matches_the_legacy_json_computation():

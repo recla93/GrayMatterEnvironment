@@ -1675,7 +1675,7 @@ class KnowledgeGraph:
                 "db_path": str(self._db_path),
                 "corrupt": True,
                 "error": self._corrupt_err,
-                "nodes": 0, "chunks": 0, "embedded": 0, "links": 0,
+                "nodes": 0, "chunks": 0, "embedded": 0, "links": 0, "tags": 0,
                 "embedding_dim": 384,
                 "hint": "knowledge.db corrotto — ripristina un backup o rifai "
                         "l'ingest (le fonti su disco sono intatte).",
@@ -1685,6 +1685,7 @@ class KnowledgeGraph:
         embedded = self._conn.execute(
             "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL"
         ).fetchone()[0]
+        tag_count = self._conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0]
         db_str = str(self._db_path)
         engine = getattr(self, "_engine_name", "Turso (local)")
         out = {
@@ -1697,6 +1698,7 @@ class KnowledgeGraph:
             "chunks": chunk_count,
             "embedded": embedded,
             "links": self.link_count(),
+            "tags": tag_count,
             # Was hardcoded 384 — wrong the moment the installer let anyone pick
             # mpnet (768) or e5-large (1024), and this is the number the GUI and
             # `neurag status` show.
@@ -1765,6 +1767,15 @@ class KnowledgeGraph:
             "SELECT COUNT(*) FROM chunks WHERE source IS NULL OR source = ''")
         nodes_without_triggers = count(
             "SELECT COUNT(*) FROM nodes WHERE id != 0 AND (triggers IS NULL OR triggers = '[]')")
+        # The tag join tables carry no foreign key — pyturso 0.6.1 stack-overflows
+        # on cascade triggers, so `delete_node` and the per-file re-ingest clean
+        # their rows by hand. A dangling row is exactly the failure mode of that
+        # decision, and this is where the vault gets audited for it.
+        dangling_tag_links = count(
+            "SELECT (SELECT COUNT(*) FROM node_tags "
+            "        WHERE node_id NOT IN (SELECT id FROM nodes)) "
+            "     + (SELECT COUNT(*) FROM chunk_tags "
+            "        WHERE chunk_id NOT IN (SELECT id FROM chunks))")
 
         serious = len(broken_hierarchy) + len(tiny_chunks) + len(duplicate_node_names)
         return {
@@ -1779,5 +1790,6 @@ class KnowledgeGraph:
                 "orphan_nodes": orphan_nodes,
                 "chunks_without_source": chunks_without_source,
                 "nodes_without_triggers": nodes_without_triggers,
+                "dangling_tag_links": dangling_tag_links,
             },
         }

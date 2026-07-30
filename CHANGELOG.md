@@ -1,6 +1,24 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **Il substrato dei tag è visibile alle diagnostiche**: `status()` riporta
+  `tags`, e `health()` conta `dangling_tag_links` — righe di `node_tags`/
+  `chunk_tags` che puntano a id morti. Quelle tabelle non hanno foreign key
+  (pyturso 0.6.1 va in stack overflow sui cascade), quindi `delete_node` e il
+  re-ingest per file le puliscono a mano: una riga penzolante è esattamente il
+  modo in cui quella scelta può rompersi, e l'audit strutturale è il posto dove
+  accorgersene.
+- **I2 finalmente asserito, non solo dichiarato** (`tests/test_standalone_invariant.py`):
+  i peer vengono resi non importabili e i moduli di NeuRAG devono caricare
+  comunque. Copre anche una dipendenza introdotta tre moduli più in là, che un
+  grep su `^import` non vedrebbe. Non è un divieto di *nominare* un peer: un
+  `try/except ImportError` a livello di modulo è il modo corretto di dire che la
+  dipendenza è opzionale (`server.py` lo fa con `gray_matter.server`).
+- **`search()` e `get_chunks()` non restituiscono più il vettore**: il blob da
+  384 float è macchinario di ranking (lo leggono MMR e il fallback coseno dentro
+  `db.py`, nessuno fuori), e `neurag query --json` lo serializzava con
+  `default=str`, seppellendo i campi leggibili sotto una pagina di byte
+  escapati. Tolto ai due confini pubblici, non a ogni stampante. Nel vault resta.
 - **`search()` dice sempre quanto e su che scala**: ogni risultato porta `score`
   e `score_from` (`cosine` | `bm25` | `rrf` | `cross-encoder`). Prima il punteggio
   esisteva solo come `sim`, attaccato dal ramo vettoriale: le righe arrivate da
