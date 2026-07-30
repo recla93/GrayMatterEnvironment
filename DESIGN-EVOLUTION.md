@@ -119,11 +119,23 @@ Four real gaps — and the first one is a direct violation of I2:
    Fixed at the root — `fastembed` is now a hard dependency, mirroring Neuron, so all six
    installers inherit it through pip resolution rather than four call sites needing the
    extras syntax. This does **not** force a model download: weights are fetched lazily on
-   first `TextEmbedding(...)`, so the installer's "none — lexical only, no model download"
-   answer is unchanged. `lexical_only_requested()` now separates a *chosen* lexical mode
+   first `TextEmbedding(...)`. `lexical_only_requested()` separates a *chosen* lexical mode
    from an *accidental* one, and `status()` reports `search_mode` as
    `semantic` / `lexical (requested)` / `lexical (DEGRADED)` with a fix hint.
    Verified: `pip show neurag` → `Requires: fastembed, mcp, pyturso`.
+
+   **Half-finished until 2026-07-30.** The dependency became mandatory; the installers
+   kept offering `"none" — lexical only, no model download` as the second menu entry, and
+   the comment above it still explained that NeuRAG "is lexical-only without fastembed"
+   and that the model is mandatory "unlike Neuron". Both statements had been false since
+   this fix landed. Worse, the branch behind that entry wrote `embed_model = ''`, and `''`
+   means *follow Neuron / the multilingual default* — so it printed "no embedding model
+   will be downloaded", configured the model it had just promised not to fetch, and
+   downloaded it on first use. Nothing ever wrote the literal `"none"` that
+   `lexical_only_requested()` looks for, so the *chosen* lexical mode the same fix
+   introduced was unreachable from the installer that was supposed to offer it.
+   The entry is gone from both pickers. Lexical-only remains where an expert knob belongs:
+   `neurag config set embed_model none`. Removed from the menu, not from the runtime.
 
 Then:
 

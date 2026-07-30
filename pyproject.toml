@@ -22,10 +22,14 @@ dependencies = [
     # not be, and it failed silently: picking multilingual-e5-large at install
     # time produced worse results than the default, with nothing said.
     #
-    # This does NOT force a model download. fastembed fetches weights lazily on
-    # the first TextEmbedding(...) construction, so the "none — lexical only, no
-    # model download" answer stays exactly as advertised; it just no longer
-    # decides whether embedding is *possible*.
+    # This does NOT force a model download: fastembed fetches weights lazily on
+    # the first TextEmbedding(...) construction. It decides whether embedding is
+    # POSSIBLE, not whether it happens on install day.
+    #
+    # The installers used to keep a "none — lexical only" menu entry from the
+    # days of the optional extra. It contradicted this line and it did not even
+    # work (it wrote embed_model = '', which means "the default model"), so it
+    # is gone; lexical-only lives at `neurag config set embed_model none`.
     "fastembed>=0.5.0,<1.0",
 ]
 

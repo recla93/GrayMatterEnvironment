@@ -8,7 +8,6 @@
 #   -Clear / --clear  → last resort: delete the venv and rebuild (implies -Force).
 #                       CODE only — graphs/knowledge.db/bridges are never touched.
 #   -EmbedModel <name>  -> embedding model to install (skips the prompt).
-#                       "none" = lexical only (no model download).
 param([switch]$Force, [switch]$Clear, [string]$EmbedModel = "")
 $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -166,17 +165,30 @@ function Ensure-Python {
 }
 
 
-# Embedding model choice. NeuRAG is lexical-only without fastembed, so "none" is
-# a real answer here (it is the zero-download standalone story from embedder.py)
-# - unlike Neuron, where the model is mandatory. The vault is EMPTY at install
-# time, the only moment this is free: vectors of different models/widths are not
-# comparable, so changing it later means re-indexing everything.
+# Embedding model choice. Embedding is MANDATORY, exactly as in Neuron:
+# fastembed and pyturso are hard dependencies of the package, so this install
+# fails rather than proceeding without them. There used to be a "none - lexical
+# only" answer here, from when fastembed was an optional extra. It outlived that
+# and had to go, for two reasons:
+#   * it contradicted the dependency. NeuRAG's own measurement is recall@5 67%
+#     vector-only -> 94% hybrid (§6b): an install that answers "lexical only" is
+#     shipping the degraded half of the tool as a menu entry;
+#   * it did not even do what it said. It wrote embed_model = '' , and '' means
+#     "follow Neuron / the multilingual default" — so it configured the very
+#     model it promised not to download, printed "no embedding model will be
+#     downloaded", and fetched one on first use. `lexical_only_requested()`
+#     looks for the literal string "none", which nothing ever wrote.
+# Lexical-only is still reachable for whoever genuinely wants it, where an
+# expert knob belongs: `neurag config set embed_model none`. Nothing was
+# removed from the runtime — only from the menu that recommended it.
+# The vault is EMPTY at install time, the only moment this choice is free:
+# vectors of different models/widths are not comparable, so changing it later
+# means re-indexing everything.
 # Persisted via neurag/settings.py (the tool's own config surface), NOT an env
 # var: the MCP client respawns the server from an arbitrary cwd.
 # Names/dims verified against fastembed's list_supported_models().
 $EmbedModels = @(
     @{ name = "";                                                            dim = 0;    size = "0 MB";   note = "Follow Neuron / default multilingual - one shared vector space (recommended)" },
-    @{ name = "none";                                                        dim = 0;    size = "0 MB";   note = "Lexical only - no model download, fully standalone" },
     @{ name = "sentence-transformers/all-MiniLM-L6-v2";                      dim = 384;  size = "90 MB";  note = "English only - smallest and fastest" },
     @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual, stronger - 2x storage per vector" },
     @{ name = "intfloat/multilingual-e5-large";                              dim = 1024; size = "2.2 GB"; note = "multilingual, best quality - heavy (RAM + disk)" }
@@ -192,7 +204,7 @@ function Select-EmbedModel {
     for ($i = 0; $i -lt $EmbedModels.Count; $i++) {
         $m = $EmbedModels[$i]
         Write-Host ("    [{0}] {1}" -f ($i + 1), $m.note)
-        if ($m.name -and $m.name -ne "none") {
+        if ($m.name) {
             Write-Host ("        {0}  ({1}-dim, {2})" -f $m.name, $m.dim, $m.size)
         }
     }
@@ -203,11 +215,6 @@ function Select-EmbedModel {
     return $EmbedModels[0]
 }
 function Save-EmbedModel([string]$Vpy, $Model) {
-    if ($Model.name -eq "none") {
-        & $Vpy -c "from neurag import settings; settings.set('embed_model', ''); print('lexical only')"
-        Write-Host "  Lexical-only mode: no embedding model will be downloaded."
-        return
-    }
     if (-not $Model.name) { Write-Host "  Embedding model: following Neuron / the multilingual default." }
     $dim = $Model.dim
     if ($Model.name -and $dim -eq 0) {

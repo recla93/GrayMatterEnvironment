@@ -1,6 +1,27 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **Gli installer non offrono più di saltare l'embedding.** `fastembed` e
+  `pyturso` sono hard dependency del package dalla 1.2.2: un install le ha o
+  fallisce, esattamente come in Neuron. I picker però tenevano ancora la voce
+  `"none" — Lexical only, no model download` dai tempi in cui `fastembed` era un
+  extra opzionale, e il commento sopra spiegava che NeuRAG "è lexical-only senza
+  fastembed" e che il modello è obbligatorio "a differenza di Neuron" — due
+  affermazioni false da quando quel fix è entrato.
+  E quella voce non faceva nemmeno ciò che diceva: scriveva `embed_model = ''`,
+  che significa *segui Neuron / default multilingua*. Stampava "no embedding
+  model will be downloaded", configurava il modello che aveva appena promesso di
+  non scaricare, e lo scaricava al primo uso. La stringa letterale `"none"` che
+  `lexical_only_requested()` cerca non veniva scritta da nessuno, quindi la
+  modalità lessicale *scelta* era irraggiungibile dall'installer che doveva
+  offrirla.
+  Il lessicale puro resta dove sta una manopola da esperti:
+  `neurag config set embed_model none`. Tolto dal menu, non dal runtime.
+  Due test nuovi in `gray_matter/tests/test_installer_parity.py`: nessun
+  installer dei tre può offrire di saltare l'embedder, e i due picker dello
+  stesso progetto (`.ps1` e `.sh`) devono elencare gli stessi modelli — il
+  commento diceva "keep in sync" e non lo verificava niente, mentre rinumerare
+  una lista sposta ogni `EM_n` e ogni ramo del `case`.
 - **Layer L1-L4 (DESIGN-EVOLUTION §3, P4)**: nessun layer è una tomba. Un nodo
   parcheggiato perde solo il diritto di essere scandito di default — chunk, link
   e tag restano dove sono, e `recall` arriva ovunque.

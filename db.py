@@ -398,6 +398,16 @@ CREATE TABLE IF NOT EXISTS node_links (
     evidence    TEXT    DEFAULT '',
     created_at  TEXT    DEFAULT (datetime('now')),
     updated_at  TEXT    DEFAULT (datetime('now')),
+    -- Where this link came from. 'auto' is derived from tags and mentions and
+    -- is rebuilt from scratch on every ingest; anything else was learned or
+    -- curated and must OUTLIVE that rebuild. Before this column,
+    -- `rebuild_links` opened with a bare DELETE, so the graph could not learn
+    -- and a hand-made link had a lifetime of one re-ingest.
+    origin      TEXT    DEFAULT 'auto',
+    -- Hebbian: how many times both ends were confirmed useful together, and
+    -- the query index of the last count (the cooldown reads it).
+    co_activation_count INTEGER DEFAULT 0,
+    last_coactivation   INTEGER DEFAULT 0,
     PRIMARY KEY (source_id, target_id, link_type)
 );
 
@@ -441,6 +451,9 @@ CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag_id);
 ADDED_COLUMNS = (
     ("nodes", "layer", "INTEGER DEFAULT 2"),
     ("nodes", "last_used", "TEXT"),
+    ("node_links", "origin", "TEXT DEFAULT 'auto'"),
+    ("node_links", "co_activation_count", "INTEGER DEFAULT 0"),
+    ("node_links", "last_coactivation", "INTEGER DEFAULT 0"),
 )
 
 # Indexes run LAST, after ADDED_COLUMNS. An index over a column added by that
@@ -1071,21 +1084,33 @@ class KnowledgeGraph:
 
     def upsert_link(self, source_id: int, target_id: int,
                     link_type: str, weight: float = 1.0,
-                    evidence: str = "", commit: bool = True) -> None:
+                    evidence: str = "", commit: bool = True,
+                    origin: str = "auto") -> None:
         """Insert or update a link between two nodes. Self-links are silently ignored.
 
         `commit=False` lets a bulk builder write thousands of links in one
-        transaction instead of one fsync per row."""
+        transaction instead of one fsync per row.
+
+        A derived write NEVER overwrites a learned one. The builders re-upsert
+        every pair on each ingest, so without the `WHERE` below a link the user
+        confirmed — or one Hebbian promotion raised — would silently get its
+        weight replaced by the Jaccard number it started from. Deleting only
+        `origin='auto'` in `rebuild_links` is not enough on its own: the
+        rebuild would clobber the survivor on the way back in.
+        """
         if source_id == target_id:
             return
         self._conn.execute("""
-            INSERT INTO node_links (source_id, target_id, link_type, weight, evidence, updated_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO node_links (source_id, target_id, link_type, weight,
+                                    evidence, updated_at, origin)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
             ON CONFLICT(source_id, target_id, link_type) DO UPDATE SET
                 weight = excluded.weight,
                 evidence = excluded.evidence,
+                origin = excluded.origin,
                 updated_at = datetime('now')
-        """, (source_id, target_id, link_type, weight, evidence))
+            WHERE excluded.origin != 'auto' OR node_links.origin = 'auto'
+        """, (source_id, target_id, link_type, weight, evidence, origin))
         if commit:
             self._conn.commit()
 
@@ -1568,12 +1593,20 @@ class KnowledgeGraph:
         return {f"L{r['l']}": r["n"] for r in rows}
 
     def rebuild_links(self) -> dict:
-        """Clear all links and rebuild from tags + cross-refs."""
-        self._conn.execute("DELETE FROM node_links")
+        """Rebuild the DERIVED links from tags + cross-refs.
+
+        Only `origin='auto'` is cleared. This runs at the end of every ingest,
+        and it used to open with a bare `DELETE FROM node_links` — so the graph
+        could not learn anything and a curated link had a lifetime of exactly
+        one re-ingest (§5.1)."""
+        kept = self._conn.execute(
+            "SELECT COUNT(*) FROM node_links WHERE origin != 'auto'").fetchone()[0]
+        self._conn.execute("DELETE FROM node_links WHERE origin = 'auto'")
         self._conn.commit()
         tag_count = self.build_tag_links()
         xref_count = self.build_crossref_links()
-        return {"tag_overlap": tag_count, "cross_ref": xref_count, "total": tag_count + xref_count}
+        return {"tag_overlap": tag_count, "cross_ref": xref_count,
+                "kept": kept, "total": tag_count + xref_count}
 
     def search_with_links(self, query: str, top_k: int = 5) -> list[dict]:
         """Search, then enrich each result with links to other result nodes."""

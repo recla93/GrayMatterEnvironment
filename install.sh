@@ -113,18 +113,28 @@ ensure_python() {
     exit 1
 }
 
-# Embedding model choice. NeuRAG is lexical-only without fastembed, so "none" is
-# a real answer here - unlike Neuron, where the model is mandatory. The vault is
-# EMPTY at install time, the only moment this is free: vectors of different
-# models/widths are not comparable, so changing it later means re-indexing.
+# Embedding model choice. Embedding is MANDATORY, exactly as in Neuron:
+# fastembed and pyturso are hard dependencies of the package, so this install
+# fails rather than proceeding without them. There used to be a "none - lexical
+# only" answer here, from when fastembed was an optional extra. It outlived that
+# and had to go: it contradicted the dependency (recall@5 is 67% vector-only vs
+# 94% hybrid, §6b - that menu entry shipped the degraded half of the tool), and
+# it did not do what it said either. It wrote embed_model = '' , and '' means
+# "follow Neuron / the multilingual default", so it configured the very model it
+# promised not to download. `lexical_only_requested()` looks for the literal
+# string "none", which nothing ever wrote.
+# Lexical-only stays reachable where an expert knob belongs:
+# `neurag config set embed_model none`. Removed from the menu, not the runtime.
+# The vault is EMPTY at install time, the only moment this is free: vectors of
+# different models/widths are not comparable, so changing it later means
+# re-indexing.
 # Persisted via neurag/settings.py (the tool's own config surface), NOT an env
 # var: the MCP client respawns the server from an arbitrary cwd.
 # Keep in sync with $EmbedModels in install.ps1.
 EM_1="|0|0 MB|Follow Neuron / default multilingual - one shared vector space (recommended)"
-EM_2="none|0|0 MB|Lexical only - no model download, fully standalone"
-EM_3="sentence-transformers/all-MiniLM-L6-v2|384|90 MB|English only - smallest and fastest"
-EM_4="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger - 2x storage per vector"
-EM_5="intfloat/multilingual-e5-large|1024|2.2 GB|multilingual, best quality - heavy (RAM + disk)"
+EM_2="sentence-transformers/all-MiniLM-L6-v2|384|90 MB|English only - smallest and fastest"
+EM_3="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger - 2x storage per vector"
+EM_4="intfloat/multilingual-e5-large|1024|2.2 GB|multilingual, best quality - heavy (RAM + disk)"
 CHOSEN_MODEL=""; CHOSEN_DIM=""; CHOSEN_SIZE=""
 _set_chosen() {
     CHOSEN_MODEL="${1%%|*}"; _r="${1#*|}"
@@ -132,7 +142,7 @@ _set_chosen() {
 }
 select_embed_model() {
     if [ -n "$EMBED_MODEL" ]; then
-        for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4" "$EM_5"; do
+        for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4"; do
             [ "${e%%|*}" = "$EMBED_MODEL" ] && { _set_chosen "$e"; return; }
         done
         CHOSEN_MODEL="$EMBED_MODEL"; CHOSEN_DIM=0; CHOSEN_SIZE="?"; return
@@ -141,12 +151,12 @@ select_embed_model() {
     echo ""
     echo "  Embedding model for the vault (downloaded once):"
     i=1
-    for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4" "$EM_5"; do
+    for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4"; do
         _rest="${e#*|}"; _dim="${_rest%%|*}"
         _rest="${_rest#*|}"; _size="${_rest%%|*}"; _note="${_rest#*|}"
         echo "    [$i] $_note"
         _nm="${e%%|*}"
-        [ -n "$_nm" ] && [ "$_nm" != "none" ] && echo "        $_nm  (${_dim}-dim, ${_size})"
+        [ -n "$_nm" ] && echo "        $_nm  (${_dim}-dim, ${_size})"
         i=$((i + 1))
     done
     echo ""
@@ -156,17 +166,11 @@ select_embed_model() {
         2) _set_chosen "$EM_2" ;;
         3) _set_chosen "$EM_3" ;;
         4) _set_chosen "$EM_4" ;;
-        5) _set_chosen "$EM_5" ;;
         *) _set_chosen "$EM_1" ;;
     esac
 }
 save_embed_model() {  # $1 = venv python
     _vpy="$1"
-    if [ "$CHOSEN_MODEL" = "none" ]; then
-        "$_vpy" -c "from neurag import settings; settings.set('embed_model', '')" 2>/dev/null || true
-        echo "  Lexical-only mode: no embedding model will be downloaded."
-        return 0
-    fi
     if [ -z "$CHOSEN_MODEL" ]; then
         echo "  Embedding model: following Neuron / the multilingual default."
         return 0
