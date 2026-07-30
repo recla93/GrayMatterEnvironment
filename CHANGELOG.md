@@ -1,5 +1,18 @@
 # Changelog — Neuron
 
+## Unreleased
+- **Un `;` dentro un commento SQL non può più troncare uno schema**
+  (`db.py:_split_sql`). Il client remoto non ha `executescript`, quindi
+  `RemoteTursoConnection` taglia lo script su `;` a mano: un punto e virgola
+  dentro un `--` spezzava la statement che lo conteneva e il motore riceveva
+  "incomplete input", con una tabella mancante in silenzio. Gli schemi di Neuron
+  non hanno commenti SQL, quindi qui non era mai scattato — è scattato in NeuRAG,
+  il cui `db.py` è la porta keep-in-sync di questo file, appena qualcuno ha
+  commentato una colonna. Difetto latente, cioè in attesa di chi documenta una
+  colonna: sistemato su entrambi i lati perché il prossimo che copia copi il fix.
+  Test: `tests/test_sql_script_split.py`, che fa passare anche gli schemi veri
+  di `models.py`/`engine.py` attraverso lo splitter vero.
+
 ## 6.1.2
 - **GUI Tkinter ritirata**. Cancellato `src/neuron/gui.py` e le entry
   `neuron-gui` da `[project.scripts]`/`[project.gui-scripts]`: `neuron-gui.exe`

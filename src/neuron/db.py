@@ -25,6 +25,7 @@ imported has no effect. Set them before importing any ``neuron`` module, or use
 from __future__ import annotations
 
 import os
+import re as _re
 import sqlite3 as _sqlite3
 import time as _time
 from typing import Any, Sequence
@@ -282,12 +283,29 @@ class RemoteTursoConnection:
         return _RemoteCursor(self)
 
     def executescript(self, script: str) -> None:
-        stmts = [s.strip() for s in script.split(";") if s.strip()]
-        for s in stmts:
+        for s in _split_sql(script):
             self.execute(s)
 
     def close(self) -> None:
         self._client.close()
+
+
+def _split_sql(script: str) -> list[str]:
+    """Split a SQL script into executable statements.
+
+    Comments are stripped BEFORE the split. The remote client has no
+    ``executescript``, so the wrapper above cuts on ';' by hand — and a ';'
+    inside a ``--`` comment truncates the statement that contains it, leaving
+    the engine with "incomplete input" and the schema silently short a table.
+    Neuron's own schemas carry no SQL comments today, so this never fired here;
+    it fired in NeuRAG, whose db.py is the keep-in-sync port of this file, the
+    first time someone commented a column. Fixed on both sides so the next
+    person to copy between them copies the fix.
+
+    ponytail: no string-literal awareness. Neither schema quotes a '--'; if one
+    ever does, this needs a real tokenizer, not a bigger regex.
+    """
+    return [s.strip() for s in _re.sub(r"--[^\n]*", "", script).split(";") if s.strip()]
 
 
 def _ensure_parent_dir(path: str) -> None:
