@@ -1,5 +1,28 @@
 # Changelog — NeuRAG
 
+## Unreleased
+- **Tag substrate (DESIGN-EVOLUTION §4, P1)**: un tag smette di essere una
+  stringa dentro cinque colonne JSON e diventa una riga. Nuove tabelle `tags`
+  (`name` normalizzato, `uses`, `salience`, `last_used`), `node_tags`,
+  `chunk_tags` + indici. `add_node`/`add_tags` scrivono entrambi i lati —
+  la colonna legacy `nodes.tags` resta il read path finché la migrazione non è
+  verificata sui vault reali.
+  - **Migrazione idempotente**: al primo open il vault esistente viene
+    ribaltato dalla colonna JSON a `node_tags`, poi il flag `meta.tags_migrated`
+    salta la scansione. Rieseguirla non scrive nulla.
+  - **Normalizzazione = join key**: `Cache`, `cache ` e `CACHE` sono un tag solo.
+  - **IDF suppression**: un tag portato da più di metà dei nodi
+    (`MAX_TAG_NODE_RATIO=0.5`, sotto `MIN_TAG_NODE_FLOOR=50` nodi non si
+    sopprime niente) non genera più coppie candidate. Toglie anche il costo
+    O(n²) che il floor Jaccard non toccava: quello limitava le SCRITTURE, non i
+    confronti. La misura di similarità è invariata — il tag comune resta nel
+    denominatore Jaccard, cambia solo quali coppie vengono considerate.
+  - **`build_tag_links` legge `node_tags`**, non più il JSON di ogni nodo.
+  - `chunk_tags` popolata da `index_into_node`; il replace per-file cancella le
+    righe di join prima dei chunk (niente FK cascade: pyturso 0.6.1).
+  - Test: `tests/test_tag_substrate.py` (11), incluso il gate di fase
+    "link count invariato rispetto al path JSON legacy".
+
 ## 1.2.2
 - **`config --json`**: `neurag config list --json` emette i knob strutturati
   (value/default/type/help/suggest) e `config set/get --json` l'esito — così il

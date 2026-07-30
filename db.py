@@ -353,6 +353,28 @@ CREATE INDEX IF NOT EXISTS idx_links_target ON node_links(target_id);
 -- a settings file can be edited, copied, or reset independently of the vault,
 -- and then nothing knows the stored vectors are from a different space.
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+-- The tag substrate (DESIGN-EVOLUTION §4). One atom had five representations
+-- and no join key: chunk.tags, node.triggers, node.tags, Neuron keywords, GM
+-- endpoint strings. Here a tag is a row, and `uses` (how many nodes carry it)
+-- makes IDF suppression a lookup instead of a hand-maintained stop list.
+-- `nodes.tags` / `nodes.triggers` stay as the legacy read path until the
+-- migration has been verified on real vaults.
+CREATE TABLE IF NOT EXISTS tags (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name      TEXT    NOT NULL UNIQUE,   -- normalized: lowercase, trimmed
+    uses      INTEGER DEFAULT 0,         -- document frequency, drives IDF suppression
+    salience  REAL    DEFAULT 0.0,       -- Hebbian home for P5, unused in P1
+    last_used TEXT
+);
+-- No FK on purpose: pyturso 0.6.1 stack-overflows on cascade triggers (see
+-- delete_node), so every delete site cleans these rows explicitly instead.
+CREATE TABLE IF NOT EXISTS node_tags  (node_id  INTEGER NOT NULL, tag_id INTEGER NOT NULL,
+                                       PRIMARY KEY (node_id, tag_id));
+CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER NOT NULL, tag_id INTEGER NOT NULL,
+                                       PRIMARY KEY (chunk_id, tag_id));
+CREATE INDEX IF NOT EXISTS idx_node_tags_tag  ON node_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag_id);
 """
 
 
@@ -578,6 +600,7 @@ class KnowledgeGraph:
                 if s:
                     self._conn.execute(s)
             self._conn.commit()
+            self._migrate_tags()
         except Exception as e:  # noqa: BLE001 — "file is not a database" & simili
             # DB malformato: non alziamo qui, così i comandi diagnostici
             # (status/health/doctor) possono girare e DIRLO invece di crashare.
@@ -620,7 +643,10 @@ class KnowledgeGraph:
              json.dumps(tags or []), json.dumps(triggers or [])),
         )
         self._conn.commit()
-        return cur.lastrowid
+        node_id = cur.lastrowid
+        if tags:
+            self._sync_node_tags(node_id, tags)
+        return node_id
 
     def _merge_json_list(self, node_id: int, column: str,
                          values: list[str], cap: int) -> None:
@@ -643,6 +669,82 @@ class KnowledgeGraph:
         self._conn.execute(f"UPDATE nodes SET {column} = ? WHERE id = ?",
                            (json.dumps(merged), node_id))
         self._conn.commit()
+        return merged
+
+    # -- tag substrate (DESIGN-EVOLUTION §4) ---------------------------------
+
+    @staticmethod
+    def _norm_tag(name: str) -> str:
+        """Normalization IS the join key: `Cache`, `cache ` and `CACHE` are one
+        tag or the substrate buys nothing."""
+        return (name or "").strip().lower()
+
+    def _tag_id(self, name: str) -> "int | None":
+        norm = self._norm_tag(name)
+        if not norm:
+            return None
+        self._conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (norm,))
+        row = self._conn.execute(
+            "SELECT id FROM tags WHERE name = ?", (norm,)).fetchone()
+        return row["id"] if row else None
+
+    def _refresh_tag_uses(self, tag_ids) -> None:
+        """`uses` is recomputed from node_tags, never incremented. IDF
+        suppression reads this column, and a counter that drifts silently
+        un-suppresses (or hides) tags with no way to notice."""
+        for tid in set(tag_ids):
+            self._conn.execute(
+                "UPDATE tags SET uses = (SELECT COUNT(*) FROM node_tags WHERE tag_id = ?) "
+                "WHERE id = ?", (tid, tid))
+
+    def _sync_node_tags(self, node_id: int, names: list[str],
+                        commit: bool = True) -> None:
+        """Make node_tags mirror `names` exactly — removals included, so the
+        relational side never drifts from the legacy column's 40-tag cap."""
+        want = {t for t in (self._tag_id(n) for n in names or []) if t}
+        have = {r["tag_id"] for r in self._conn.execute(
+            "SELECT tag_id FROM node_tags WHERE node_id = ?", (node_id,)).fetchall()}
+        for tid in want - have:
+            self._conn.execute(
+                "INSERT INTO node_tags (node_id, tag_id) VALUES (?, ?)", (node_id, tid))
+        for tid in have - want:
+            self._conn.execute(
+                "DELETE FROM node_tags WHERE node_id = ? AND tag_id = ?", (node_id, tid))
+        self._refresh_tag_uses(want ^ have)
+        if commit:
+            self._conn.commit()
+
+    def _sync_chunk_tags(self, chunk_id: int, names: list[str],
+                         commit: bool = True) -> None:
+        """Chunks are replaced, never edited, so this side is insert-only."""
+        for tid in {t for t in (self._tag_id(n) for n in names or []) if t}:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO chunk_tags (chunk_id, tag_id) VALUES (?, ?)",
+                (chunk_id, tid))
+        if commit:
+            self._conn.commit()
+
+    def _migrate_tags(self) -> None:
+        """Backfill node_tags from the legacy `nodes.tags` JSON column.
+
+        Idempotent twice over: the meta flag skips the scan after the first
+        run, and `_sync_node_tags` is a mirror operation anyway — running it
+        again on unchanged data writes nothing. chunk_tags has no legacy source
+        to backfill from; it fills on the next ingest."""
+        if self._conn.execute(
+                "SELECT 1 FROM meta WHERE key = 'tags_migrated'").fetchone():
+            return
+        for row in self._conn.execute(
+                "SELECT id, tags FROM nodes WHERE tags IS NOT NULL AND tags != '[]'"
+        ).fetchall():
+            try:
+                names = json.loads(row["tags"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            self._sync_node_tags(row["id"], names, commit=False)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('tags_migrated', '1')")
+        self._conn.commit()
 
     def add_triggers(self, node_id: int, triggers: list[str]) -> None:
         """Merge extra triggers into a node (dedup, capped at 40).
@@ -659,8 +761,14 @@ class KnowledgeGraph:
         wrote the chunker's symbols to `triggers` ONLY, so every auto-ingested
         node had `tags='[]'`, the linker's `WHERE tags != '[]'` matched nothing,
         and the whole graph came out with zero links — a silent no-op that the
-        unit tests missed because they hand-set `tags=` on `add_node`."""
-        self._merge_json_list(node_id, "tags", tags, 40)
+        unit tests missed because they hand-set `tags=` on `add_node`.
+
+        Writes both sides: the legacy JSON column (still the read path for
+        `_print_node` and the GM bridge) and the `node_tags` rows the linker
+        now uses. Syncing from the POST-cap merged list keeps the two in step."""
+        merged = self._merge_json_list(node_id, "tags", tags, 40)
+        if merged is not None:
+            self._sync_node_tags(node_id, merged)
 
     def get_node(self, node_id: int) -> Optional[dict]:
         row = self._conn.execute(
@@ -699,12 +807,20 @@ class KnowledgeGraph:
         # raises — otherwise the connection would silently keep FK disabled.
         self._conn.execute("PRAGMA foreign_keys=OFF")
         try:
+            freed: set[int] = set()
             for nid in doomed:
+                freed |= {r["tag_id"] for r in self._conn.execute(
+                    "SELECT tag_id FROM node_tags WHERE node_id = ?", (nid,)).fetchall()}
+                self._conn.execute(
+                    "DELETE FROM chunk_tags WHERE chunk_id IN "
+                    "(SELECT id FROM chunks WHERE node_id = ?)", (nid,))
+                self._conn.execute("DELETE FROM node_tags WHERE node_id = ?", (nid,))
                 self._conn.execute("DELETE FROM chunks WHERE node_id = ?", (nid,))
                 self._conn.execute(
                     "DELETE FROM node_links WHERE source_id = ? OR target_id = ?",
                     (nid, nid))
                 self._conn.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+            self._refresh_tag_uses(freed)   # I5: the tag row survives, its count doesn't
             self._conn.commit()
         finally:
             self._conn.execute("PRAGMA foreign_keys=ON")
@@ -788,7 +904,8 @@ class KnowledgeGraph:
     def add_chunk(self, node_id: int, text: str,
                   source: Optional[str] = None,
                   section: Optional[str] = None,
-                  chunk_index: int = 0) -> int:
+                  chunk_index: int = 0,
+                  tags: Optional[list[str]] = None) -> int:
         # Embed the breadcrumb WITH the body (encoding specificity): a paragraph
         # under "Install > Windows > venv" that only says "run the script" is
         # unreachable by "windows install" unless its location is in the vector.
@@ -802,6 +919,8 @@ class KnowledgeGraph:
             (node_id, text, source, section, chunk_index, blob),
         )
         self._conn.commit()
+        if tags:
+            self._sync_chunk_tags(cur.lastrowid, tags)
         return cur.lastrowid
 
     def get_chunks(self, node_id: int) -> list[dict]:
@@ -826,6 +945,12 @@ class KnowledgeGraph:
         is being REPLACED by its current version, not forgotten. Chunks whose
         file is gone from disk are never touched here."""
         source = str(filepath)
+        # chunk_tags has no FK cascade (pyturso 0.6.1, see delete_node), so the
+        # join rows go first or a re-ingest leaves them pointing at dead ids.
+        self._conn.execute(
+            "DELETE FROM chunk_tags WHERE chunk_id IN "
+            "(SELECT id FROM chunks WHERE node_id = ? AND source = ?)",
+            (node_id, source))
         self._conn.execute("DELETE FROM chunks WHERE node_id = ? AND source = ?",
                            (node_id, source))
         chunks = self._chunk_file(filepath, self._max_chunk_chars)
@@ -838,6 +963,7 @@ class KnowledgeGraph:
                 source=c.source,
                 section=c.section,
                 chunk_index=c.chunk_index,
+                tags=getattr(c, "tags", None) or [],
             )
             tag_pool += getattr(c, "tags", None) or []
             count += 1
@@ -972,27 +1098,42 @@ class KnowledgeGraph:
     # into six figures of meaningless edges.
     MIN_TAG_JACCARD = 0.15
 
+    # IDF suppression, the tag-side twin of MAX_CUE_DOC_RATIO below. A tag on
+    # half the vault pairs almost every node with almost every other while
+    # identifying none of them — a cue that predicts everything predicts
+    # nothing. Skipping its posting list is also what takes the O(n²) sting out
+    # of the pair loop; the tag still counts in the Jaccard denominators, so
+    # this changes which pairs are CONSIDERED, never how similar they are.
+    MAX_TAG_NODE_RATIO = 0.5
+    # Same caveat as MIN_CUE_DOC_FLOOR: a ratio is meaningless on a small vault.
+    MIN_TAG_NODE_FLOOR = 50
+
     def build_tag_links(self, min_jaccard: "float | None" = None) -> int:
-        """Create tag_overlap links between nodes sharing tags. Returns link count added."""
+        """Create tag_overlap links between nodes sharing tags. Returns link count added.
+
+        Reads the `node_tags` substrate, not the legacy JSON column: an index
+        lookup instead of parsing every node's tag array on every rebuild."""
         floor = self.MIN_TAG_JACCARD if min_jaccard is None else min_jaccard
-        # Single pass: build inverted index + tag cache
-        index: dict[str, set[int]] = {}
-        node_tags: dict[int, set[str]] = {}
+        # Single pass: inverted index + per-node tag sets, on tag ids
+        index: dict[int, set[int]] = {}
+        node_tags: dict[int, set[int]] = {}
+        tag_names: dict[int, str] = {}
         for row in self._conn.execute(
-            "SELECT id, tags FROM nodes WHERE tags IS NOT NULL AND tags != '[]'"
+            "SELECT nt.node_id AS node_id, nt.tag_id AS tag_id, t.name AS name "
+            "FROM node_tags nt JOIN tags t ON t.id = nt.tag_id"
         ).fetchall():
-            tags = set(json.loads(row["tags"]))
-            node_tags[row["id"]] = tags
-            for tag in tags:
-                index.setdefault(tag, set()).add(row["id"])
+            index.setdefault(row["tag_id"], set()).add(row["node_id"])
+            node_tags.setdefault(row["node_id"], set()).add(row["tag_id"])
+            tag_names[row["tag_id"]] = row["name"]
+
+        cap = max(self.MIN_TAG_NODE_FLOOR,
+                  int(len(node_tags) * self.MAX_TAG_NODE_RATIO))
 
         added = 0
         seen: set[tuple[int,int]] = set()
-        # ponytail: still pair-wise within each tag's posting list. The Jaccard
-        # floor caps the WRITES, not the comparisons — a tag on every node is
-        # still O(n²) to evaluate. P1's IDF suppression skips those lists
-        # outright; until then this is fine at vault scale.
         for tag, node_ids in index.items():
+            if len(node_ids) > cap:
+                continue                    # too common to identify anything
             ids = sorted(node_ids)
             for i in range(len(ids)):
                 for j in range(i + 1, len(ids)):
@@ -1007,7 +1148,7 @@ class KnowledgeGraph:
                     weight = len(shared) / len(union) if union else 0.0
                     if weight < floor:
                         continue
-                    evidence = ",".join(sorted(shared))
+                    evidence = ",".join(sorted(tag_names[t] for t in shared))
                     self.upsert_link(ids[i], ids[j], "tag_overlap", weight,
                                      evidence, commit=False)
                     added += 1
