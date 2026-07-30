@@ -150,6 +150,20 @@ def test_every_result_carries_a_score_and_its_scale():
     kg.close()
 
 
+def test_results_do_not_carry_the_stored_vector():
+    """`neurag query --json` serialises whatever search() returns, with
+    `default=str` — so a 384-float blob came out as a page of escaped bytes
+    per result. The vector is ranking machinery; only db.py ever read it."""
+    kg = _vault()
+    hits = kg.search("filler", top_n=3)
+    assert hits and all("embedding" not in h for h in hits)
+    assert all("embedding" not in c for c in kg.get_chunks(hits[0]["node_id"]))
+    # still in the vault -- it is the OUTPUT that drops it (I5)
+    assert kg._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").fetchone()[0] > 0
+    kg.close()
+
+
 def test_the_lexical_only_leg_still_scores_its_results():
     """No embedder → no vector leg. The BM25 rows are the whole ranking, and
     they used to come back bare."""

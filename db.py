@@ -225,6 +225,19 @@ class RemoteTursoConnection:
             pass
 
 
+def _without_vector(row: dict) -> dict:
+    """Drop the stored vector from a row on its way out of the graph.
+
+    It is ranking machinery, not content: MMR and the sqlite3 cosine fallback
+    read it INSIDE db.py and nothing outside ever has. On the way out it is a
+    384-float blob that `neurag query --json` serialised with `default=str`,
+    so every result dragged a page of escaped bytes through the output a user
+    actually reads. Stripped at the boundary rather than at each printer, so a
+    future caller cannot leak it again."""
+    row.pop("embedding", None)
+    return row
+
+
 def _scored(row: dict, score: float, stage: str) -> dict:
     """Stamp a result with the score of the stage that ranked it.
 
@@ -957,7 +970,7 @@ class KnowledgeGraph:
             "SELECT * FROM chunks WHERE node_id = ? ORDER BY chunk_index",
             (node_id,)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_without_vector(dict(r)) for r in rows]
 
     def index_into_node(self, filepath: Path, node_id: int) -> int:
         """Chunk a file, add the chunks to a node, and enrich the node's triggers
@@ -1493,7 +1506,7 @@ class KnowledgeGraph:
             results = rr.rerank(query, results, max(top_n * 2, top_n))
         if diversify and len(results) > top_n:
             results = self._mmr(query, results, top_n)
-        return results[:top_n]
+        return [_without_vector(r) for r in results[:top_n]]
 
     def _scope_ids(self, node_id: "int | None") -> "list[int] | None":
         """The node and its whole subtree, or None for "the entire vault"."""
