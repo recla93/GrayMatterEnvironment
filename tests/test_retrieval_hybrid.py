@@ -117,6 +117,71 @@ def test_rrf_is_rank_based_not_score_based():
     assert KnowledgeGraph.RRF_K == 60
 
 
+# --- every result says what it scored, and on which scale --------------------
+
+_STAGES = {"cosine", "bm25", "rrf", "cross-encoder"}
+
+
+def _vault():
+    kg = _kg()
+    n = kg.add_node("N", "fundamental", parent_id=0)
+    kg.add_chunk(n, "the exact identifier vector_distance_cos appears here",
+                 source="x.py")
+    kg.add_chunk(n, "questo testo parla di ricerca semantica e significato",
+                 source="y.md")
+    for i in range(8):
+        kg.add_chunk(n, f"unrelated filler number {i}", source=f"f{i}.md")
+    return kg
+
+
+def test_every_result_carries_a_score_and_its_scale():
+    """`sim` was attached by the vector leg only, and the fused RRF value was
+    dropped entirely — so half a hybrid ranking had no score at all and the
+    other half carried a cosine that no longer explained the order. Nothing
+    could display or threshold the result it was handed."""
+    kg = _vault()
+    for query in ("vector_distance_cos", "ricerca semantica", "filler"):
+        hits = kg.search(query, top_n=5)
+        assert hits
+        for h in hits:
+            assert isinstance(h.get("score"), float), f"{query}: {sorted(h)}"
+            assert h.get("score_from") in _STAGES
+        assert len({h["score_from"] for h in hits}) == 1, "one ranking, one scale"
+    kg.close()
+
+
+def test_the_lexical_only_leg_still_scores_its_results():
+    """No embedder → no vector leg. The BM25 rows are the whole ranking, and
+    they used to come back bare."""
+    kg = _kg()
+    n = kg.add_node("N", "fundamental", parent_id=0)
+    for i in range(5):
+        kg.add_chunk(n, f"alpha beta gamma {i}", source=f"f{i}.md")
+    kg._conn.execute("UPDATE chunks SET embedding = NULL")
+    kg._conn.commit()
+    hits = kg.search("alpha", top_n=3)
+    assert hits and all(h["score_from"] == "bm25" for h in hits)
+    assert all(h["score"] > 0 for h in hits)
+    kg.close()
+
+
+def test_the_reranker_replaces_the_score_it_reorders_by():
+    """A cross-encoder that reorders while leaving the first stage's number in
+    place hands back a ranking its own score contradicts."""
+    from neurag.reranker import FastEmbedReranker, NullReranker
+
+    cand = [{"id": 1, "text": "a", "score": 0.9, "score_from": "rrf"},
+            {"id": 2, "text": "b", "score": 0.1, "score_from": "rrf"}]
+    # null routing is the identity: it ranks nothing, so it rewrites nothing
+    assert NullReranker().rerank("q", cand, 2) == cand
+
+    fake = FastEmbedReranker.__new__(FastEmbedReranker)
+    fake._m = type("M", (), {"rerank": staticmethod(lambda q, docs: [-2.0, 3.0])})()
+    out = fake.rerank("q", cand, 2)
+    assert [c["id"] for c in out] == [2, 1]
+    assert out[0]["score"] == 3.0 and out[0]["score_from"] == "cross-encoder"
+
+
 # --- e5 prefixes -------------------------------------------------------------
 
 @pytest.mark.parametrize("model,expected", [

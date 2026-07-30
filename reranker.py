@@ -51,6 +51,11 @@ class FastEmbedReranker:
         except Exception:  # noqa: BLE001 — any scoring failure → keep first-stage order
             return candidates[:top_n]
         ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+        # The cross-encoder score is what the final order MEANS — keep it, or
+        # the caller is left holding the first stage's number next to a ranking
+        # that no longer follows it. Same keys the retriever stamps.
+        for s, c in ranked[:top_n]:
+            c["score"], c["score_from"] = float(s), "cross-encoder"
         return [c for _, c in ranked[:top_n]]
 
 

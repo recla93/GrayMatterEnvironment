@@ -1,6 +1,22 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **`search()` dice sempre quanto e su che scala**: ogni risultato porta `score`
+  e `score_from` (`cosine` | `bm25` | `rrf` | `cross-encoder`). Prima il punteggio
+  esisteva solo come `sim`, attaccato dal ramo vettoriale: le righe arrivate da
+  BM25 non ne avevano nessuno e il valore RRF della fusione veniva buttato via —
+  quindi metà di un ranking ibrido era senza punteggio e l'altra metà portava un
+  coseno che non spiegava più l'ordine (visibile su `neurag query --json`). Anche
+  il reranker cross-encoder ora riscrive il punteggio in base a cui riordina.
+  Le scale non sono confrontabili tra loro: `score_from` serve a leggerle.
+  La diversificazione MMR riordina senza ri-assegnare punteggi, quindi con
+  `diversify=True` l'ordine non è (deliberatamente) quello dei punteggi.
+- **Un `;` dentro un commento SQL non tronca più lo schema**: `SCHEMA_SQL` viene
+  tagliato a mano su `;` (nessun backend ha `executescript`) e un punto e virgola
+  dentro un `--` spezzava la statement che lo conteneva. `_init_schema` applica
+  lo script in un try/except che segna solo `_corrupt`, quindi la tabella
+  semplicemente non compariva, in silenzio. `_split_sql` toglie i commenti prima
+  di tagliare, usato da entrambi i chiamanti.
 - **Tag substrate (DESIGN-EVOLUTION §4, P1)**: un tag smette di essere una
   stringa dentro cinque colonne JSON e diventa una riga. Nuove tabelle `tags`
   (`name` normalizzato, `uses`, `salience`, `last_used`), `node_tags`,

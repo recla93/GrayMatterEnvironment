@@ -225,6 +225,23 @@ class RemoteTursoConnection:
             pass
 
 
+def _scored(row: dict, score: float, stage: str) -> dict:
+    """Stamp a result with the score of the stage that ranked it.
+
+    Every row `search()` returns carries both keys. It used to carry `sim` only
+    when it happened to come out of the vector leg — the BM25-only rows had no
+    score at all and the fused RRF value was thrown away — so nothing could
+    display or threshold a ranking it was handed.
+
+    `score_from` is not decoration: the scales are not comparable (cosine in
+    [0,1], RRF around 1/60, BM25 unbounded, a cross-encoder logit signed), so a
+    bare float would be unreadable. Compare within one ranking, never across.
+    """
+    row["score"] = float(score)
+    row["score_from"] = stage
+    return row
+
+
 def _split_sql(script: str) -> list[str]:
     """Split a SQL script into executable statements.
 
@@ -1459,6 +1476,11 @@ class KnowledgeGraph:
 
         `node_id` scopes the search to a subtree — the hierarchy finally
         contributing to retrieval rather than only to browsing.
+
+        Every result carries `score` and `score_from` (`cosine` | `bm25` |
+        `rrf` | `cross-encoder`) — the number and the scale of the stage that
+        ranked it. Diversification reorders without rescoring, so with
+        `diversify=True` the order is deliberately not the score order.
         """
         rr = getattr(self, "_reranker", None)
         rerank_on = bool(rr is not None and getattr(rr, "available", False))
@@ -1485,7 +1507,12 @@ class KnowledgeGraph:
 
         Without it the top-n is routinely five near-identical chunks from one
         file, which wastes the model's context on one restated point. Same
-        lambda as Neuron's ADR-008 §5.6, so the two behave alike."""
+        lambda as Neuron's ADR-008 §5.6, so the two behave alike.
+
+        Reorders only — it never rescores, so `score` keeps meaning "how the
+        ranking stage rated this row", not "why it sits here". Overwriting it
+        with the MMR objective would be worse: that number is relative to the
+        rows already chosen and says nothing on its own."""
         vecs, pool = [], []
         for r in rows:
             blob = r.get("embedding")
@@ -1525,12 +1552,13 @@ class KnowledgeGraph:
         if getattr(self, "_vector_sql", False):
             try:
                 sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, "
-                       "1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS sim "
-                       f"FROM chunks WHERE {where} ORDER BY sim DESC LIMIT ?")
+                       "1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS score "
+                       f"FROM chunks WHERE {where} ORDER BY score DESC LIMIT ?")
                 rows = self._conn.execute(
                     sql, (*params, *(scope or []), top_n)).fetchall()
                 if rows:
-                    return [dict(r) for r in rows]
+                    return [_scored(d, d["score"], "cosine")
+                            for d in (dict(r) for r in rows)]
             except Exception:  # noqa: BLE001 — engine senza f32blob → path Python
                 pass
         # ponytail: O(N) blob scan + Python cosine. Only the sqlite3 tier lands
@@ -1539,11 +1567,7 @@ class KnowledgeGraph:
         rows = [dict(r) for r in self._conn.execute(sql, tuple(scope or [])).fetchall()]
         scored = [(self._cosine_sim(qv, self._unpack_vec(r["embedding"])), r) for r in rows]
         scored.sort(key=lambda x: x[0], reverse=True)
-        out = []
-        for sim, r in scored[:top_n]:
-            r["sim"] = sim
-            out.append(r)
-        return out
+        return [_scored(r, sim, "cosine") for sim, r in scored[:top_n]]
 
     def _lexical_candidates(self, query: str, top_n: int,
                             scope: "list[int] | None") -> list[dict]:
@@ -1581,7 +1605,10 @@ class KnowledgeGraph:
                 rows_by_id.setdefault(cid, row)
                 fused[cid] = fused.get(cid, 0.0) + 1.0 / (self.RRF_K + rank + 1)
         order = sorted(fused, key=lambda c: fused[c], reverse=True)
-        return [rows_by_id[c] for c in order[:top_n]]
+        # The fused score REPLACES the leg's own: a row that surfaced from the
+        # vector leg used to keep its cosine while a BM25-only neighbour had no
+        # score at all, so the caller saw a ranking it could not read.
+        return [_scored(rows_by_id[c], fused[c], "rrf") for c in order[:top_n]]
 
     # BM25 constants. k1 damps term-frequency saturation, b controls how much
     # document length is penalised. 1.5/0.75 are the standard defaults.
@@ -1599,7 +1626,7 @@ class KnowledgeGraph:
 
         q = set(toks(query))
         if not q:
-            return rows[:top_n]
+            return [_scored(r, 0.0, "bm25") for r in rows[:top_n]]
         doc_toks = [toks(r["text"]) for r in rows]
         n = len(rows)
         avgdl = (sum(len(dt) for dt in doc_toks) / n) if n else 0.0
@@ -1621,7 +1648,8 @@ class KnowledgeGraph:
             if score > 0:
                 scored.append((score, r))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [r for _, r in scored[:top_n]] or rows[:top_n]
+        return ([_scored(r, s, "bm25") for s, r in scored[:top_n]]
+                or [_scored(r, 0.0, "bm25") for r in rows[:top_n]])
 
     # -- status -------------------------------------------------------------
 
