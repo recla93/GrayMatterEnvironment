@@ -205,6 +205,44 @@ STIM_SAFETY_NET = _cfg["stimulus_safety_net"]
 STIM_SAFETY_GAP = _cfg["stimulus_safety_gap"]
 _turns_since_stim: int = 0
 
+# Quanto contesto GM inietta. Il punto del progetto è far RISPARMIARE token, e
+# fino a qui la quantità era un effetto collaterale: il blocco proattivo (bridge,
+# vicini, flash) non aveva alcun tetto, e 40 bridge che condividevano un tag
+# facevano ~5000 token in una sola pulse. Ora è un budget, regolabile dalla GUI.
+KNOWLEDGE_TOP_N = _cfg["knowledge_top_n"]
+PROACTIVE_BUDGET = _cfg["proactive_budget_chars"]
+# Quanti bridge al massimo per pulse. Non è un knob: il budget in caratteri è
+# già la manopola: questo è solo la difesa che evita di RINFORZARE (e quindi
+# promuovere) decine di bridge per poi scartarne il testo.
+_BRIDGES_PER_PULSE = 5
+# Quanto razionale mostrare per bridge. Lo store ne accetta 500 caratteri perché
+# lì è documentazione che un umano legge in `gray-matter bridges`; iniettarli
+# interi in una pulse voleva dire spendere il budget su cinque paragrafi.
+_BRIDGE_WHY_CHARS = 80
+
+
+def _fit(budget: int, blocks: list[str]) -> tuple[str, int]:
+    """Take blocks in priority order, keeping each that still fits in `budget`.
+
+    Trims by BLOCK, never mid-sentence: half a bridge line costs the same
+    context as a whole one and reads like a bug. Returns the joined text and how
+    many blocks were dropped, so the caller can say so instead of the reader
+    wondering.
+
+    A block too big to fit is SKIPPED, not a stop signal — a later, smaller one
+    still gets in. These are independent hints, so more of them inside the same
+    budget is worth more than a strict prefix of the priority order."""
+    kept, used, dropped = [], 0, 0
+    for b in blocks:
+        if not b:
+            continue
+        if used + len(b) > budget:
+            dropped += 1
+            continue
+        kept.append(b)
+        used += len(b)
+    return "\n\n".join(kept), dropped
+
 
 def _stim_seen(text: str) -> None:
     """Un pulse/risposta che già porta stimoli (🧠/⚡) azzera il contatore."""
@@ -340,7 +378,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         topic = " ".join(str(arguments.get("topic", "")).split())[:200]
         if not topic:
             return [TextContent(type="text", text="pulse: empty topic.")]
-        top_n = min(max(int(arguments.get("top_n", 5)), 1), 10)
+        top_n = min(max(int(arguments.get("top_n", KNOWLEDGE_TOP_N)), 1), 10)
         _t0 = time.monotonic()
         _stats["pulses"] += 1
         _remember_topic(topic)   # D4: conversation buffer (anche sui cache hit)
@@ -406,8 +444,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # Va PRIMA dei bridge: la stessa risposta porta i tag canonici del nodo,
         # ed è su quelli che i bridge fanno il join (§4). Un secondo round-trip
         # solo per chiedere quattro parole non lo vogliamo nella pulse.
+        # Tutto ciò che segue è PROATTIVO: non l'ha chiesto nessuno, quindi vive
+        # dentro `proactive_budget_chars`. A 0 la pulse resta solo le risposte
+        # vere — che è una risposta legittima per chi ha il contesto stretto.
+        proactive: list[str] = []
         neurag_tags: set[str] = set()
-        if neurag_hit:
+        if neurag_hit and PROACTIVE_BUDGET > 0:
             try:
                 import json as _json
                 raw = await _call_server_async(
@@ -418,7 +460,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 fresh = [n["name"] for n in data.get("neighbors", [])
                          if n.get("name") and n["name"].lower() not in response.lower()][:3]
                 if fresh:
-                    response += "\n\n💡 Potrebbe interessarti: " + ", ".join(fresh)
+                    proactive.append("💡 Potrebbe interessarti: " + ", ".join(fresh))
             except Exception:  # noqa: BLE001 — proattiva = best-effort, mai bloccare la pulse
                 pass
 
@@ -426,12 +468,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # Matched on whole tokens AND on the tag identity above — a bridge to a
         # node whose NAME says nothing about the topic is reachable through its
         # tags, which is the whole point of the substrate.
-        from gray_matter.bridges import bridges_for
-        rel = bridges_for(topic, tags=neurag_tags)
+        rel = []
+        if PROACTIVE_BUDGET > 0:
+            from gray_matter.bridges import bridges_for
+            # Il limite è anche sul RINFORZO: mostrare un bridge è ciò che conta
+            # come usarlo, quindi non si rinforza quello che non entra.
+            rel = bridges_for(topic, tags=neurag_tags, limit=_BRIDGES_PER_PULSE)
         if rel:
-            response += "\n\n" + "\n".join(
-                f"🔗 {b['neuron']} ↔ {b['neurag']}" + (f" — {b['rationale']}" if b.get("rationale") else "")
-                for b in rel)
+            # Un bridge per blocco, così il budget ne impacchetta quanti stanno
+            # invece di scartarli in massa. E il razionale va TRONCATO: lo store
+            # lo accetta fino a 500 caratteri perché è documentazione, ma qui è
+            # un suggerimento iniettato — cinque razionali interi da soli
+            # sfondavano il budget e facevano cadere tutti i bridge.
+            for b in rel:
+                why = (b.get("rationale") or "").strip()
+                if len(why) > _BRIDGE_WHY_CHARS:
+                    why = why[:_BRIDGE_WHY_CHARS - 1].rstrip() + "…"
+                proactive.append(f"🔗 {b['neuron']} ↔ {b['neurag']}"
+                                 + (f" — {why}" if why else ""))
             # B4 — bridge appena promosso (5+ usi reali): il concetto Neuron ha
             # dimostrato valore, confermalo (salience + trust). Best-effort.
             promoted = [b["neuron"] for b in rel if b.pop("_just_promoted", False)]
@@ -443,16 +497,28 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     pass
 
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
-        flash_note, concept = await _maybe_flash(topic)
-        if flash_note:
-            response += "\n\n" + flash_note
-            # v3b auto-discovery: a mid-band dormant Neuron concept surfaced on a
-            # topic where NeuRAG has real knowledge → that co-occurrence is a bridge
-            # worth keeping. Persist it (idempotent, gated by the flash rate-limit).
-            if concept and neurag_hit:
-                from gray_matter.bridges import add_bridge
-                if add_bridge(concept, topic, f"co-surfaced on '{topic}'"):
-                    _stats["bridges_added"] += 1
+        if PROACTIVE_BUDGET > 0:
+            flash_note, concept = await _maybe_flash(topic)
+            if flash_note:
+                proactive.append(flash_note)
+                # v3b auto-discovery: a mid-band dormant Neuron concept surfaced on a
+                # topic where NeuRAG has real knowledge → that co-occurrence is a bridge
+                # worth keeping. Persist it (idempotent, gated by the flash rate-limit).
+                if concept and neurag_hit:
+                    from gray_matter.bridges import add_bridge
+                    if add_bridge(concept, topic, f"co-surfaced on '{topic}'"):
+                        _stats["bridges_added"] += 1
+
+        # Il flash è primo: è l'unico contenuto proattivo che non si può
+        # ri-ottenere chiedendo (i bridge stanno in `gray-matter bridges`, i
+        # vicini in `knowledge_neighbors`). Un flash tagliato è perso.
+        extra, dropped = _fit(PROACTIVE_BUDGET, list(reversed(proactive)))
+        if extra:
+            response += "\n\n" + extra
+        if dropped:
+            response += (f"\n\n(+{dropped} spunti omessi: budget proattivo "
+                         f"{PROACTIVE_BUDGET} char — `gray-matter config set "
+                         f"proactive_budget_chars <n>`)")
 
         # Cache + record the real-work latency (this was a miss).
         _stim_seen(response)          # un pulse con stimoli ricarica il safety-net

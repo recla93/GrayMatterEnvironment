@@ -4,6 +4,13 @@ One JSON config (`paths.config_file()`) so flash rate, cache TTL, etc. can be tu
 via `gray-matter config get|set` (and the GUI) without editing code. Only known keys
 are accepted; values are coerced to the default's type; the file stores only the
 overrides (so DEFAULTS can evolve). Stdlib only.
+
+HELP is not decoration: the control center builds its settings card from
+`<tool> config list --json`, so a knob without help text renders as a bare
+value. GM owns exactly the knobs that decide how much gets injected into a
+model's context, and for a long time it was the ONE tool of the three with no
+`config` command at all — the panel simply never appeared, and every knob here
+was reachable only by editing the JSON by hand.
 """
 from __future__ import annotations
 
@@ -19,9 +26,53 @@ DEFAULTS = {
     "prewarm": True,              # pre-warm workers at start (D2)
     "heartbeat_interval": 5.0,    # server liveness ping (s)
     "idle_sleep_timeout": 600.0,  # idle before sleep (s)
+    # -- quanto contesto GM inietta -------------------------------------------
+    # Il punto di tutto il progetto è FAR RISPARMIARE token, quindi la quantità
+    # iniettata è un budget, non un effetto collaterale.
+    "knowledge_top_n": 5,          # chunk di vault per pulse (1-10)
+    # Tetto ai contenuti PROATTIVI (bridge, vicini, flash): quelli che l'utente
+    # non ha chiesto. Erano senza cap: 40 bridge che condividevano un tag
+    # facevano ~5000 token in una sola pulse, e ogni bridge mostrato viene anche
+    # rinforzato, quindi un match di massa era una promozione di massa.
+    "proactive_budget_chars": 800,
     # Tool usciti dal gateway (go-standalone): csv fra "neuron","neurag". GM non
     # li spawna né li ripubblica finché stanno qui; `register --gateway` azzera.
     "unmanaged": "",
+}
+
+# Per-knob help surfaced by the control center (GUI reads these via
+# `gray-matter config list --json` — keep-in-sync with the knobs above, same
+# rule as neurag/settings.py).
+HELP = {
+    "flash_min_gap": "Quante pulse passano fra due flash (richiami "
+                     "serendipitosi). Più alto = meno interruzioni.",
+    "stimulus_safety_net": "Se Neuron smette di agganciare lo stimolo alle "
+                           "risposte, GM lo rilancia da sé.",
+    "stimulus_safety_gap": "Quanti turni di silenzio prima che la rete di "
+                           "sicurezza dello stimolo scatti.",
+    "cache_ttl_seconds": "Per quanto una risposta di contesto resta valida in "
+                         "cache. Più alto = meno lavoro ripetuto, dati più vecchi.",
+    "cache_max_size": "Quante risposte di contesto tenere in cache (LRU).",
+    "prewarm": "Scalda i worker all'avvio: prima pulse più veloce, un po' di "
+               "RAM in più subito.",
+    "heartbeat_interval": "Ogni quanti secondi GM verifica che i suoi server "
+                          "siano vivi.",
+    "idle_sleep_timeout": "Secondi di inattività prima che GM vada in sleep.",
+    "knowledge_top_n": "Quanti chunk di conoscenza iniettare per pulse. È la "
+                       "voce più costosa in token: 5 sono circa 300 token, 10 "
+                       "circa 700. Abbassalo se il contesto è stretto.",
+    "proactive_budget_chars": "Tetto in caratteri per ciò che GM aggiunge SENZA "
+                              "che tu l'abbia chiesto (bridge, vicini, flash). "
+                              "0 = niente contenuti proattivi, solo le risposte "
+                              "vere. ~4 caratteri = 1 token.",
+    "unmanaged": "Tool sganciati dal gateway (csv fra neuron, neurag): GM non "
+                 "li avvia né li ripubblica finché stanno qui.",
+}
+
+SUGGEST = {
+    "knowledge_top_n": ["3", "5", "10"],
+    "proactive_budget_chars": ["0", "400", "800", "2000"],
+    "unmanaged": ["", "neuron", "neurag", "neuron,neurag"],
 }
 
 

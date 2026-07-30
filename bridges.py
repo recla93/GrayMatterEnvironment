@@ -428,7 +428,8 @@ def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "") -> bo
         conn.close()
 
 
-def bridges_for(topic: str, tags: "set[str] | None" = None) -> list[dict]:
+def bridges_for(topic: str, tags: "set[str] | None" = None,
+                limit: "int | None" = None) -> list[dict]:
     """Bridges whose Neuron or NeuRAG endpoint matches the topic (either
     direction). Surfacing a bridge in a pulse *is* using it -> reinforce.
     Returned strongest-first; a just-crossed-threshold bridge is flagged
@@ -451,6 +452,9 @@ def bridges_for(topic: str, tags: "set[str] | None" = None) -> list[dict]:
     `tags` is passed in rather than looked up here on purpose: this runs in
     GM's pulse, and opening a NeuRAG vault (and its embedder) per pulse to
     resolve four words would be a poor trade. The caller already has the handle.
+
+    `limit` caps how many are returned AND how many are reinforced — the two are
+    the same thing, because surfacing is what counts as using.
     """
     t_tokens = _tokens(topic)
     if not t_tokens:
@@ -460,14 +464,23 @@ def bridges_for(topic: str, tags: "set[str] | None" = None) -> list[dict]:
     conn = _connect()
     try:
         rows = [dict(r) for r in conn.execute("SELECT * FROM bridges").fetchall()]
-        out = []
+        matched = []
         for b in rows:
             n_tok, r_tok = _tokens(b["neuron"]), _tokens(b["neurag"])
             hit = (_token_run(n_tok, t_tokens) or _token_run(r_tok, t_tokens)
                    or _token_run(t_tokens, n_tok) or _token_run(t_tokens, r_tok)
                    or b["neuron_key"] in tagset or b["neurag_key"] in tagset)
-            if not hit:
-                continue
+            if hit:
+                matched.append(b)
+        # Strongest first, THEN cut, THEN reinforce. Matching and reinforcing
+        # used to be the same loop, so every match was strengthened whether the
+        # caller showed it or not — and the docstring's own rule is that
+        # SURFACING a bridge is what counts as using it. With tag identity one
+        # shared tag can match dozens at once, which made that the difference
+        # between a hint and a mass promotion.
+        matched.sort(key=lambda b: b.get("weight", 1), reverse=True)
+        out = matched if limit is None else matched[:max(0, int(limit))]
+        for b in out:
             just = (min(b["weight"] + 1, _WEIGHT_CAP) >= _PROMOTE_AT) and not b["promoted"]
             conn.execute(
                 "UPDATE bridges SET weight=min(weight+1,?), last_used=?, "
@@ -479,11 +492,9 @@ def bridges_for(topic: str, tags: "set[str] | None" = None) -> list[dict]:
             if just:
                 b["promoted"] = 1
                 b["_just_promoted"] = True
-            out.append(b)
         conn.commit()
     finally:
         conn.close()
-    out.sort(key=lambda b: b.get("weight", 1), reverse=True)
     return out
 
 

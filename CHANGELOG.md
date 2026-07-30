@@ -1,5 +1,39 @@
 # Changelog — Gray Matter
 
+## Unreleased
+- **Quanto contesto GM inietta è ora un budget, non un effetto collaterale.**
+  Il senso del progetto è far risparmiare token, e il blocco **proattivo** della
+  pulse — bridge, vicini, flash: roba che nessuno ha chiesto — non aveva alcun
+  tetto. Misurato: 40 bridge che condividevano un tag valevano **~5100 token in
+  una sola pulse**. E `bridges_for` rinforzava *ogni* match, quindi un match di
+  massa era anche una promozione di massa verso la soglia che manda un `confirm`
+  a Neuron. Il match per identità di tag ha reso quel caso più facile da
+  raggiungere, non meno.
+  - `proactive_budget_chars` (default 800, `0` = niente proattivo): tetto in
+    caratteri, applicato per **blocco** — mai un taglio a metà frase, che
+    costerebbe lo stesso contesto e sembrerebbe un bug. Un blocco troppo grosso
+    viene saltato e i successivi più piccoli entrano: sono spunti indipendenti,
+    farne stare più vale più di un prefisso stretto dell'ordine.
+  - `knowledge_top_n` (default 5): quanti chunk di vault per pulse. È la voce
+    più costosa — 5 sono ~292 token misurati, 10 ~689.
+  - Il flash ha priorità sui bridge: è l'unico contenuto proattivo che non si
+    può ri-ottenere chiedendo (i bridge stanno in `gray-matter bridges`, i vicini
+    in `knowledge_neighbors`). Un flash tagliato è perso.
+  - `bridges_for(..., limit=N)` limita anche il **rinforzo**: mostrare un bridge
+    è ciò che conta come usarlo, e quella regola stava già nel docstring mentre
+    match e rinforzo vivevano nello stesso loop.
+  - Il razionale di un bridge viene troncato a 80 caratteri nell'iniezione. Lo
+    store ne accetta 500 perché lì è documentazione che un umano legge in
+    `gray-matter bridges`; cinque razionali interi da soli sfondavano il budget e
+    facevano cadere *tutti* i bridge.
+  - Pulse tipica, stimata: ~700 token contro i ~6200 del caso peggiore prima.
+- **Tutte le manopole di GM hanno finalmente un testo di aiuto** (`HELP`,
+  `SUGGEST` in `settings.py`). La GUI costruisce la sua card da
+  `config list --json` e `_knob_dict` legge `HELP` con fallback a `{}`: GM non ne
+  aveva nessuno, quindi il pannello mostrava undici manopole nude — comprese
+  quelle che decidono quanto contesto finisce in un modello. Un test ora fallisce
+  se un knob nuovo arriva senza spiegazione.
+
 ## 1.1.2
 - **GUI universale — pannelli speciali via CLI (decoupling)**. I 4 pannelli
   (Config, Repair, Uninstall, Processi) non importano più gli interni di GM
