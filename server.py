@@ -210,6 +210,7 @@ _turns_since_stim: int = 0
 # vicini, flash) non aveva alcun tetto, e 40 bridge che condividevano un tag
 # facevano ~5000 token in una sola pulse. Ora è un budget, regolabile dalla GUI.
 KNOWLEDGE_TOP_N = _cfg["knowledge_top_n"]
+MEMORY_MAX_TOKENS = _cfg["memory_max_tokens"]
 PROACTIVE_BUDGET = _cfg["proactive_budget_chars"]
 # Quanti bridge al massimo per pulse. Non è un knob: il budget in caratteri è
 # già la manopola: questo è solo la difesa che evita di RINFORZARE (e quindi
@@ -395,7 +396,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         neuron = _registry.get_server("neuron")
         if neuron and neuron.is_alive() and neuron.collaborative:
-            tasks.append(_call_server_async("neuron", "get_context", {"topic": topic, "depth": 1})); labels.append("neuron")
+            # max_tokens esplicito: `get_context` ha il suo budget in caratteri
+            # ma il default (400) lo decideva Neuron, non l'utente.
+            tasks.append(_call_server_async("neuron", "get_context",
+                                            {"topic": topic, "depth": 1,
+                                             "max_tokens": MEMORY_MAX_TOKENS}))
+            labels.append("neuron")
 
         neurag = _registry.get_server("neurag")
         if neurag and neurag.is_alive() and neurag.collaborative:

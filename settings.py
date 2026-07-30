@@ -30,6 +30,11 @@ DEFAULTS = {
     # Il punto di tutto il progetto è FAR RISPARMIARE token, quindi la quantità
     # iniettata è un budget, non un effetto collaterale.
     "knowledge_top_n": 5,          # chunk di vault per pulse (1-10)
+    # Memoria (Neuron): `get_context` applica già un budget in caratteri da
+    # `max_tokens`, ma GM non glielo passava, quindi la voce più antica della
+    # pulse era l'unica che l'utente non poteva toccare. Il default è lo stesso
+    # del tool: cambiare knob è una scelta, non un effetto dell'averlo esposto.
+    "memory_max_tokens": 400,
     # Tetto ai contenuti PROATTIVI (bridge, vicini, flash): quelli che l'utente
     # non ha chiesto. Erano senza cap: 40 bridge che condividevano un tag
     # facevano ~5000 token in una sola pulse, e ogni bridge mostrato viene anche
@@ -61,6 +66,9 @@ HELP = {
     "knowledge_top_n": "Quanti chunk di conoscenza iniettare per pulse. È la "
                        "voce più costosa in token: 5 sono circa 300 token, 10 "
                        "circa 700. Abbassalo se il contesto è stretto.",
+    "memory_max_tokens": "Tetto in token per il contesto di memoria (Neuron) in "
+                         "una pulse. Sono i concetti e i legami già noti: costa "
+                         "meno della conoscenza ma è la voce più costante.",
     "proactive_budget_chars": "Tetto in caratteri per ciò che GM aggiunge SENZA "
                               "che tu l'abbia chiesto (bridge, vicini, flash). "
                               "0 = niente contenuti proattivi, solo le risposte "
@@ -71,6 +79,7 @@ HELP = {
 
 SUGGEST = {
     "knowledge_top_n": ["3", "5", "10"],
+    "memory_max_tokens": ["150", "400", "800"],
     "proactive_budget_chars": ["0", "400", "800", "2000"],
     "unmanaged": ["", "neuron", "neurag", "neuron,neurag"],
 }

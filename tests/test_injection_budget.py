@@ -124,6 +124,21 @@ def test_everything_fits_when_the_budget_is_generous():
 
 # ---------- le manopole esistono e sono raggiungibili dalla GUI ----------
 
+def test_the_memory_budget_is_passed_and_not_left_to_the_tool_default():
+    """`get_context` has always had a char budget from `max_tokens`, but GM
+    never passed it — so the oldest item in a pulse was the one thing the user
+    could not turn down. The default matches the tool's own, so exposing the
+    knob changed nothing by itself."""
+    import inspect
+
+    from gray_matter import server, settings
+
+    src = inspect.getsource(server.call_tool)
+    assert '"max_tokens": MEMORY_MAX_TOKENS' in src, (
+        "get_context is back on the tool's own default")
+    assert server.MEMORY_MAX_TOKENS == settings.DEFAULTS["memory_max_tokens"] == 400
+
+
 def test_the_injection_knobs_exist_with_help():
     """La GUI costruisce la sua card da `<tool> config list --json`, e
     `_knob_dict` legge HELP con un fallback a {} — quindi per un bel po' OGNI

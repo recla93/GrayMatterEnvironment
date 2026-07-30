@@ -16,6 +16,11 @@
     farne stare più vale più di un prefisso stretto dell'ordine.
   - `knowledge_top_n` (default 5): quanti chunk di vault per pulse. È la voce
     più costosa — 5 sono ~292 token misurati, 10 ~689.
+  - `memory_max_tokens` (default 400): tetto per il contesto di memoria.
+    `get_context` di Neuron ha sempre avuto il suo budget in caratteri da
+    `max_tokens`, ma GM non glielo passava — quindi la voce più costante della
+    pulse era l'unica che l'utente non potesse abbassare. Il default è identico
+    a quello del tool: esporre la manopola non cambia niente da sé.
   - Il flash ha priorità sui bridge: è l'unico contenuto proattivo che non si
     può ri-ottenere chiedendo (i bridge stanno in `gray-matter bridges`, i vicini
     in `knowledge_neighbors`). Un flash tagliato è perso.
