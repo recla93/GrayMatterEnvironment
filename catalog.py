@@ -317,6 +317,49 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Searches the knowledge base. Type your question in the query field.",
         "To see what your AI would find, before you trust the vault.",
     ),
+    ("neurag", "recall"): (
+        "Cerca in TUTTI i layer, anche nei nodi parcheggiati (dormienti). "
+        "Niente viene mai cancellato: viene solo messo da parte.",
+        "Quando sai che una cosa c'era e 'query' non la trova più: probabilmente "
+        "è stata parcheggiata perché nessuno la consultava da mesi.",
+        "Searches EVERY layer, parked (dormant) nodes included. Nothing is ever "
+        "deleted here — only set aside.",
+        "When you know something was there and 'query' no longer finds it: it has "
+        "most likely been parked after months without being consulted.",
+    ),
+    ("neurag", "park"): (
+        "Elenca i nodi rimasti inattivi abbastanza a lungo da scendere a un layer "
+        "dormiente. NON tocca niente finché non passi --apply.",
+        "Su un vault grosso e vecchio, per togliere dalla scansione di default "
+        "quello che non risponde più a nessuno. Un nodo parcheggiato resta "
+        "raggiungibile con 'recall': lancialo prima senza --apply e leggi la lista.",
+        "Lists nodes idle long enough to drop to a dormant layer. Changes NOTHING "
+        "unless you pass --apply.",
+        "On a large, old vault, to take what no longer answers anything out of the "
+        "default scan. A parked node stays reachable through 'recall' — run it "
+        "without --apply first and read the list.",
+    ),
+    ("neurag", "unpark"): (
+        "Riporta un nodo dormiente nel vault attivo.",
+        "Quando 'park' ha messo da parte qualcosa che ti serve ancora: torna nella "
+        "ricerca normale, senza dover usare 'recall' ogni volta.",
+        "Brings a dormant node back into the active vault.",
+        "When 'park' set aside something you still need: it returns to ordinary "
+        "search instead of needing 'recall' every time.",
+    ),
+    ("neurag", "decay"): (
+        "Indebolisce il peso dei collegamenti e la salienza dei tag in base al "
+        "tempo passato dall'ultima esecuzione. Non cancella nulla: le rotte "
+        "sbiadiscono, non spariscono.",
+        "Manutenzione periodica su un vault vivo: quello che usi si rinforza da "
+        "solo a ogni ricerca, quello che non usi arretra. Lanciarlo due volte di "
+        "fila non raddoppia l'effetto.",
+        "Weakens link weights and tag salience by the time elapsed since the last "
+        "run. Deletes nothing: routes get fainter, they never disappear.",
+        "Periodic upkeep on a live vault: what you use reinforces itself on every "
+        "search, what you don't recedes. Running it twice in a row does not "
+        "double the effect.",
+    ),
     ("neurag", "tree"): (
         "Mostra la gerarchia dei nodi di conoscenza.",
         "Per orientarti nel vault e capire dove finirà un nuovo documento.",
