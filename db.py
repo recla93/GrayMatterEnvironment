@@ -826,6 +826,16 @@ class KnowledgeGraph:
                     f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         self._conn.commit()
 
+    def node_tag_names(self, node_id: int) -> list[str]:
+        """The node's canonical (normalized) tag names.
+
+        The read side of the substrate for anyone outside this vault: Gray
+        Matter joins its bridges on these instead of matching substrings against
+        a node name (§4)."""
+        return [r["name"] for r in self._conn.execute(
+            "SELECT t.name AS name FROM node_tags nt JOIN tags t ON t.id = nt.tag_id "
+            "WHERE nt.node_id = ? ORDER BY t.name", (node_id,)).fetchall()]
+
     def _migrate_tags(self) -> None:
         """Backfill node_tags from the legacy `nodes.tags` JSON column.
 

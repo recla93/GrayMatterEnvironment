@@ -386,8 +386,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         depth = min(max(int(arguments.get("depth", 2)), 1), 3)
         limit = min(max(int(arguments.get("limit", 5)), 1), 20)
         neigh = db.get_neighbors(node["id"], depth=depth, limit=limit)
+        # The node's canonical tag names travel with the answer. Gray Matter
+        # matches its cross-store bridges on tag IDENTITY (DESIGN-EVOLUTION §4),
+        # and this is the only object all three stores agree on — sending it
+        # here costs nothing, where a second round-trip in GM's pulse to ask for
+        # four words would not be free.
         return [TextContent(type="text", text=_json.dumps(
             {"node": {"name": node["name"], "path": node.get("path")},
+             "tags": db.node_tag_names(node["id"]),
              "neighbors": neigh}, ensure_ascii=False))]
 
     if name == "knowledge_ingest":

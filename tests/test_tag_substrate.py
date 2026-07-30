@@ -192,6 +192,41 @@ def test_chunk_tags_written_and_replaced_on_reingest(tmp_path):
     kg.close()
 
 
+# ---------- the read side, for whoever is outside this vault ----------
+
+def test_node_tag_names_returns_the_canonical_names():
+    """Gray Matter joins its cross-store bridges on these instead of matching
+    substrings against a node name (§4), so they must be the NORMALIZED ones —
+    the same key both sides agree on — and stable in order."""
+    kg = _kg()
+    a = kg.add_node("A", "fundamental", parent_id=0, tags=["Quorum", " Raft "])
+    assert kg.node_tag_names(a) == ["quorum", "raft"]
+    assert kg.node_tag_names(kg.add_node("B", "fundamental", parent_id=0)) == []
+    assert kg.node_tag_names(999999) == []
+    kg.close()
+
+
+def test_the_neighbors_tool_carries_the_tags():
+    """It is the response GM already asks for, so the join costs no extra
+    round-trip in the pulse."""
+    import asyncio
+    import json as js
+
+    from neurag import server
+
+    kg = _kg()
+    kg.add_node("Quorum", "fundamental", parent_id=0, tags=["consensus", "raft"])
+    server._db = kg
+    try:
+        raw = asyncio.run(server.call_tool("knowledge_neighbors", {"query": "Quorum"}))
+        data = js.loads(raw[0].text)
+        assert data["node"]["name"] == "Quorum"
+        assert data["tags"] == ["consensus", "raft"]
+    finally:
+        server._db = None
+    kg.close()
+
+
 # ---------- the substrate is visible to the diagnostics ----------
 
 def test_status_counts_tags():
