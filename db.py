@@ -215,16 +215,30 @@ class RemoteTursoConnection:
         return _RemoteCursor(None)
 
     def executescript(self, script: str):
-        for s in script.split(";"):
-            s = s.strip()
-            if s:
-                self.execute(s)
+        for s in _split_sql(script):
+            self.execute(s)
 
     def close(self):
         try:
             self._client.close()
         except Exception:
             pass
+
+
+def _split_sql(script: str) -> list[str]:
+    """Split a SQL script into executable statements.
+
+    Comments are stripped BEFORE the split. Neither pyturso nor the remote
+    client has `executescript`, so we cut on ';' by hand — and a ';' inside a
+    `--` comment truncated the statement that contained it, leaving the engine
+    with "incomplete input" and the schema silently short a table. It cost the
+    tag substrate one debugging round. Comments exist for whoever reads db.py,
+    not for the engine, so dropping them costs nothing.
+
+    ponytail: no string-literal awareness. Nothing in SCHEMA_SQL quotes a '--';
+    if something ever does, this needs a real tokenizer, not a bigger regex.
+    """
+    return [s.strip() for s in re.sub(r"--[^\n]*", "", script).split(";") if s.strip()]
 
 
 def _ensure_parent_dir(path: str) -> None:
@@ -364,7 +378,7 @@ CREATE TABLE IF NOT EXISTS tags (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     name      TEXT    NOT NULL UNIQUE,   -- normalized: lowercase, trimmed
     uses      INTEGER DEFAULT 0,         -- document frequency, drives IDF suppression
-    salience  REAL    DEFAULT 0.0,       -- Hebbian home for P5, unused in P1
+    salience  REAL    DEFAULT 0.0,       -- Hebbian home (P5); unused in P1
     last_used TEXT
 );
 -- No FK on purpose: pyturso 0.6.1 stack-overflows on cascade triggers (see
@@ -595,10 +609,8 @@ class KnowledgeGraph:
 
     def _init_schema(self) -> None:
         try:
-            for stmt in SCHEMA_SQL.split(";"):
-                s = stmt.strip()
-                if s:
-                    self._conn.execute(s)
+            for stmt in _split_sql(SCHEMA_SQL):
+                self._conn.execute(stmt)
             self._conn.commit()
             self._migrate_tags()
         except Exception as e:  # noqa: BLE001 — "file is not a database" & simili

@@ -7,6 +7,7 @@ join key, and IDF suppression of a tag that predicts everything.
 """
 import json
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -30,7 +31,25 @@ def test_schema_creates_tag_tables():
     tables = {r[0] for r in kg._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     assert {"tags", "node_tags", "chunk_tags"} <= tables
+    assert not kg._corrupt, kg._corrupt_err
     kg.close()
+
+
+def test_a_semicolon_in_a_comment_does_not_truncate_the_schema():
+    """There is no executescript on either backend, so the script is cut on
+    ';' by hand. A ';' inside a `--` comment used to truncate the statement
+    around it, and the table simply never appeared: the schema is applied
+    inside a try/except that only sets `_corrupt`, so the failure was silent
+    until a query hit the missing table. SCHEMA_SQL still contains such a
+    comment on purpose -- it is the fixture."""
+    from neurag.db import SCHEMA_SQL, _split_sql
+    assert ";" in re.search(r"salience.*", SCHEMA_SQL).group(0)
+    created = [s for s in _split_sql(SCHEMA_SQL) if "CREATE TABLE IF NOT EXISTS tags" in s]
+    assert len(created) == 1
+    assert "last_used" in created[0]          # the whole body, not the head of it
+    assert created[0].count("(") == created[0].count(")")
+    assert _split_sql("CREATE TABLE a (x INT);  -- one; two\nSELECT 1;") == [
+        "CREATE TABLE a (x INT)", "SELECT 1"]
 
 
 # ---------- normalization is the join key ----------
