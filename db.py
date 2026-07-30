@@ -265,6 +265,9 @@ def _split_sql(script: str) -> list[str]:
     tag substrate one debugging round. Comments exist for whoever reads db.py,
     not for the engine, so dropping them costs nothing.
 
+    keep-in-sync with `neuron/src/neuron/db.py:_split_sql` — that file has the
+    same hand-rolled splitter, and the same latent defect until this landed.
+
     ponytail: no string-literal awareness. Nothing in SCHEMA_SQL quotes a '--';
     if something ever does, this needs a real tokenizer, not a bigger regex.
     """
