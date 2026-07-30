@@ -317,6 +317,30 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Searches the knowledge base. Type your question in the query field.",
         "To see what your AI would find, before you trust the vault.",
     ),
+    ("neurag", "confirm"): (
+        "Segnala che due o più nodi sono stati utili INSIEME: i collegamenti fra "
+        "loro si rinforzano e sopravvivono al prossimo ingest.",
+        "Dopo una risposta che ha funzionato davvero. È la conferma a insegnare, "
+        "non il fatto che siano usciti insieme in una ricerca: il recupero è "
+        "poco costoso e spesso sbaglia, quindi rinforzarlo insegnerebbe al "
+        "grafo quello che il ranking già crede.",
+        "Marks two or more nodes as having been useful TOGETHER: the links "
+        "between them are reinforced and outlive the next ingest.",
+        "After an answer that actually worked. Confirmation is what teaches, not "
+        "the fact that they came back together in one search: retrieval is cheap "
+        "and often wrong, so reinforcing it would teach the graph whatever the "
+        "ranking already believed.",
+    ),
+    ("neurag", "related"): (
+        "Cosa si collega a un nodo, per attivazione che si propaga lungo i link. "
+        "Ordinato per forza del legame, non per numero di salti.",
+        "Quando la ricerca per testo non basta: trova quello che è associato ma "
+        "non contiene le parole della domanda. Solo grafo, nessun embedding.",
+        "What a node connects to, by activation spreading along the links. "
+        "Ranked by how strongly, not by hop count.",
+        "When a text search is not enough: it finds what is associated but does "
+        "not contain the words you asked about. Graph only, no embedding.",
+    ),
     ("neurag", "recall"): (
         "Cerca in TUTTI i layer, anche nei nodi parcheggiati (dormienti). "
         "Niente viene mai cancellato: viene solo messo da parte.",
