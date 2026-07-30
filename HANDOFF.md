@@ -11,7 +11,7 @@ Sostituisce, per questa sessione, `feat_graph_and_chunk_ceiling__summary.md`
 
 | Suite | Esito |
 |---|---|
-| `pytest neurag/tests` | **239 passed**, 1 skipped |
+| `pytest neurag/tests` | **260 passed**, 1 skipped |
 | `pytest gray_matter/tests` | **383 passed**, 1 skipped |
 | `pytest neuron/tests` | **312 passed** |
 
@@ -30,13 +30,13 @@ console visibile. Quello in neurag è pre-esistente.
 | P2 | Encoding / chunk ceiling | ✅ (precedenti) |
 | P3 | Retrieval ibrido | ✅ (precedenti) |
 | P4 | **Layers** | ✅ questa sessione |
-| P5 | Brain — `origin`, Hebbian on confirm, spreading activation | ⬜ **prossima** |
+| P5 | Brain — `origin`, Hebbian on confirm, spreading activation | ✅ questa sessione |
 | P6 | Cross-tool (solo GM) | ⬜ |
 | P7 | Installer + GUI | ⬜ parzialmente anticipata (vedi sotto) |
 
 ## Cosa è cambiato
 
-### neurag — 8 commit, 12 file, +1688/-100
+### neurag — 10 commit
 
 - **P1 — tag substrate** (`8f6d3ff`). Tabelle `tags` / `node_tags` / `chunk_tags`;
   nome normalizzato come join key; `uses` ricalcolato da `node_tags`, mai
@@ -49,6 +49,12 @@ console visibile. Quello in neurag è pre-esistente.
   in query **e** in ore; parking per inattività × peso del link, dry run se non
   passi `--apply`; decay per emivita da `meta.decayed_at`; `recall` su tutti i
   layer. CLI: `park`, `unpark`, `decay`, `recall`, `query --deep`.
+- **P5 — brain**. `origin` sui link + non-clobber in `upsert_link` (vedi la nota
+  su `a05631a` in fondo); `confirm()` Hebbian sulla **conferma**, cooldown 2
+  query, promozione a 3/8 come **pavimento** del peso; `spreading_activation` e
+  `related_nodes`; MCP `knowledge_confirm` / `knowledge_related`; CLI `confirm` /
+  `related`. Più: `tool_names` annunciata a GM ora **derivata** da `_tools()` —
+  era scritta a mano e aveva perso `knowledge_neighbors` e `skill`.
 - **Fix trovati e chiusi lungo la strada**:
   - `499ea74` un `;` dentro un commento SQL troncava lo schema in silenzio →
     `_split_sql` toglie i commenti prima di tagliare;
@@ -92,12 +98,12 @@ console visibile. Quello in neurag è pre-esistente.
 
 Ordinati per come li affronterei.
 
-1. **P5 — Brain.** Colonna `origin` sui link, Hebbian on confirm, spreading
-   activation. Gate: *i link curati sopravvivono al re-ingest* — oggi
-   `rebuild_links()` fa `DELETE FROM node_links` e ricostruisce, quindi qualunque
-   link curato a mano viene perso. È il primo pezzo da sistemare.
-   `tags.salience` ha già uno scrittore (`touch_nodes`) e un decay, quindi la
-   metà Hebbian ha dove appoggiarsi.
+1. **Innestare lo spreading activation nel ranking di `search()`**, che è
+   l'unico pezzo di P5 lasciato fuori di proposito: è un cambio misurabile al
+   recupero e va dietro al **set di ~30 query del benchmark** (§7), non dietro a
+   un argomento plausibile. Oggi l'attivazione è raggiungibile solo su richiesta
+   esplicita (`related` / `knowledge_related`). Serve prima il query set, che non
+   esiste ancora come artefatto versionato — è il vero blocco.
 2. **Soglie di parking, con dati veri** (`DESIGN-EVOLUTION §8.1`). Misurato:
    sul repo `neurag/` **nessun nodo con chunk è parcheggiabile**, perché
    `max_link_weight=0.25` sta sotto ogni peso reale (0.458–1.0). Le soglie non
@@ -121,9 +127,27 @@ Ordinati per come li affronterei.
    riapre riceve un handle con lo schema vecchio e asserisce su una vista
    stantia — passa qualunque cosa faccia il codice. Serve
    `neurag.db._turso_conn_cache.clear()` per simulare un processo nuovo.
-7. **P7 già intaccata**: i 4 comandi nuovi sono nel catalogo ma i pannelli GUI
+7. **P7 già intaccata**: i comandi nuovi sono nel catalogo ma i pannelli GUI
    per tag e link health non esistono. Nessun knob nuovo è stato introdotto, per
    scelta, quindi i 6 installer non hanno debito.
+8. **`node_links` è direzionale** e `build_crossref_links` crea davvero le due
+   righe: `(A,B)` e `(B,A)` sono chiavi distinte. È semanticamente corretto —
+   "A parla di B" non è "B parla di A" — ma vuol dire che una coppia contribuisce
+   **due archi** allo spreading activation, con pesi diversi. Comportamento
+   fissato in un test (`test_a_directional_pair_is_reinforced_in_each_direction_on_its_own`),
+   non un bug; da rivedere solo se il doppio arco distorce il ranking quando
+   l'attivazione entrerà in `search()` (TODO-1).
+
+## Nota sul commit `a05631a`
+
+Quel commit ha per messaggio il fix degli installer ma contiene anche 41 righe in
+`db.py` — la colonna `origin`, `co_activation_count`, `last_coactivation`, il
+non-clobber in `upsert_link` e `rebuild_links` che cancella solo gli `auto`, cioè
+il primo pezzo di P5. Sono arrivate nel working tree mentre si lavorava sugli
+installer e un `git add -A` le ha inglobate. Il codice è corretto (verificato e
+ora coperto da `tests/test_hebbian.py`), ma il messaggio di quel commit non lo
+descrive: chi cerca l'origine di `origin` in `git log` non lo trova dove
+dovrebbe. Da qui in avanti: `git status` prima di ogni `add`.
 
 ## Da sapere sull'ambiente
 

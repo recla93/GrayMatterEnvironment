@@ -1592,6 +1592,165 @@ class KnowledgeGraph:
             "WHERE id != 0 GROUP BY l").fetchall()
         return {f"L{r['l']}": r["n"] for r in rows}
 
+    # -- Hebbian reinforcement (DESIGN-EVOLUTION §5.1, Neuron ADR-003 E2.1) ---
+    #
+    # Neurons that fire together wire together — but CONFIRMATION is the signal,
+    # not co-retrieval. Retrieval is cheap and often wrong: reinforcing on every
+    # co-return would teach the graph whatever the ranker already believes, which
+    # is how a wrong association becomes a strong one.
+
+    HEBBIAN_COOLDOWN = 2            # queries between two counts on the same link
+    HEBBIAN_UPGRADE_MEDIUM = 3      # co-activations promoting tangential -> medium
+    HEBBIAN_UPGRADE_STRONG = 8      # ...and medium -> strong
+    # Neuron's weights are labels ('tangential'|'medium'|'strong'); NeuRAG's are
+    # floats, and a Jaccard overlap can already be 1.0. So a threshold maps to a
+    # FLOOR the weight is raised to, never a value it is set to — otherwise
+    # confirming a strong link would demote it. Promotion stays monotone, as in
+    # Neuron.
+    HEBBIAN_FLOOR = {"tangential": 0.30, "medium": 0.60, "strong": 1.00}
+
+    @classmethod
+    def _hebbian_floor(cls, count: int) -> float:
+        if count >= cls.HEBBIAN_UPGRADE_STRONG:
+            return cls.HEBBIAN_FLOOR["strong"]
+        if count >= cls.HEBBIAN_UPGRADE_MEDIUM:
+            return cls.HEBBIAN_FLOOR["medium"]
+        return cls.HEBBIAN_FLOOR["tangential"]
+
+    def confirm(self, node_ids) -> list[dict]:
+        """Mark these nodes as having been useful TOGETHER, and let the links
+        between them learn from it.
+
+        Only links that already exist are reinforced — creating them stays with
+        the auto-builders, exactly as in Neuron. A reinforced link stops being
+        `origin='auto'`: what the graph learned has to outlive the next ingest,
+        and `rebuild_links` only clears derived links.
+
+        Returns the links whose weight actually moved.
+        """
+        ids = sorted({int(n) for n in node_ids})
+        if len(ids) < 2:
+            return []
+        q = int(self._meta_get("query_count", "0") or 0)
+        marks = ",".join("?" * len(ids))
+        rows = self._conn.execute(
+            f"""SELECT source_id, target_id, link_type, weight, origin,
+                       co_activation_count, last_coactivation
+                  FROM node_links
+                 WHERE source_id IN ({marks}) AND target_id IN ({marks})""",
+            [*ids, *ids]).fetchall()
+
+        upgraded: list[dict] = []
+        for r in rows:
+            # Cooldown on the query clock: two confirms with no query between
+            # them are the same event seen twice, not two pieces of evidence.
+            # A link never reinforced has no cooldown to respect — and it cannot
+            # be recognised by `last_coactivation`, whose DEFAULT 0 is
+            # indistinguishable from "counted at query 0". The count is the
+            # unambiguous "never": without this the FIRST confirm on any fresh
+            # vault was silently swallowed.
+            counted_before = (r["co_activation_count"] or 0) > 0
+            if counted_before and q - (r["last_coactivation"] or 0) < self.HEBBIAN_COOLDOWN:
+                continue
+            count = (r["co_activation_count"] or 0) + 1
+            floor = self._hebbian_floor(count)
+            weight = max(r["weight"] or 0.0, floor)
+            origin = "hebbian" if (r["origin"] or "auto") == "auto" else r["origin"]
+            self._conn.execute(
+                """UPDATE node_links
+                      SET co_activation_count = ?, last_coactivation = ?,
+                          weight = ?, origin = ?, updated_at = datetime('now')
+                    WHERE source_id = ? AND target_id = ? AND link_type = ?""",
+                (count, q, weight, origin,
+                 r["source_id"], r["target_id"], r["link_type"]))
+            if weight > (r["weight"] or 0.0):
+                upgraded.append({"source_id": r["source_id"], "target_id": r["target_id"],
+                                 "link_type": r["link_type"], "weight": weight,
+                                 "co_activation_count": count})
+        self._conn.commit()
+        # Confirmation is stronger evidence of use than a retrieval was, so the
+        # activity clocks parking and decay read move too.
+        self.touch_nodes(ids)
+        return upgraded
+
+    # -- spreading activation (§5.1, Neuron E2.3) ----------------------------
+
+    def spreading_activation(self, seeds, k: int = 2, decay: float = 0.5,
+                             min_activation: float = 0.01,
+                             deep: bool = False) -> list[tuple[int, float]]:
+        """Spread activation from `seeds` along links, k hops out.
+
+        Each hop contributes `activation x weight x salience_factor x decay`:
+        the weight is the link strength Hebbian promotion raises, the salience
+        factor lets a well-used node act as a hub, and `decay` with a small `k`
+        keeps it from flooding the whole graph. Returns the reached NON-seed
+        nodes ranked by accumulated activation — an associative route to
+        something no direct match would have found.
+
+        Pure graph walk: no embedding, no query text. Parked nodes stay out
+        unless `deep`, so an expansion cannot quietly undo P4's parking.
+        """
+        seed_set = {int(s) for s in seeds}
+        live = {r["id"] for r in self._conn.execute(
+            "SELECT id FROM nodes WHERE id != 0" + (
+                "" if deep else f" AND COALESCE(layer, {self.LAYER_ACTIVE}) "
+                                f"<= {self.LAYER_ACTIVE}")).fetchall()}
+        seed_set &= live
+        if not seed_set:
+            return []
+
+        adj: dict[int, list[tuple[int, float]]] = {}
+        for r in self._conn.execute(
+                "SELECT source_id, target_id, weight FROM node_links").fetchall():
+            s, t, w = r["source_id"], r["target_id"], r["weight"] or 0.0
+            if w <= 0 or s not in live or t not in live:
+                continue
+            adj.setdefault(s, []).append((t, w))
+            adj.setdefault(t, []).append((s, w))
+
+        # Salience lives on TAGS in NeuRAG, not on nodes (§4 put it there on
+        # purpose), so a node's hub factor is the mean salience of its tags.
+        sal: dict[int, float] = {r["node_id"]: r["s"] for r in self._conn.execute(
+            "SELECT nt.node_id AS node_id, AVG(t.salience) AS s "
+            "FROM node_tags nt JOIN tags t ON t.id = nt.tag_id "
+            "GROUP BY nt.node_id").fetchall()}
+        max_sal = max(sal.values(), default=0.0) or 1.0
+
+        activation = {s: 1.0 for s in seed_set}
+        frontier = dict(activation)
+        for _hop in range(max(1, k)):
+            nxt: dict[int, float] = {}
+            for src, act in frontier.items():
+                for other, weight in adj.get(src, ()):
+                    contrib = act * weight * (1.0 + sal.get(other, 0.0) / max_sal) * decay
+                    if contrib < min_activation:
+                        continue
+                    activation[other] = activation.get(other, 0.0) + contrib
+                    nxt[other] = nxt.get(other, 0.0) + contrib
+            frontier = nxt
+            if not frontier:
+                break
+        out = [(nid, round(a, 4)) for nid, a in activation.items() if nid not in seed_set]
+        out.sort(key=lambda x: -x[1])
+        return out
+
+    def related_nodes(self, node_id: int, k: int = 2, limit: int = 10,
+                      deep: bool = False) -> list[dict]:
+        """`spreading_activation` with the node info attached — "what else does
+        this connect to", ranked by how strongly rather than by hop count.
+
+        Deliberately NOT folded into `search()` ranking: that is a measurable
+        change to retrieval and it belongs behind the benchmark query set, not
+        behind a plausible argument."""
+        out = []
+        for nid, act in self.spreading_activation([node_id], k=k, deep=deep)[:limit]:
+            node = self.get_node(nid)
+            if node:
+                out.append({"id": nid, "name": node["name"], "path": node["path"],
+                            "activation": act,
+                            "layer": node.get("layer") or self.LAYER_ACTIVE})
+        return out
+
     def rebuild_links(self) -> dict:
         """Rebuild the DERIVED links from tags + cross-refs.
 

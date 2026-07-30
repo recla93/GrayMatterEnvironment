@@ -64,6 +64,21 @@ def build_parser() -> argparse.ArgumentParser:
     up = sub.add_parser("unpark", help="Bring a parked node back to the active vault")
     up.add_argument("name", help="Node name")
 
+    cf = sub.add_parser("confirm",
+                        help="Mark two or more nodes as having been useful "
+                             "TOGETHER: the links between them learn from it")
+    cf.add_argument("names", nargs="+", help="Two or more node names")
+    cf.add_argument("--json", action="store_true", help="Output as JSON")
+
+    rl = sub.add_parser("related",
+                        help="What else a node connects to, by spreading "
+                             "activation (ranked by strength, not hop count)")
+    rl.add_argument("name", help="Node name")
+    rl.add_argument("--hops", type=int, default=2, help="Hops (default 2)")
+    rl.add_argument("--limit", type=int, default=10, help="Max results (default 10)")
+    rl.add_argument("--deep", action="store_true", help="Include parked nodes")
+    rl.add_argument("--json", action="store_true", help="Output as JSON")
+
     dc = sub.add_parser("decay",
                         help="Weaken link weights and tag salience by the time "
                              "elapsed since the last run")
@@ -941,6 +956,52 @@ def main() -> None:
             sys.exit(1)
         db.unpark(node["id"])
         print(f"[ok] '{args.name}' back in the active vault (L2).")
+
+    elif args.command == "confirm":
+        nodes = [db.get_node_by_name(n) for n in args.names]
+        missing = [n for n, node in zip(args.names, nodes) if not node]
+        if missing:
+            print(f"Node(s) not found: {', '.join(missing)}", file=sys.stderr)
+            sys.exit(1)
+        if len(nodes) < 2:
+            print("confirm needs at least two nodes — a co-activation is a PAIR.",
+                  file=sys.stderr)
+            sys.exit(1)
+        by_id = {n["id"]: n["name"] for n in nodes}
+        upgraded = db.confirm([n["id"] for n in nodes])
+        if args.json:
+            print(json_mod.dumps({"confirmed": list(by_id.values()),
+                                  "upgraded": upgraded}, ensure_ascii=False,
+                                 indent=2, default=str))
+            return
+        print(f"[ok] confermati: {', '.join(by_id.values())}")
+        if not upgraded:
+            print("  nessun link promosso (cooldown, o peso già al massimo, "
+                  "o nessun link tra questi nodi da rinforzare).")
+        for u in upgraded:
+            print(f"  {by_id.get(u['source_id'], u['source_id'])} -> "
+                  f"{by_id.get(u['target_id'], u['target_id'])}: "
+                  f"peso {u['weight']:.2f} (co-attivazioni {u['co_activation_count']})")
+
+    elif args.command == "related":
+        node = db.get_node_by_name(args.name)
+        if not node:
+            print(f"Node '{args.name}' not found.", file=sys.stderr)
+            sys.exit(1)
+        rel = db.related_nodes(node["id"], k=args.hops, limit=args.limit,
+                               deep=args.deep)
+        if args.json:
+            print(json_mod.dumps(rel, ensure_ascii=False, indent=2, default=str))
+            return
+        if not rel:
+            print("Nessun nodo raggiunto. Servono link: prova `neurag "
+                  "knowledge_rebuild_links` o `--deep` se i vicini sono parcheggiati."
+                  if not args.deep else "Nessun nodo raggiunto.")
+            return
+        print(f"Da '{node['name']}', {args.hops} salti:")
+        for r in rel:
+            mark = "" if r["layer"] <= db.LAYER_ACTIVE else f"  [L{r['layer']} dormant]"
+            print(f"  {r['activation']:.3f}  {r['path']}{mark}")
 
     elif args.command == "decay":
         report = db.decay()

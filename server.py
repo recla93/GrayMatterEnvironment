@@ -37,6 +37,23 @@ app = Server("neurag", version=__version__)
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:
+    return _tools()
+
+
+def announced_tool_names() -> list[str]:
+    """What `main()` tells Gray Matter this server serves.
+
+    DERIVED from the tools themselves, the way Neuron does it
+    (`autoregister("neuron", list(_HANDLERS.keys()))`). It used to be a
+    hand-written list next to `autoregister`, and it had drifted twice:
+    `knowledge_neighbors` and `skill` were both served and dispatched for
+    releases while the gateway was never told they existed, so GM could not
+    proxy tools that worked."""
+    return [t.name for t in _tools()]
+
+
+def _tools() -> list[Tool]:
+    """The single source of truth for what this server serves."""
     return [
         Tool(
             name="knowledge_ingest",
@@ -189,6 +206,43 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="knowledge_confirm",
+            description="Mark results as having been USEFUL TOGETHER, so the links "
+                        "between their nodes learn from it (Hebbian). Call it after an "
+                        "answer actually helped — confirmation is the signal, "
+                        "co-retrieval is not: retrieval is cheap and often wrong. "
+                        "Reinforces only links that already exist, at most once per 2 "
+                        "queries per link, promoting weight at 3 and 8 co-activations. "
+                        "A reinforced link stops being derived, so it survives the next "
+                        "ingest. JSON: {confirmed:[names], upgraded:[{source,target,weight}]}.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "names": {"type": "array", "items": {"type": "string"},
+                              "description": "Two or more node names that were useful together"},
+                },
+                "required": ["names"],
+            },
+        ),
+        Tool(
+            name="knowledge_related",
+            description="Associative expansion: spreading activation from a node, k hops "
+                        "out, ranked by accumulated activation rather than hop count. "
+                        "Surfaces what a direct match would miss. Pure graph walk (no "
+                        "embedding). Parked nodes stay out unless deep=true. "
+                        "JSON: {node, related:[{name, path, activation, layer}]}.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Topic/keyword to resolve to a node"},
+                    "k": {"type": "integer", "description": "Hops (default 2)", "default": 2},
+                    "limit": {"type": "integer", "description": "Max results (default 5)", "default": 5},
+                    "deep": {"type": "boolean", "description": "Include parked nodes", "default": False},
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
             name="knowledge_remove_node",
             description="Delete a node and its entire subtree (children, chunks, links). "
                         "Runs server-side on the single DB writer (the Gray-Matter worker "
@@ -284,6 +338,37 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=f"skill '{which}' unreadable: {exc}")]
 
     db = _get_db()
+
+    if name == "knowledge_confirm":
+        import json as _json
+        names = [str(n) for n in (arguments.get("names") or [])]
+        nodes = [n for n in (db.get_node_by_name(x) for x in names) if n]
+        if len(nodes) < 2:
+            return [TextContent(type="text", text=_json.dumps(
+                {"confirmed": [n["name"] for n in nodes], "upgraded": [],
+                 "note": "need at least two known nodes to reinforce a link"}))]
+        upgraded = db.confirm([n["id"] for n in nodes])
+        by_id = {n["id"]: n["name"] for n in nodes}
+        return [TextContent(type="text", text=_json.dumps({
+            "confirmed": [n["name"] for n in nodes],
+            "upgraded": [{"source": by_id.get(u["source_id"], u["source_id"]),
+                          "target": by_id.get(u["target_id"], u["target_id"]),
+                          "weight": round(u["weight"], 3),
+                          "co_activation_count": u["co_activation_count"]}
+                         for u in upgraded]}, ensure_ascii=False))]
+
+    if name == "knowledge_related":
+        import json as _json
+        query = " ".join(str(arguments.get("query", "")).split())[:200]
+        node = (db.find_node_by_trigger(query) or db.get_node_by_name(query)) if query else None
+        if not node:
+            return [TextContent(type="text", text=_json.dumps({"node": None, "related": []}))]
+        related = db.related_nodes(node["id"],
+                                  k=int(arguments.get("k", 2)),
+                                  limit=int(arguments.get("limit", 5)),
+                                  deep=bool(arguments.get("deep", False)))
+        return [TextContent(type="text", text=_json.dumps(
+            {"node": node["name"], "related": related}, ensure_ascii=False))]
 
     if name == "knowledge_neighbors":
         import json as _json
@@ -481,23 +566,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 def main() -> None:
     """Start NeuRAG MCP server with optional Gray-Matter registration."""
-    tool_names = [
-        "knowledge_ingest",
-        "knowledge_ingest_status",
-        "knowledge_index",
-        "knowledge_add_node",
-        "knowledge_add_chunks",
-        "knowledge_query",
-        "knowledge_status",
-        "knowledge_tree",
-        "knowledge_health",
-        "knowledge_link_graph",
-        "knowledge_rebuild_links",
-        "knowledge_reindex",
-        "knowledge_remove_node",
-        "knowledge_rename_node",
-        "knowledge_import",
-    ]
+    tool_names = announced_tool_names()
 
     # Gray-Matter auto-registration (non-blocking). Se NeuRAG è andato
     # standalone (go-standalone), NON deve ri-registrarsi al gateway anche se

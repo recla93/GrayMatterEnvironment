@@ -1,6 +1,38 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **Il grafo impara, e quello che impara sopravvive (P5, §5.1).**
+  - `node_links.origin` separa i link derivati da quelli appresi:
+    `rebuild_links()` cancella solo `origin='auto'`, e `upsert_link` rifiuta di
+    far sovrascrivere una riga appresa da una derivata (cancellare solo gli auto
+    non bastava: i builder ri-upsertano ogni coppia al rientro).
+  - **`neurag confirm A B`** (e `knowledge_confirm`): rinforzo Hebbian sulla
+    **conferma**, non sul co-recupero. Il recupero costa poco e sbaglia spesso:
+    rinforzarlo insegnerebbe al grafo quello che il ranking già crede. Cooldown
+    di 2 query per link, promozione a 3 e 8 co-attivazioni.
+    Le soglie sono un **pavimento**, non un'assegnazione: i pesi di NeuRAG sono
+    float e un overlap può già valere 1.0, quindi assegnare il valore di soglia
+    **declasserebbe** un link forte perché è stato confermato. Un link
+    rinforzato smette di essere `auto`, altrimenti l'ingest successivo se lo
+    riprende. Rinforza solo link che esistono già: crearli resta ai builder,
+    come in Neuron.
+  - **`neurag related <nodo>`** (e `knowledge_related`): spreading activation a
+    k salti, ordinata per forza accumulata invece che per numero di salti.
+    Contributo per salto = `attivazione x peso x fattore_salienza x decay`; la
+    salienza sta sui tag (§4 l'ha messa lì di proposito), quindi il fattore hub
+    di un nodo è la media dei suoi tag. Solo grafo, nessun embedding. I nodi
+    parcheggiati restano fuori se non passi `--deep`: un'espansione non deve
+    disfare in silenzio il parking di P4.
+    **Non** è innestata nel ranking di `search()`: quello è un cambio misurabile
+    al recupero e va dietro al set di query del benchmark, non dietro a un
+    argomento plausibile.
+- **Ogni tool servito è annunciato al gateway.** `main()` passava a Gray Matter
+  una lista `tool_names` scritta a mano mentre `list_tools()` costruiva quella
+  vera, e aveva divergito **due volte**: `knowledge_neighbors` e `skill` erano
+  serviti e dispatchati da release senza che il gateway sapesse che esistevano —
+  quindi GM non poteva proxare tool funzionanti, e niente lo diceva. Ora
+  entrambe derivano da `_tools()`, come Neuron ricava la sua da
+  `_HANDLERS.keys()`, con un test che fallisce se qualcuno riscrive la lista.
 - **Gli installer non offrono più di saltare l'embedding.** `fastembed` e
   `pyturso` sono hard dependency del package dalla 1.2.2: un install le ha o
   fallisce, esattamente come in Neuron. I picker però tenevano ancora la voce
