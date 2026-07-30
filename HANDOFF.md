@@ -12,7 +12,7 @@ Sostituisce, per questa sessione, `feat_graph_and_chunk_ceiling__summary.md`
 | Suite | Esito |
 |---|---|
 | `pytest neurag/tests` | **262 passed**, 1 skipped |
-| `pytest gray_matter/tests` | **399 passed**, 1 skipped |
+| `pytest gray_matter/tests` | **433 passed**, 1 skipped |
 | `pytest neuron/tests` | **312 passed** |
 
 I tre vanno lanciati in **processi separati** (vedi `pytest.ini`): `neuron/tests/_mockdeps.py`
@@ -31,7 +31,7 @@ console visibile. Quello in neurag è pre-esistente.
 | P3 | Retrieval ibrido | ✅ (precedenti) |
 | P4 | **Layers** | ✅ questa sessione |
 | P5 | Brain — `origin`, Hebbian on confirm, spreading activation | ✅ questa sessione |
-| P6 | Cross-tool (solo GM) | 🟡 **1 di 3** — vedi sotto |
+| P6 | Cross-tool (solo GM) | 🟡 **2 di 3** — vedi sotto |
 | P7 | Installer + GUI | ⬜ parzialmente anticipata (vedi sotto) |
 
 ## Cosa è cambiato
@@ -69,12 +69,17 @@ console visibile. Quello in neurag è pre-esistente.
     dependency, **e quel ramo scriveva `embed_model=''`** = default multilingua:
     prometteva zero download e scaricava.
 
-### gray_matter — 3 commit, 3 file, +105
+### gray_matter — 8 commit
 
-- `3e5af77` i 4 comandi nuovi documentati in `catalog.py` (bilingue, `what` + `when`).
+- `8f78694` la controprova console salta se il runner non ha console propria.
+- `3e5af77` / `09a128a` i comandi nuovi di NeuRAG documentati in `catalog.py`
+  (bilingue, `what` + `when`).
 - `6ce9f6a` parity: nessun installer può offrire di saltare l'embedder; i picker
   `.ps1` e `.sh` dello stesso progetto devono elencare gli stessi modelli.
-- `8f78694` la controprova console salta se il runner non ha console propria.
+- `15ff245` bridge: match su token interi + join per identità di tag.
+- `8fde365` il contesto iniettato diventa un budget (vedi sezione sotto).
+- `3df68a5` anche la memoria è regolabile (`memory_max_tokens`).
+- `abdff11` `gray-matter promote`: consolidazione CLS, dry run di default.
 
 ### neuron — 1 commit, 3 file, +98
 
@@ -105,21 +110,40 @@ La riga di fase chiede tre cose. Una è fatta, due no.
    solo. Ora: run di token interi, più il join per identità sui nomi canonici dei
    tag, che NeuRAG manda a bordo della risposta `knowledge_neighbors` già
    richiesta dalla pulse (nessun round-trip in più, solo un riordino).
-2. ⬜ **Consolidazione CLS Neuron→NeuRAG** (§5.3). `sleep_maybe()` consolida
-   Neuron dentro sé stesso e non scrive mai in NeuRAG: un concetto rinforzato per
-   200 turni resta nello store che decade e non diventa mai conoscenza
-   permanente. Deliverable: promuovere i concetti sopra una soglia
-   salienza × trust × età in nodi NeuRAG, taggati col tag che già condividono.
-   **Report-only per primo** (§8.2), come `park`: le soglie non sono misurate.
-   I dati ci sono — `neuron.models.Node` ha `salience:int`, `trust:float` e
-   `turn`, e l'età è `turn_count - node.turn`.
+2. ✅ **Consolidazione CLS Neuron→NeuRAG** (§5.3) — `gray-matter promote`,
+   dry run se non passi `--apply`. Soglie in `PROMOTE_RULES`: tre pavimenti in
+   AND (salienza 5, trust 0.5, età 50 turni), il prodotto ordina il report. I tag
+   viaggiano col concetto, quindi la promozione è un join e non un orfano.
+   Da misurare su un grafo vissuto prima di fidarsi delle soglie.
+
 3. ⬜ **Stimoli arricchiti con knowledge**. Oggi GM ha solo la *safety net* dello
    stimulus (`stimulus_safety_net`/`_gap`): rilancia lo stimolo di Neuron se tace,
    ma non gli attacca niente da NeuRAG. Lo stimolo esce come lo ha fatto Neuron.
+   Attenzione: qualunque arricchimento qui **spende dal budget proattivo** — è la
+   stessa superficie, non una in più.
 
-Entrambi i pezzi mancanti sono sottosistemi lato GM, non rifiniture: vanno
-affrontati uno per volta con il loro gate, non infilati in coda a un altro
-commit.
+## Il budget di iniezione
+
+Aggiunto perché la domanda "se iniettiamo troppa knowledge non si prende molto
+contesto?" aveva come risposta misurata **no, non lo stavamo gestendo**.
+
+Caso peggiore misurato prima: **~6200 token** iniettati in una pulse, di cui
+~5100 dai soli bridge, senza alcun tetto — e siccome mostrare un bridge lo
+rinforza, un match di massa era anche una promozione di massa. Il join per
+identità di tag aveva reso quel caso *più* facile da raggiungere.
+
+Ora sono tre manopole, tutte nella card della GUI (`gray-matter config`):
+
+| knob | default | cosa limita |
+|---|---|---|
+| `memory_max_tokens` | 400 | contesto di memoria (Neuron `get_context`) |
+| `knowledge_top_n` | 5 | chunk di vault (~292 token misurati; 10 → ~689) |
+| `proactive_budget_chars` | 800 | bridge + vicini + flash. `0` = niente proattivo |
+
+Pulse tipica ora **~700 token**. Il budget si applica per blocco (mai un taglio a
+metà frase), il flash ha priorità sui bridge perché è l'unico proattivo che non
+si può ri-ottenere chiedendo, e il razionale di un bridge viene troncato a 80
+caratteri nell'iniezione (lo store ne accetta 500 perché lì è documentazione).
 
 ## TODO
 
