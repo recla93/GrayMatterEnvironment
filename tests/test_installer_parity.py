@@ -19,6 +19,7 @@ so "it differs" is always either a failure or a documented decision.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -206,6 +207,53 @@ def test_every_ps1_has_every_feature(project, why, token):
 @pytest.mark.parametrize("why,token", sorted(SH_FEATURES.items()))
 def test_every_sh_has_every_feature(project, why, token):
     assert token in _read(project, ".sh"), f"{project}/install.sh is missing {why}"
+
+
+def _offered_models(project: str, suffix: str) -> list[str]:
+    """The model names a picker offers. `""` is a real entry — NeuRAG's "follow
+    Neuron" — so absence and empty string are different answers here."""
+    body = _read(project, suffix)
+    if suffix == ".ps1":
+        block = re.search(r"\$EmbedModels\s*=\s*@\((.*?)\n\)", body, re.S)
+        return re.findall(r'name\s*=\s*"([^"]*)"', block.group(1)) if block else []
+    return [ln.split("=", 1)[1].strip('"').split("|")[0]
+            for ln in body.splitlines() if re.match(r'^(GM_)?EM_\d+="', ln)]
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("suffix", (".ps1", ".sh"))
+def test_no_installer_offers_to_skip_the_embedder(project, suffix):
+    """Embedding is mandatory in all three: fastembed and pyturso are hard
+    dependencies, so an install either has them or fails.
+
+    NeuRAG's picker kept a `"none" — lexical only, no model download` entry from
+    the days when fastembed was an optional extra. It contradicted the
+    dependency — NeuRAG's own numbers are recall@5 67% vector-only vs 94% hybrid
+    — and it lied twice over: the branch wrote `embed_model = ''`, which means
+    "follow Neuron / the multilingual default", so it announced that no model
+    would be downloaded and then configured one. Nothing ever wrote the literal
+    "none" that `lexical_only_requested()` looks for.
+
+    Lexical-only is still reachable through `neurag config set embed_model none`.
+    The rule is about the INSTALLER: it must not offer the degraded half of the
+    tool as a menu entry.
+    """
+    offered = _offered_models(project, suffix)
+    assert offered, f"{project}/install{suffix}: no embedding picker found at all"
+    bad = [m for m in offered if m.strip().lower() in ("none", "null")]
+    assert not bad, f"{project}/install{suffix} offers to skip embedding: {bad}"
+    assert "Lexical only" not in _read(project, suffix), (
+        f"{project}/install{suffix} still advertises a lexical-only install")
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_the_two_pickers_of_a_project_offer_the_same_models(project):
+    """The `.ps1` list and the `.sh` list are hand-maintained copies of each
+    other — the comment says "keep in sync" and nothing checked it. Renumbering
+    one of them (removing an entry shifts every `EM_n` and every `case` arm) is
+    exactly how the two drift apart."""
+    assert _offered_models(project, ".ps1") == _offered_models(project, ".sh"), (
+        f"{project}: install.ps1 and install.sh offer different models")
 
 
 @pytest.mark.parametrize("project", PROJECTS)
