@@ -1,6 +1,6 @@
 # Changelog — Neuron
 
-## Unreleased
+## 6.2.0 (2026-07-31)
 - **Un archivio corrotto ora dice cosa fare** (`db.corrupt_store_hint`). Un
   `graph.db` malformato arrivava come `DatabaseError: file is not a database` in
   cima a un traceback: il sintomo, senza il file e senza un rimedio. È lo stesso

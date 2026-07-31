@@ -11,7 +11,7 @@ So you put a tiny **stdio → HTTP bridge** in front of Neuron and give ChatGPT 
 ## The easy way — one command
 
 Run the helper **with the Python where Neuron is installed** (its venv). It finds/launches
-`mcp-proxy` for you (via `uvx`, no manual install), checks Neuron actually starts, and prints
+the transport in-process (MCP SDK Streamable HTTP), checks Neuron actually starts, and prints
 the next step:
 
 ```bash
@@ -36,7 +36,7 @@ Finally, in your client (**Perplexity**, or **ChatGPT → Settings → Connector
 Mode)**) add the public URL with the **`/mcp`** path, e.g.
 `https://<random>.trycloudflare.com/mcp`.
 
-> **Use `/mcp`, not `/sse`.** `mcp-proxy` serves both, but `/mcp` is the modern
+> **Use `/mcp`, not `/sse`.** The bridge serves `/mcp`, which is the modern
 > **Streamable HTTP** transport, while `/sse` is the legacy HTTP+SSE one. Behind a
 > Cloudflare tunnel the legacy transport hangs: Cloudflare buffers the initial SSE
 > `endpoint` handshake event, so the client never learns where to POST and times out
@@ -48,11 +48,11 @@ That's it: `python scripts/bridge.py` + a tunnel + paste the URL.
 ## What it runs under the hood
 
 `scripts/bridge.py` is just a wrapper around
-[`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) in server mode. The equivalent manual
+the MCP SDK's own Streamable HTTP transport, served in-process. The equivalent manual
 command (see it with `--print-cmd`) is:
 
 ```bash
-uvx mcp-proxy --port=8000 --host=127.0.0.1 -- <python-that-has-neuron> -m neuron
+<python-that-has-neuron> -m neuron.bridge --port 8000 --host 127.0.0.1
 ```
 
 > **Don't use `mcp-remote`** — it goes the opposite direction (adapts a stdio *client* to a
@@ -88,3 +88,17 @@ ChatGPT MCP connectors need **Developer Mode** (beta) and a paid web plan — ch
 current docs. A first-class **native HTTP transport** (Neuron serving Streamable HTTP directly,
 no bridge) is a planned option (**T15** in `TASKLIST.md`); it would remove the proxy hop but
 still needs a public HTTPS endpoint for ChatGPT, so the bridge above is the simplest path today.
+
+
+## Why there is no external proxy any more
+
+The bridge used to wrap the stdio server with `mcp-proxy`, fetched on demand via
+`uvx`. That is a separate project on a separate release cycle, and when the MCP
+SDK dropped `request_ctx` in 1.28 it kept importing it: both bridges died at
+startup with an ImportError nobody saw — `start` checked liveness after a fixed
+second, the crash landed later, so it reported success and `stop` then found
+nothing.
+
+The SDK ships `streamable_http_manager` now, so protocol and transport come
+from the same package. Nothing extra to install, and the next breaking bump
+fails in the test suite instead of at a user's `start`.

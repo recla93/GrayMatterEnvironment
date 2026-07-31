@@ -315,7 +315,7 @@ depends on what transport the client speaks:
   app) accept a launch command directly. Register the command below and restart the client.
 - **Remote-only clients** (ChatGPT / OpenAI Apps & connectors) connect to an **HTTPS MCP
   endpoint**, not a local process. To use Neuron there, wrap the stdio server with a
-  stdio→HTTP bridge ([`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) in server mode),
+  stdio→HTTP bridge (MCP SDK Streamable HTTP, in-process),
   expose it over a public HTTPS tunnel, and register that URL as a custom connector — see
   [ChatGPT / OpenAI](#chatgpt--openai-via-bridge) below.
 
@@ -501,14 +501,13 @@ independent: the bridge only changes *how the client reaches Neuron*; the wrappe
 (local files, or the shared Turso Cloud if `.env` / the env provide the credentials).
 
 Use a bridge that **runs a stdio server and exposes it over HTTP/SSE** — the right tool is
-[`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) in *server* mode. (Do **not** use
+the MCP SDK's own Streamable HTTP transport. (Do **not** use
 `mcp-remote`: that goes the other direction — it lets a stdio *client* reach a remote HTTP
 server, which is the opposite of what we need.)
 
 ```bash
 # 1. Wrap Neuron's stdio server and serve it over HTTP/SSE on localhost.
-#    (exact flag names vary by mcp-proxy version — see its README)
-uvx mcp-proxy --port 8000 -- python3 -m neuron
+python3 -m neuron.bridge --port 8000
 #    → local endpoints: http://127.0.0.1:8000/mcp (Streamable HTTP) and /sse (legacy)
 
 # 2. Expose that local port over PUBLIC HTTPS — ChatGPT connectors are remote and
