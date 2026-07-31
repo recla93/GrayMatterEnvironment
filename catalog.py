@@ -474,9 +474,9 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Destructive and cannot be undone: check with 'tree' first.",
     ),
     ("neurag", "config"): (
-        "Configurazione NeuRAG: rerank on/off, pool, modello embedder.",
-        "Il rerank migliora la precisione e costa tempo: accendilo se le risposte sono imprecise. Parti da action=list.",
-        "NeuRAG configuration: rerank on/off, pool, embedder model.",
+        "Configurazione NeuRAG: modello di embedding e dimensione dei chunk.",
+        "Cambiare il modello di embedding richiede un re-index del vault. Parti da action=list.",
+        "NeuRAG configuration: embedding model and chunk size.",
         "Rerank improves precision and costs time: turn it on if answers are imprecise. Start with action=list.",
     ),
     ("neurag", "register"): (

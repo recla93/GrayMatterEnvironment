@@ -528,7 +528,7 @@ def repair_targets(scope: str = "gray-matter") -> list[dict]:
         "neurag_db":     ("Knowledge NeuRAG (knowledge.db)", paths.neurag_db()),
         "gm_bridges":    ("Bridges Gray Matter", paths.gm_bridges()),
         "gm_config":     ("Config Gray Matter (config.json)", paths.config_file()),
-        "neurag_config": ("Config NeuRAG (rerank, ...)", _neurag_config_path()),
+        "neurag_config": ("Config NeuRAG (embedding, chunk)", _neurag_config_path()),
     }
     out = []
     for key in _SCOPE_KEYS.get(scope, _SCOPE_KEYS["gray-matter"]):
