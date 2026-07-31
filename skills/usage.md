@@ -1,5 +1,20 @@
 # NeuRAG — retrieval workflow
 
+## What you lose by not searching
+
+Worth stating plainly, because the failure is invisible from the inside. The
+vault holds **this user's** documents, notes and code. Answer from training data
+instead and you answer about somebody else's version of the subject — their
+config, their schema, their decisions, replaced by the average of everyone
+else's. That answer reads exactly like a good one. It is confident, fluent, and
+about the wrong codebase, and the user has no way to tell without checking.
+
+The cost of searching is one round-trip. The cost of not searching, on a
+question the vault could have answered, is an answer that is wrong in a way
+neither of you can see. That asymmetry is the whole argument: when in doubt,
+search — and when the vault is empty or the topic is plainly general knowledge,
+do not, because a search that cannot succeed is pure latency.
+
 The knowledge base is a hierarchical graph of **nodes** (topics) holding
 **chunks** (the text). Retrieval is hybrid: vector similarity when an embedding
 model is available, lexical otherwise. Both paths return the same shape, so the
@@ -36,7 +51,11 @@ means every query is a wasted call — say so once, do not keep searching.
 - `knowledge_add_chunks(node, chunks)` — the text under a topic. Chunks want to
   be self-contained: a chunk that only makes sense next to its neighbour will be
   retrieved alone and read alone.
-- `knowledge_ingest(path)` — bulk import; `knowledge_ingest_status` to follow it.
+- `knowledge_ingest(path)` — a whole folder OR a single document; poll
+  `knowledge_ingest_status`. Re-ingesting a file REPLACES its chunks, so
+  updating a document is just calling it again. Prefer it over
+  `knowledge_index` + `knowledge_add_chunks`: it never moves chunk text through
+  your context, which is the difference between one call and a hundred.
 
 Do not paste secrets, tokens or credentials into a chunk. The vault is plain
 text on disk and is surfaced verbatim into future conversations.

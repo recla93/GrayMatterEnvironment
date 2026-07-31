@@ -52,6 +52,41 @@ def announced_tool_names() -> list[str]:
     return [t.name for t in _tools()]
 
 
+_VAULT_STATS: "str | None" = None
+
+
+def _vault_note() -> str:
+    """What the vault actually holds, for the `knowledge_query` description.
+
+    A model decides whether to call a tool from the tool list, which is the one
+    text always in front of it — a skill file is read only if it chooses to read
+    one. And the decisive fact is not *how* to search, it is whether there is
+    anything to find: "Search the knowledge base" gives no reason to spend a
+    round-trip, while "2555 chunks of the user's own material" does. Same tool,
+    same cost, opposite prior.
+
+    Never raises and never blocks: a stat that fails costs the sentence, not the
+    handshake. Computed once per process — the count moves with ingests, and a
+    fresh number per `list_tools()` is not worth reopening the vault for.
+    """
+    global _VAULT_STATS
+    if _VAULT_STATS is None:
+        try:
+            s = _get_db().status()
+            if s.get("corrupt"):
+                _VAULT_STATS = " The vault is not readable right now — call " \
+                               "knowledge_status for the reason."
+            elif not s.get("chunks"):
+                _VAULT_STATS = " The vault is EMPTY: nothing to find until " \
+                               "something is ingested, so do not search it yet."
+            else:
+                _VAULT_STATS = (f" Holds {s['chunks']} chunks across "
+                                f"{s['nodes']} topics right now.")
+        except Exception:  # noqa: BLE001 — mai al costo dell'handshake
+            _VAULT_STATS = ""
+    return _VAULT_STATS
+
+
 def _tools() -> list[Tool]:
     """The single source of truth for what this server serves."""
     return [
@@ -151,7 +186,16 @@ def _tools() -> list[Tool]:
         ),
         Tool(
             name="knowledge_query",
-            description="Search the knowledge base for chunks relevant to a topic.",
+            description=(
+                "Search the USER'S OWN indexed material — their documents, notes "
+                "and code, not general knowledge." + _vault_note() +
+                " Use it whenever the question could touch what they have "
+                "indexed: answering from training data instead means answering "
+                "about somebody else's version of the subject, confidently and "
+                "unverifiably. Costs one round-trip; skip it for procedural "
+                "turns, for general knowledge the vault would not hold, and for "
+                "anything already answered in this conversation. Cite the node "
+                "or source you used, so the user can check it."),
             inputSchema={
                 "type": "object",
                 "properties": {
