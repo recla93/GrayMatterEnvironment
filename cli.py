@@ -409,16 +409,12 @@ def cmd_register(gateway: bool = False, client: str = "all") -> None:
     --gateway: proxy model — register ONLY gray-matter, evict neuron/neurag
     (GM self-bootstraps them as managed workers)."""
     from gray_matter import clients
-    servers = ["gray-matter"] if gateway else clients.installed_servers()
+    servers = clients.servers_for(gateway)
     if not servers:
         print("No installed servers to register (install one first).")
         return
     verb = "Gateway flip: registering" if gateway else "Registering"
     print(f"{verb} {', '.join(servers)} in detected MCP clients...")
-    if gateway:
-        # Round-trip del go-standalone: tornare al gateway riprende in gestione
-        # TUTTI i tool (azzera la lista unmanaged) ed evict le entry dirette.
-        clients.clear_unmanaged()
     try:
         only = clients.resolve_clients(client)
     except ValueError as e:
@@ -430,7 +426,7 @@ def cmd_register(gateway: bool = False, client: str = "all") -> None:
     if not only:
         print("  No clients selected — nothing was registered.")
         return
-    for r in clients.register(servers, gateway=gateway, only=only):
+    for r in clients.register_flow(gateway=gateway, only=only):
         mark = "OK" if r.get("ok") else ("--" if r.get("action") == "skipped" else "!!")
         line = f"  [{mark}] {r['client']}: {r['action']}"
         if r.get("detail"):

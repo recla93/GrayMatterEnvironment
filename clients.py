@@ -419,6 +419,36 @@ def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
     return results
 
 
+def servers_for(gateway: bool) -> list[str]:
+    """Which servers a registration writes. One definition, so the message the
+    user reads and the entries actually written can never disagree."""
+    return ["gray-matter"] if gateway else installed_servers()
+
+
+def register_flow(*, gateway: bool, only: "list[str] | None",
+                  py: "str | None" = None) -> list[dict]:
+    """THE registration path — CLI, installer and control center all enter here.
+
+    They used to each assemble the call themselves, and had already drifted: the
+    CLI reset the unmanaged list on a gateway flip (a tool released to
+    standalone comes back under GM) and the GUI did not, so the same button in
+    two places left the registry in two different states. Nothing detected it,
+    because both produced a plausible list of successes.
+
+    The installer reaches this through `gray-matter register`, so aligning the
+    CLI aligns all six installers with it for free.
+    """
+    servers = servers_for(gateway)
+    if not servers:
+        return [{"client": "-", "ok": False, "action": "skipped",
+                 "detail": "no installed servers to register"}]
+    if gateway:
+        # Round-trip of go-standalone: returning to the gateway takes every tool
+        # back under management and evicts the direct entries.
+        clear_unmanaged()
+    return register(servers, gateway=gateway, only=only, py=py)
+
+
 def deregister(servers: "list[str] | None" = None) -> list[dict]:
     """Remove ``servers`` (default: whole trio incl. legacy slugs) from every
     existing client config. Backup `.bak` before each write; JSONC/unreadable

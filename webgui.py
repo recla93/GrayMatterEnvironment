@@ -887,8 +887,12 @@ class Api:
         if unknown:
             return {"ok": False, "error": f"unknown client(s): {', '.join(unknown)}"}
 
-        results = C.register(gateway=bool(payload.get("gateway", True)),
-                             py=_python(), only=picked)
+        # `register_flow`, not `register`: the same entry point `gray-matter
+        # register` uses, so the panel and the installer cannot drift again.
+        # They already had — only the CLI reset the unmanaged list on a gateway
+        # flip, so the identical button left two different registry states.
+        results = C.register_flow(gateway=bool(payload.get("gateway", True)),
+                                  only=picked, py=_python())
         failed = [r for r in results if not r.get("ok") and r.get("action") != "skipped"]
         return {"ok": not failed, "results": results, "failed": len(failed)}
 

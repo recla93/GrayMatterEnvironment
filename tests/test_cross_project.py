@@ -501,3 +501,98 @@ class TestFlashAndAutoBridge:
         assert _norm("  Spring Boot  ") == "spring boot"
         assert _norm("SPRING BOOT") == "spring boot"
         assert _norm("") == ""
+
+
+# ---------------------------------------------------------------------------
+# MCP handshake parity — the three servers must all declare `capabilities`
+# ---------------------------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parents[2]
+
+MCP_SERVERS = {
+    "gray_matter": ROOT / "gray_matter" / "server.py",
+    "neuron": ROOT / "neuron" / "src" / "neuron" / "server.py",
+    "neurag": ROOT / "neurag" / "server.py",
+}
+
+
+@pytest.mark.parametrize("project", MCP_SERVERS)
+def test_every_server_declares_capabilities_in_its_handshake(project):
+    """`InitializationOptions.capabilities` is REQUIRED by the MCP SDK, and
+    omitting it kills the server on the very first stdio start — before it can
+    serve a single tool.
+
+    This is worth a test because of how it hides. The daemon path never builds
+    these options, so the whole suite stayed green while
+    `SERVERS["neurag"] = ["-m", "neurag.server"]` — the entry every client
+    registers — could not start at all. Gray Matter hit it, fixed it in
+    `_init_options()`, and the fix did not reach the two peers; then it was
+    fixed in neurag and LOST again in a commit, with nothing to notice either
+    time.
+
+    Source-level on purpose: constructing the options for real means importing
+    three servers and standing up their stores, which is exactly the kind of
+    slow, stateful test that gets skipped.
+    """
+    raw = MCP_SERVERS[project].read_text(encoding="utf-8")
+    # Comments out first: a long enough rationale above the field pushed it out
+    # of any fixed window, so the check failed on code that was correct.
+    body = "\n".join(ln for ln in raw.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "InitializationOptions(" in body, f"{project}: no handshake to check"
+    # every construction site, not just the first
+    for chunk in body.split("InitializationOptions(")[1:]:
+        head = chunk[:400]
+        assert "capabilities=" in head, (
+            f"{project}: an InitializationOptions without `capabilities` — "
+            f"this server cannot complete an MCP handshake")
+        assert "get_capabilities(" in head, (
+            f"{project}: `capabilities` must come from app.get_capabilities(), "
+            f"so it tracks the tools actually served")
+
+
+# ---------------------------------------------------------------------------
+# One registration path for CLI, installer and control center
+# ---------------------------------------------------------------------------
+
+def test_the_gui_and_the_cli_register_through_the_same_function():
+    """Two surfaces assembling the same call by hand is how they drift, and
+    they had: only `cmd_register` reset the unmanaged list on a gateway flip,
+    so the same button in the panel left the registry in a different state.
+
+    The installer reaches this through `gray-matter register`, so pinning the
+    CLI pins all six installers to the panel's behaviour too."""
+    cli = (ROOT / "gray_matter" / "cli.py").read_text(encoding="utf-8")
+    gui = (ROOT / "gray_matter" / "webgui.py").read_text(encoding="utf-8")
+    assert "clients.register_flow(" in cli, "the CLI stopped using the shared path"
+    assert "C.register_flow(" in gui, "the control center stopped using the shared path"
+    for name, body in (("cli", cli), ("gui", gui)):
+        assert "clear_unmanaged()" not in body, (
+            f"{name} reintroduced its own gateway bookkeeping — that belongs "
+            f"inside register_flow, where both surfaces get it")
+
+
+def test_register_flow_resets_unmanaged_only_on_a_gateway_flip(monkeypatch):
+    """The behaviour the two surfaces disagreed about, pinned."""
+    from gray_matter import clients as C
+    calls = {"cleared": 0, "register": []}
+    monkeypatch.setattr(C, "clear_unmanaged",
+                        lambda: calls.__setitem__("cleared", calls["cleared"] + 1))
+    monkeypatch.setattr(C, "installed_servers", lambda: ["neuron"])
+    monkeypatch.setattr(C, "register",
+                        lambda servers, **kw: calls["register"].append((servers, kw)) or [])
+
+    C.register_flow(gateway=False, only=["cursor"])
+    assert calls["cleared"] == 0, "a plain register must not touch the registry"
+    assert calls["register"][-1][0] == ["neuron"]
+
+    C.register_flow(gateway=True, only=["cursor"])
+    assert calls["cleared"] == 1, "a gateway flip takes every tool back"
+    assert calls["register"][-1][0] == ["gray-matter"], "gateway registers only GM"
+
+
+def test_register_flow_says_so_when_there_is_nothing_installed(monkeypatch):
+    from gray_matter import clients as C
+    monkeypatch.setattr(C, "installed_servers", lambda: [])
+    out = C.register_flow(gateway=False, only=None)
+    assert out and out[0]["ok"] is False and out[0]["action"] == "skipped"
