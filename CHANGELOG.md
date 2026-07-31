@@ -1,6 +1,27 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Un archivio corrotto ora dice cosa fare** (`db.corrupt_store_hint`). Un
+  `graph.db` malformato arrivava come `DatabaseError: file is not a database` in
+  cima a un traceback: il sintomo, senza il file e senza un rimedio. È lo stesso
+  vicolo cieco che NeuRAG ha chiuso nella 1.1.1 e che questo lato non ha mai
+  ricevuto, pur essendo il gemello keep-in-sync di quel `db.py`.
+  `corrupt_store_hint` riconosce le varie grafie della corruzione — quale ti
+  tocca dipende dal tier che ha aperto il file (pyturso o sqlite3) e da quanto
+  header è stato letto — e restituisce una frase con causa e recupero;
+  `server.call_tool` la mette **prima** del traceback, che resta sotto perché è
+  l'unica telemetria che attraversa worker → GM → client.
+  Un hint e non una classe di eccezione: un `Graph` viene caricato e salvato da
+  molti punti, e `call_tool` incanala già ogni errore in testo, quindi
+  classificare al confine cambia un posto invece di trenta. Il classificatore è
+  volutamente stretto: dire "archivio corrotto" a chi ha solo una cartella
+  mancante lo manda a cancellare la cosa sbagliata.
+  Verificato end-to-end su un file davvero rotto, non solo sulle stringhe
+  (`tests/test_corrupt_store.py`).
+  Nota: `save_sqlite` **alza** su un archivio corrotto — controllato apposta,
+  perché un salvataggio che riporta successo senza scrivere sarebbe perdita di
+  memoria silenziosa. Il `return` anticipato che si vede a mano è il guard
+  "graph non dirty", non un errore ingoiato.
 - **Un `;` dentro un commento SQL non può più troncare uno schema**
   (`db.py:_split_sql`). Il client remoto non ha `executescript`, quindi
   `RemoteTursoConnection` taglia lo script su `;` a mano: un punto e virgola

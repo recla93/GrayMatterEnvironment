@@ -1116,8 +1116,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # il traceback esiste ancora: riportarlo nel testo è l'unica telemetria
         # che attraversa worker → GM → client.
         import traceback
+        # Un archivio corrotto è l'unico errore che il modello può RISOLVERE, e
+        # arrivava come `DatabaseError: file is not a database` in cima a un
+        # traceback: sintomo senza causa e senza rimedio. La diagnosi va PRIMA,
+        # il traceback resta sotto — è la telemetria che il commento qui sopra
+        # difende, e non serve a chi legge per capire cosa fare.
+        from neuron.db import corrupt_store_hint
+        hint = corrupt_store_hint(e)
+        head = f"[{name}] {hint}" if hint else f"[{name}] error: {e}"
         return [TextContent(type="text",
-                            text=f"[{name}] error: {e}\n{traceback.format_exc()}")]
+                            text=f"{head}\n{traceback.format_exc()}")]
     if (
         not _loop_hint_sent
         and name not in ("pre_turn", "store_turn", "skill", "help")
