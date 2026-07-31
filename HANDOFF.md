@@ -403,6 +403,15 @@ dovrebbe. Da qui in avanti: `git status` prima di ogni `add`.
   processo morto — quindi non fidarsi di quello per capire chi ha il lock: si
   guarda la lista dei processi. (Ci sono cascato: avevo scritto qui che il lock
   era di un server standalone, sulla sola fede del pid file.)
+- **`build/` stantia spedisce i file che hai cancellato.** setuptools riusa
+  `build/lib/` in modo incrementale: copia dentro i file cambiati e **non
+  rimuove quelli spariti**. Togliendo `reranker.py` dal sorgente, il wheel ha
+  continuato a includerlo — finiva in `site-packages` e persino nel `RECORD` del
+  pacchetto, quindi il runtime aveva ancora un modulo che nel repo non esiste
+  più. Vale per **ogni** cancellazione futura, non solo per quella.
+  Regola: `rm -rf build/` prima di reinstallare dopo aver cancellato un file.
+  Controprova: `find_spec('neurag.reranker')` deve dare `None` da una cwd
+  neutra.
 - **Il runtime NON è questo albero.** I worker e la GUI girano da
   `%LOCALAPPDATA%\gray-matter\.venv`, dove `neurag`/`neuron` sono **copie
   installate** in `site-packages`, non editable verso `D:\`. `neuron/.venv` —
