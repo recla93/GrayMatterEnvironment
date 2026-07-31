@@ -321,7 +321,10 @@ async def _safety_net_note(tool_name: str, arguments: dict, result: str) -> str:
 
 _is_sleeping: bool = False
 
-app = Server("gray-matter")
+# version= explicitly: without it the SDK reports ITS OWN version in the
+# handshake, so a client asking which Gray Matter it is talking to was told
+# "1.28.1" — the MCP library's number. Both peers already pass it.
+app = Server("gray-matter", version=__version__)
 
 # MCP handshake instructions (INSTALLER-UX §8b): the loop-guidance for clients
 # that honor `instructions` (Cursor/VS Code/Codex) — no hook needed there. The

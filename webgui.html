@@ -321,6 +321,9 @@ const STRINGS = {
     clients_sub: "Scegli dove registrare Gray Matter. Nulla viene sovrascritto: le voci esistenti vengono unite, con backup e verifica.",
     clients_refresh: "Ricontrolla",
     clients_register: "Registra nei selezionati",
+    repair_will_close: "L'installer chiudera questo control center per liberare i file. La riparazione CONTINUA: riapri il control center per vedere com'e andata.",
+    last_op_running: "Ultima operazione interrotta (il control center e stato chiuso). Ecco cosa era arrivato:",
+    last_op_done: "Ultima operazione conclusa, uscita",
     clients_hide: "Chiudi",
     clients_none: "Seleziona almeno un client.",
     clients_problems: "Problemi rilevati:",
@@ -408,6 +411,9 @@ const STRINGS = {
     clients_sub: "Choose where to register Gray Matter. Nothing is overwritten: existing entries are merged, with backup and verification.",
     clients_refresh: "Re-check",
     clients_register: "Register in selected",
+    repair_will_close: "The installer will close this control center to release the files. The repair KEEPS RUNNING: reopen the control center to see how it went.",
+    last_op_running: "Last operation interrupted (the control center was closed). Here is what had arrived:",
+    last_op_done: "Last operation finished, exit",
     clients_hide: "Close",
     clients_none: "Select at least one client.",
     clients_problems: "Problems found:",
@@ -661,6 +667,18 @@ function commandCard(env, c){
 // --- pannello Ripara (reinstall pulito) ---------------------------------
 async function repairPanel(env, container){
   container.replaceChildren(el("div", {class:"hint"}, T("loading")));
+  // Se la volta scorsa l'installer ha chiuso questa finestra, l'esito e su
+  // disco e non lo ha mai visto nessuno. Mostrarlo all'apertura del pannello e
+  // il momento giusto: e' esattamente qui che si torna per sapere com'e andata.
+  try {
+    const prev = await call("operation_log", {key: env.key + ":repair"});
+    if (prev && prev.found){
+      append("[repair] " + (prev.running ? T("last_op_running")
+                                         : T("last_op_done") + " " + prev.exit),
+             prev.running ? "warn" : (prev.exit === 0 ? "ok" : "err"));
+      for (const ln of prev.tail.slice(-25)) append("  " + ln, "");
+    }
+  } catch(e){ /* nessun esito precedente: non e' un errore */ }
   let r;
   try { r = await call("repair_state", {scope: env.key}); }
   catch(e){     container.replaceChildren(el("div", {class:"hint"}, "repair: " + e)); return; }
@@ -699,6 +717,11 @@ async function repairPanel(env, container){
       return;
     }
     armed = false; btn.textContent = T("btn_repair"); btn.style.background = "";
+    // L'installer ferma OGNI processo del venv di Gray Matter, e questa finestra
+    // e uno di quelli: sparira mentre la riparazione va avanti. Dirlo prima, e
+    // dire dove ritrovare l'esito, e la differenza fra "si e chiuso tutto e non
+    // so cosa sia successo" e un'operazione che si puo seguire.
+    append("[repair] " + T("repair_will_close"), "warn");
     const rr = await call("repair_run", {scope: env.key, wipe});
     if (rr && rr.error) append("[!] " + rr.error, "err");
   });

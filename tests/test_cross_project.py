@@ -596,3 +596,68 @@ def test_register_flow_says_so_when_there_is_nothing_installed(monkeypatch):
     monkeypatch.setattr(C, "installed_servers", lambda: [])
     out = C.register_flow(gateway=False, only=None)
     assert out and out[0]["ok"] is False and out[0]["action"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# The HTTP bridge serves itself — no external proxy on a separate release cycle
+# ---------------------------------------------------------------------------
+
+BRIDGES = {
+    "neuron": ROOT / "neuron" / "src" / "neuron" / "bridge.py",
+    "neurag": ROOT / "neurag" / "bridge.py",
+}
+TRANSPORTS = {
+    "neuron": ROOT / "neuron" / "src" / "neuron" / "http_transport.py",
+    "neurag": ROOT / "neurag" / "http_transport.py",
+}
+
+
+@pytest.mark.parametrize("project", BRIDGES)
+def test_no_bridge_shells_out_to_mcp_proxy(project):
+    """`mcp-proxy` wrapped the stdio server in an HTTP one from a different
+    project on a different release cycle. When the SDK dropped `request_ctx` in
+    1.28 it kept importing it, and BOTH bridges died at startup — invisibly,
+    because `start` checked liveness after a fixed second and the crash landed
+    later, so it reported success and `stop` then found nothing.
+
+    A dependency that can break a feature it is not part of, silently, is worth
+    a test that says never again."""
+    body = BRIDGES[project].read_text(encoding="utf-8")
+    # USE, not the word. Prose explaining why we no longer shell out has to be
+    # allowed to name the thing it is explaining — the first version of this
+    # test failed on its own rationale.
+    for banned in ('"uvx"', "'uvx'", '"mcp-proxy"', "'mcp-proxy'",
+                   '"pipx"', "'pipx'", "resolve_proxy_runner("):
+        assert banned not in body, (
+            f"{project}'s bridge reaches for {banned} again — the transport "
+            f"must come from the MCP SDK, which is the package the protocol "
+            f"comes from")
+
+
+@pytest.mark.parametrize("project", TRANSPORTS)
+def test_each_bridge_has_its_own_transport_module(project):
+    """I2: a peer must serve HTTP standalone, without the other two."""
+    body = TRANSPORTS[project].read_text(encoding="utf-8")
+    assert "streamable_http_manager" in body
+    assert "stateless=True" in body, (
+        "remote clients reconnect freely and cannot be trusted to carry a "
+        "session id")
+
+
+@pytest.mark.parametrize("project", TRANSPORTS)
+def test_the_transport_answers_the_path_with_and_without_a_slash(project):
+    """Starlette's `Mount` answers `/mcp` with a 307 to `/mcp/`, and clients
+    disagree about re-POSTing a body on redirect. Both spellings, no redirect."""
+    body = TRANSPORTS[project].read_text(encoding="utf-8")
+    assert 'rstrip("/")' in body and "accepted" in body
+
+
+def test_every_server_reports_its_own_version_not_the_sdk_s():
+    """`Server(name)` without `version=` makes the handshake report the MCP
+    library's version, so a client asking which Gray Matter it was talking to
+    was told 1.28.1."""
+    for project, path in MCP_SERVERS.items():
+        body = path.read_text(encoding="utf-8")
+        line = next(ln for ln in body.splitlines()
+                    if ln.startswith("app = Server("))
+        assert "version=" in line, f"{project}: {line.strip()}"

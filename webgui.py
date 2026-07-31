@@ -219,14 +219,76 @@ class Api:
                     "error": f"catalogo non leggibile: {type(exc).__name__}: {exc}"}
 
     # -- esecuzione --------------------------------------------------------
-    def _stream(self, argv: list[str], *, key: str, display: str) -> dict:
-        """Esegue ``argv`` in background streamando stdout nel buffer di log."""
+    @staticmethod
+    def _op_log(key: str) -> Path:
+        from gray_matter.gme import gme_root      # lazy, come gli altri usi qui
+        p = gme_root() / "logs" / (re.sub(r"[^A-Za-z0-9._-]", "_", key) + ".log")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def operation_log(self, args: str = "") -> dict:
+        """L'esito dell'ultima operazione lunga, letto DAL DISCO.
+
+        Serve perché alcune operazioni uccidono chi le guarda. `install.ps1`
+        chiama `Stop-VenvProcesses`, che termina ogni processo avviato dal venv
+        di Gray Matter — e il control center è uno di quelli, perché gira da
+        `…\\.venv\\Scripts\\pythonw.exe`. La scelta è giusta (quei processi
+        tengono i file che pip deve sostituire) ma il prezzo lo pagava l'utente:
+        premi "Ripara", la finestra sparisce, e non sai se l'installazione sia
+        partita, finita o esplosa.
+
+        Il log su file è l'unica cosa che sopravvive: il figlio non muore col
+        padre su Windows, quindi l'installer continua e continua a scrivere.
+        `running=True` senza riga di uscita significa "in corso, oppure
+        interrotta" — e in entrambi i casi quello che era arrivato è qui.
+        """
+        req = json.loads(args) if args else {}
+        key = req.get("key") or ""
+        p = self._op_log(key) if key else None
+        if not p or not p.exists():
+            return {"ok": True, "found": False, "key": key}
+        text = p.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        exit_line = next((l for l in reversed(lines) if l.startswith("[exit ")), None)
+        return {"ok": True, "found": True, "key": key,
+                "running": exit_line is None,
+                "exit": int(exit_line[6:-1]) if exit_line else None,
+                "when": p.stat().st_mtime,
+                "tail": lines[-200:]}
+
+    def _stream(self, argv: list[str], *, key: str, display: str,
+                to_log: bool = False) -> dict:
+        """Esegue ``argv`` in background streamando stdout nel buffer di log.
+
+        `to_log=True` scrive ANCHE su file, per le operazioni che possono
+        chiudere il control center mentre girano (vedi `operation_log`)."""
         existing = self._procs.get(key)
         if existing is not None and existing.poll() is None:
             self._emit(f"[!] '{display}' è già in esecuzione — attendi o premi Ferma.", "err")
             return {"ok": False, "busy": True}
         self._emit(f"$ {' '.join(argv)}", "cmd")
         self._running[key] = display
+
+        log_fh = None
+        if to_log:
+            try:
+                log_fh = open(self._op_log(key), "w", encoding="utf-8")
+                log_fh.write(f"$ {' '.join(argv)}\n")
+                log_fh.flush()
+            except OSError:
+                log_fh = None      # un log che non si apre non ferma il comando
+
+        def _emit_both(line: str, tag: str) -> None:
+            self._emit(line, tag)
+            if log_fh:
+                try:
+                    # flush a ogni riga: questo processo può essere terminato in
+                    # qualsiasi momento DALL'operazione stessa, e ciò che non è
+                    # su disco in quell'istante è perso.
+                    log_fh.write(line + "\n")
+                    log_fh.flush()
+                except OSError:
+                    pass
 
         def _run() -> None:
             try:
@@ -247,16 +309,28 @@ class Api:
                 self._procs[key] = proc
                 assert proc.stdout is not None
                 for line in proc.stdout:
-                    self._emit(line.rstrip("\n"), _tag_of(line))
+                    _emit_both(line.rstrip("\n"), _tag_of(line))
                 proc.wait()
-                self._emit(f"[{display}] terminato (exit {proc.returncode})",
+                _emit_both(f"[{display}] terminato (exit {proc.returncode})",
                            "ok" if proc.returncode == 0 else "err")
+                if log_fh:
+                    # Il terminatore che `operation_log` cerca: senza, la
+                    # lettura successiva dice "in corso o interrotta", che è
+                    # esattamente la verità quando il control center è stato
+                    # ucciso a metà.
+                    log_fh.write(f"[exit {proc.returncode}]\n")
+                    log_fh.flush()
             except FileNotFoundError:
-                self._emit(f"[!] eseguibile non trovato: {argv[0]}", "err")
+                _emit_both(f"[!] eseguibile non trovato: {argv[0]}", "err")
             except Exception as exc:  # noqa: BLE001
-                self._emit(f"[{display}] {exc}", "err")
+                _emit_both(f"[{display}] {exc}", "err")
             finally:
                 self._running.pop(key, None)
+                if log_fh:
+                    try:
+                        log_fh.close()
+                    except OSError:
+                        pass
 
         threading.Thread(target=_run, daemon=True).start()
         return {"ok": True}
@@ -460,8 +534,11 @@ class Api:
             argv = _cli_argv(scope, "repair", *wipe, "--reinstall")
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        # to_log: la riparazione lancia l'installer, che ferma ogni processo
+        # del venv — questo control center compreso. Il file è l'unico posto in
+        # cui l'esito può sopravvivere a chi lo stava guardando.
         return self._stream(argv, key=f"{scope}:repair",
-                            display=f"repair {scope}")
+                            display=f"repair {scope}", to_log=True)
 
     # -- uninstall (card dedicata, non interactive) -------------------------
     # Ogni tool può esporre il proprio uninstall. GM gestisce il proprio
