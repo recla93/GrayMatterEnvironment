@@ -20,7 +20,7 @@ the Gray Matter gateway.
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-1.2.2-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-1.3.0-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -176,8 +176,9 @@ knowledge_tree      # full hierarchy visualization
 
 ## ⚡ Auto-ingest
 
-The `knowledge_ingest` tool graficates entire directories **server-side** in a single call —
-no chunks travel through the LLM context:
+The `knowledge_ingest` tool graficates an entire directory **or a single
+document** server-side in a single call — no chunks travel through the LLM
+context:
 
 ```
 scan → folder structure → nodes (godnode/fundamental/specialization)
@@ -194,12 +195,47 @@ Mapping is automatic:
 
 Hidden/build directories (`__pycache__`, `node_modules`, `.venv`, etc.) are skipped.
 
+**A single file works too** — you do not have to invent a folder for one PDF.
+Its godnode defaults to the *containing folder*, so documents dropped in the
+same place stay together. Re-ingesting a file **replaces** that source's chunks,
+which makes updating a document the same command as adding it.
+
 ```bash
-# Via MCP tool:
+# Via MCP tool — a whole tree, or one document:
 knowledge_ingest(path="/path/to/your/docs", godnode="BackEndNotes")
+knowledge_ingest(path="/path/to/contract.pdf")
 # Poll progress:
 knowledge_ingest_status()
+
+# Via CLI:
+neurag ingest ~/Documents/notes
+neurag ingest ~/Downloads/contract.pdf
 ```
+
+---
+
+## 🖥️ CLI
+
+Everything the MCP tools do, from a terminal — plus the commands that only make
+sense as a deliberate act.
+
+| Command | What it does |
+|---|---|
+| `neurag ingest <path>` | A folder tree **or** a single document → nodes, chunks, embeddings, links |
+| `neurag query "<q>"` | Search the active vault (`--deep` includes parked nodes) |
+| `neurag recall "<q>"` | Search **every** layer, parked included — nothing is deleted, only parked |
+| `neurag confirm A B` | Say two nodes were useful *together*: the link between them learns from it |
+| `neurag related <node>` | What else a node reaches, by spreading activation, ranked by strength |
+| `neurag park` | Report nodes idle enough to drop a layer. **Dry run** unless `--apply` |
+| `neurag unpark <node>` | Bring a parked node back to the active vault |
+| `neurag decay` | Weaken link weights and tag salience by elapsed time (half-life) |
+| `neurag health` | Structural audit — flags, never deletes |
+| `neurag doctor` | Engine tier, embedder, vault, gateway — the one command to run first |
+| `neurag reindex` | Re-embed every chunk after an embedding-model change |
+| `neurag config get\|set\|list` | Tunable knobs; the control center renders these automatically |
+
+Reinforcement is on **confirmation**, never on retrieval: retrieval is cheap and
+often wrong, so being returned together proves nothing. `confirm` is the signal.
 
 ---
 
@@ -233,7 +269,7 @@ NEURAG_TURSO_DATABASE_URL=libsql://... NEURAG_TURSO_AUTH_TOKEN=... python -m neu
 | `knowledge_index(path)` | Chunk a file or directory → returns JSON list of chunks |
 | `knowledge_add_node(name, node_type, parent_name?, triggers?)` | Create a node in the hierarchy |
 | `knowledge_add_chunks(node_name, chunks)` | Attach previously indexed chunks to a node |
-| `knowledge_query(query, top_n?)` | Search: trigger match → semantic → lexical ranking |
+| `knowledge_query(query, top_n?)` | Search: vector **and** BM25 always, fused with RRF, then MMR-diversified |
 
 </details>
 
@@ -365,7 +401,6 @@ when you need different chunk sizes, embedding models, or search behavior.
 |---|---|---|
 | `NEURAG_EMBEDDER` | `"auto"` | Embedder: `auto` (fastembed if installed) / `fastembed` / `null` (lexical only) |
 | `NEURAG_EMBED_MODEL` | `"paraphrase-multilingual-MiniLM-L12-v2"` | FastEmbed model (384-dim, multilingual IT/EN) |
-| `NEURAG_RERANK_MODEL` | `"Xenova/ms-marco-MiniLM-L-6-v2"` | Reranker model |
 | `NEURAG_TURSO_DATABASE_URL` | (empty) | Remote Turso DB URL (separate from Neuron!) |
 | `NEURAG_TURSO_AUTH_TOKEN` | (empty) | Remote Turso auth token (falls back to `TURSO_AUTH_TOKEN`) |
 | `NEURAG_REQUIRE_TURSO` | `"1"` | If `"0"`, skip auto-install of pyturso |
