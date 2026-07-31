@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "corpus": "the neurag/ tree itself -- versioned by definition, so a result is reproducible from a commit hash alone. bench/ is dropped back out after ingest (run.py:decontaminate).",
   "ground_truth": "expect = path suffixes relative to the corpus root. A query is answered if ANY of them appears in the ranking.",
   "rules": {
@@ -9,7 +9,8 @@
   "history": {
     "v1": "First run scored recall@5 0.800 overall. Six misses; four were authoring errors, not retrieval failures -- v1 listed only implementing modules and ignored the docs that answer the same question, and under-listed identifier hits. Corrected AFTER seeing results, which is stated here rather than hidden: the identifier half is now mechanical and test-enforced, and the concept half is frozen. Two misses survived the correction and are real: q22 and q27.",
     "v2": "Rules above applied uniformly to all 30 queries.",
-    "v3": "q26 asked about the cross-encoder rerank stage, which was measured and REMOVED (recall unchanged, concept MRR worse, 17x slower). The query was replaced rather than repointed at the CHANGELOG entry describing its removal: measuring whether the vault documents an absence is not measuring retrieval. Its replacement asks about two processes opening one vault. Totals before and after are therefore not strictly comparable on that one query."
+    "v3": "q26 asked about the cross-encoder rerank stage, which was measured and REMOVED (recall unchanged, concept MRR worse, 17x slower). The query was replaced rather than repointed at the CHANGELOG entry describing its removal: measuring whether the vault documents an absence is not measuring retrieval. Its replacement asks about two processes opening one vault. Totals before and after are therefore not strictly comparable on that one query.",
+    "v4": "q11 (CREATE_NO_WINDOW) lost `bridge.py`: the bridge no longer spawns an external proxy, so it no longer needs the no-window flag. Mechanical rule, recomputed from disk by tests/test_bench_set.py — this is the identifier half correcting itself, not a judgement."
   },
   "kinds": {
     "identifier": "exact strings -- names, flags, env vars, constants. The class vector-only retrieval failed, at 67% recall.",
@@ -135,7 +136,6 @@
       "q": "CREATE_NO_WINDOW",
       "expect": [
         "CHANGELOG.md",
-        "bridge.py",
         "cli.py",
         "clients.py",
         "db.py",

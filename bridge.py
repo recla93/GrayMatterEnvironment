@@ -1,8 +1,8 @@
 """NeuRAG HTTP bridge launcher — expose the stdio server over HTTP for ChatGPT & co.
 
-Same architecture as neuron.bridge: wraps NeuRAG's stdio MCP server behind
-mcp-proxy so remote LLMs (Perplexity, ChatGPT Dev Mode) can reach it over
-HTTPS via a tunnel.
+Same architecture as neuron.bridge: serves the MCP server over Streamable HTTP
+so remote LLMs (Perplexity, ChatGPT Dev Mode) can reach it over HTTPS via a
+tunnel. The transport is the MCP SDK's own -- no mcp-proxy, no uvx.
 
 Usage::
 
@@ -112,17 +112,21 @@ def resolve_neurag_cmd(override: list[str] | None) -> list[str]:
     return [sys.executable, "-m", "neurag.server"]
 
 
-def resolve_proxy_runner() -> list[str] | None:
-    """Find a way to run mcp-proxy."""
-    if shutil.which("mcp-proxy"):
-        return ["mcp-proxy"]
-    if shutil.which("uvx"):
-        return ["uvx", "mcp-proxy"]
-    if shutil.which("uv"):
-        return ["uv", "tool", "run", "mcp-proxy"]
-    if shutil.which("pipx"):
-        return ["pipx", "run", "mcp-proxy"]
-    return None
+
+def resolve_mcp_app():
+    """The MCP server object to serve over HTTP.
+
+    Mirrors `resolve_neurag_cmd`: in full suite the bridge must expose Gray
+    Matter, so a remote client sees Neuron + NeuRAG + orchestration and not
+    NeuRAG alone. Serving in-process makes this an import instead of a command,
+    but the CHOICE has to stay the same one — a bridge that quietly narrowed to
+    NeuRAG would look like it worked and be missing most of the tools.
+    """
+    if importlib.util.find_spec("gray_matter.server") is not None:
+        from gray_matter.server import app
+        return app
+    from neurag.server import app
+    return app
 
 
 def preflight(server_cmd: list[str], seconds: float = 3.0) -> bool:
@@ -180,7 +184,7 @@ def _launch_tunnel(host: str, port: int) -> subprocess.Popen | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Launch the NeuRAG→HTTP bridge (mcp-proxy in server mode).")
+        description="Launch the NeuRAG→HTTP bridge (MCP SDK Streamable HTTP).")
     parser.add_argument("--port", type=int,
                         default=_env_int("NEURAG_BRIDGE_PORT", 8001),
                         help="HTTP port (default 8001, env: NEURAG_BRIDGE_PORT).")
@@ -208,26 +212,18 @@ def main(argv: list[str] | None = None) -> int:
         override = override[1:]
     neurag_cmd = resolve_neurag_cmd(override or None)
 
-    proxy = resolve_proxy_runner()
-    if proxy is None:
-        print("No way to run 'mcp-proxy' was found.\n"
-              "Install a runner (any one):\n"
-              "  • uv (recommended, no pip needed):\n"
-              "      Windows : irm https://astral.sh/uv/install.ps1 | iex\n"
-              "      macOS/Linux : curl -LsSf https://astral.sh/uv/install.sh | sh\n"
-              "  • pipx : python -m pip install --user pipx\n"
-              "Then re-run this script.", file=sys.stderr)
-        return 2
-
-    # Smoke test
-    try:
-        r = subprocess.run(proxy + ["--version"], capture_output=True, timeout=15,
-                           creationflags=(subprocess.CREATE_NO_WINDOW if WIN else 0))
-        if r.returncode != 0:
-            print(f"  [!] '{' '.join(proxy)}' did not return a valid mcp-proxy.",
-                  file=sys.stderr)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        print(f"  [!] '{' '.join(proxy)}' — {exc}", file=sys.stderr)
+    # NATIVE transport — no mcp-proxy, no uvx, nothing extra to install.
+    #
+    # `mcp-proxy` wrapped the stdio server in an HTTP one from a separate
+    # project on a separate release cycle. When the MCP SDK dropped
+    # `request_ctx` in 1.28 it kept importing it, so BOTH bridges died at
+    # startup with an ImportError nobody ever saw: `start` reported success
+    # (it checked liveness after a fixed second, the crash landed later) and
+    # `stop` then said the process was gone.
+    #
+    # The SDK ships `streamable_http_manager` now, so the transport comes from
+    # the same package as the protocol. One dependency, one version, and the
+    # next breaking bump fails in our own tests instead of at a user's `start`.
 
     # Port fallback
     port = args.port
@@ -241,11 +237,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ✓ Using port {free} instead.", flush=True)
         port = free
 
-    full = proxy + [f"--port={port}", f"--host={args.host}", "--"] + neurag_cmd
     url = f"http://{args.host}:{port}/mcp"
 
     if args.print_cmd:
-        print(" ".join(full))
+        print(f"{sys.executable} -m neurag.bridge --host={args.host} --port={port}")
         return 0
 
     if not args.no_check and not preflight(neurag_cmd):
@@ -254,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     bind_info = f"{'all interfaces' if args.host == '0.0.0.0' else args.host}:{port}"
 
     gm = importlib.util.find_spec("gray_matter.server") is not None
-    print(f"\nStarting NeuRAG bridge via: {' '.join(proxy)}")
+    print("\nStarting NeuRAG bridge (MCP SDK Streamable HTTP, in-process)")
     print(f"  local endpoint : {url}")
     print(f"  bind           : {bind_info}")
     print(f"  server         : {'gray_matter.server (full suite)' if gm else 'neurag.server (standalone)'}")
@@ -270,10 +265,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         flags = 0x08000000 if WIN else 0
 
+        from neurag.http_transport import serve
+        _mcp_app = resolve_mcp_app()
+
         if want_tunnel:
             tunnel_proc = _launch_tunnel(args.host, port)
             try:
-                rc = subprocess.call(full, creationflags=flags)
+                serve(_mcp_app, host=args.host, port=port)
+                rc = 0
             except KeyboardInterrupt:
                 rc = 0
             finally:
@@ -285,13 +284,11 @@ def main(argv: list[str] | None = None) -> int:
                         tunnel_proc.kill()
             return rc
         else:
-            return subprocess.call(full, creationflags=flags)
+            serve(_mcp_app, host=args.host, port=port)
+            return 0
 
     except KeyboardInterrupt:
         return 0
-    except FileNotFoundError as exc:
-        print(f"Failed to start the proxy: {exc}", file=sys.stderr)
-        return 2
 
 
 if __name__ == "__main__":

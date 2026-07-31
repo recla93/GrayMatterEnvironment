@@ -589,23 +589,33 @@ class TestPortFallbackChain:
                 s.close()
 
 
-class TestProxyRunnerDetection:
-    """mcp-proxy runner resolution: uvx, uv, pipx, direct."""
+class TestNativeHttpTransport:
+    """The bridges serve HTTP themselves now, with the MCP SDK's own transport.
 
-    def test_gm_proxy_detection(self):
-        from gray_matter.bridge import resolve_proxy_runner
-        result = resolve_proxy_runner()
-        assert result is None or isinstance(result, list)
+    They used to shell out to `mcp-proxy`, which lives on a separate release
+    cycle: when the SDK dropped `request_ctx` in 1.28 it kept importing it and
+    both bridges died at startup, invisibly. These tests replaced the ones that
+    checked how we FOUND that proxy."""
 
-    def test_neuron_proxy_detection(self):
-        from neuron.bridge import resolve_proxy_runner
-        result = resolve_proxy_runner()
-        assert result is None or isinstance(result, list)
+    def test_neuron_transport_is_importable(self):
+        from neuron.http_transport import serve
+        assert callable(serve)
 
-    def test_neurag_proxy_detection(self):
-        from neurag.bridge import resolve_proxy_runner
-        result = resolve_proxy_runner()
-        assert result is None or isinstance(result, list)
+    def test_neurag_transport_is_importable(self):
+        from neurag.http_transport import serve
+        assert callable(serve)
+
+    def test_the_proxy_resolver_is_gone_from_both(self):
+        import neuron.bridge, neurag.bridge
+        assert not hasattr(neuron.bridge, "resolve_proxy_runner")
+        assert not hasattr(neurag.bridge, "resolve_proxy_runner")
+
+    def test_each_bridge_picks_the_full_suite_server_when_gm_is_present(self):
+        """A bridge that quietly narrowed to its own tools would look like it
+        worked and be missing most of them."""
+        from neurag.bridge import resolve_mcp_app
+        app = resolve_mcp_app()
+        assert app.name in ("gray-matter", "neurag")
 
 
 class TestBatchBridgeResolution:
