@@ -108,21 +108,31 @@ class TestEnsureDesktopShortcut:
         mock_lnk.assert_called_once()
         assert marker.exists()
 
-    @patch("gray_matter.shortcut._windows_lnk")
+    @patch("gray_matter.shortcut._windows_lnk", return_value=True)
     @patch("gray_matter.shortcut._shortcut_file_exists", return_value=True)
-    def test_skips_when_marker_exists(self, mock_exists, mock_lnk, tmp_path):
+    def test_skips_when_the_marker_matches_the_current_recipe(self, mock_exists,
+                                                              mock_lnk, tmp_path):
+        """Idempotency, but keyed on WHAT was built.
+
+        The marker used to hold "1", so any existing shortcut was accepted
+        forever — including the ones created while `assets/gray-matter.ico` was
+        missing from the installed package, which kept the bare interpreter
+        icon permanently. A marker that records the recipe skips when nothing
+        changed and rebuilds when something did."""
         marker = tmp_path / ".mytool-gui-shortcut"
-        marker.write_text("1")
 
         with patch("gray_matter.shortcut.sys") as mock_sys:
             mock_sys.executable = str(tmp_path / "python.exe")
-            with patch("gray_matter.shortcut.os.name", "nt"):
+            with patch("gray_matter.shortcut.os.name", "nt"), \
+                 patch("gray_matter.shortcut._resolve_icon", return_value=""):
                 from gray_matter.shortcut import ensure_desktop_shortcut
-                result = ensure_desktop_shortcut(
-                    "mytool", "My", ["-m", "m"], "")
+                marker.write_text("icon=False")          # ricetta corrente
+                assert ensure_desktop_shortcut("mytool", "My", ["-m", "m"], "") is True
+                mock_lnk.assert_not_called()
 
-        assert result is True
-        mock_lnk.assert_not_called()
+                marker.write_text("1")                   # formato vecchio
+                assert ensure_desktop_shortcut("mytool", "My", ["-m", "m"], "") is True
+                mock_lnk.assert_called_once()            # ricostruito, come deve
 
     @patch("gray_matter.shortcut._windows_lnk", return_value=True)
     @patch("gray_matter.shortcut._shortcut_file_exists", return_value=False)

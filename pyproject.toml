@@ -1,6 +1,6 @@
 [project]
 name = "gray-matter"
-version = "1.1.2"
+version = "1.2.0"
 description = "Gray-Matter: MCP orchestrator/proxy that fronts Neuron + NeuRAG"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }
@@ -30,7 +30,14 @@ packages = ["gray_matter"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-gray_matter = ["webgui.html"]
+# assets/ ships too. It did not, and both symptoms came from that one line:
+# the header logo (`/logo.png` reads `<package>/assets/GM.png`) and the desktop
+# shortcut icon (`shortcut._resolve_icon` reads `<package>/assets/gray-matter.ico`)
+# both resolve inside the INSTALLED package, where the folder did not exist —
+# so the control center never showed its logo and the shortcut always fell back
+# to the bare interpreter icon. `include-package-data` does not catch these on a
+# flat layout without a MANIFEST.in, so they are listed explicitly.
+gray_matter = ["webgui.html", "assets/*"]
 
 [tool.setuptools.package-dir]
 gray_matter = "."

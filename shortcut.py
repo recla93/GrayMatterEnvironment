@@ -25,14 +25,26 @@ def ensure_desktop_shortcut(tool: str, label: str, module_args: "list[str]",
     try:
         marker = Path(sys.executable).with_name(f".{tool}-gui-shortcut")
         shortcut_exists = _shortcut_file_exists(label)
+        # The marker records WHAT was built, not just that something was. It
+        # used to hold "1", so once a shortcut existed it was never revisited —
+        # and the shortcuts already on disk had been created while
+        # `assets/gray-matter.ico` was missing from the installed package, so
+        # they fell back to the bare interpreter icon and kept it forever.
+        # Shipping the asset fixes new installs; recording the recipe is what
+        # fixes the ones already out there, on the next `gui`.
+        recipe = f"icon={bool(_resolve_icon()) if os.name == 'nt' else False}"
         if marker.exists() and shortcut_exists:
-            return True
+            try:
+                if marker.read_text(encoding="utf-8").strip() == recipe:
+                    return True
+            except OSError:
+                pass                      # illeggibile: ricrea, non è un costo
         ok = (_windows_lnk(label, module_args, description) if os.name == "nt"
               else _mac_command(label, module_args) if sys.platform == "darwin"
               else _linux_desktop(label, module_args, description))
         if ok:
             try:
-                marker.write_text("1", encoding="utf-8")
+                marker.write_text(recipe, encoding="utf-8")
             except OSError:
                 pass
         return ok

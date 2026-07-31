@@ -1,6 +1,6 @@
 # Changelog — Gray Matter
 
-## Unreleased
+## 1.2.0 (2026-07-31)
 - **`gray-matter promote` — consolidazione CLS (DESIGN-EVOLUTION §5.3).** Il
   modello di McClelland/O'Reilly, di cui la suite era già due terzi: ippocampo
   (rapido, episodico, decade) = Neuron, neocorteccia (lenta, semantica,

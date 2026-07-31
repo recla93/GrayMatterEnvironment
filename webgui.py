@@ -65,6 +65,29 @@ def _python() -> str:
     return sys.executable or "python"
 
 
+def _same_interpreter(a: str, b: str) -> bool:
+    """Do these two paths mean the same Python?
+
+    `pythonw.exe` and `python.exe` are the SAME install: one is the windowless
+    launcher. The control center is started by the desktop shortcut, so it runs
+    under `pythonw.exe`, while registration writes `sys.executable` from a
+    console run — `python.exe`. Comparing the strings flagged every correctly
+    registered client as "points at a DIFFERENT install", on every machine,
+    always.
+
+    That is worse than cosmetic. The clients panel is the error register: it
+    exists so a real problem stands out, and an alarm that is always on teaches
+    you to ignore the one time it means something.
+    """
+    def norm(p: str) -> str:
+        p = os.path.normcase(os.path.normpath(p or ""))
+        base = os.path.basename(p)
+        if base == "pythonw.exe":                      # stesso venv, altro launcher
+            p = os.path.join(os.path.dirname(p), "python.exe")
+        return p
+    return norm(a) == norm(b)
+
+
 def _python_for_tool(tool: str) -> str:
     """Get the correct Python executable for a tool.
     
@@ -927,7 +950,7 @@ class Api:
                     if not os.path.exists(info["command"]):
                         info["problem"] = ("registered, but the interpreter is GONE: "
                                            f"{info['command']}")
-                    elif me and os.path.normcase(info["command"]) != os.path.normcase(me):
+                    elif me and not _same_interpreter(info["command"], me):
                         info["problem"] = ("points at a DIFFERENT install: "
                                            f"{info['command']}")
                 files.append(info)
