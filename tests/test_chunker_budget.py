@@ -209,3 +209,27 @@ def test_carrying_forward_still_respects_the_ceiling():
     this would reintroduce exactly the truncation P2 removed."""
     text = "### Algoritmo\n\n" + LONG_PARAGRAPH * 3
     assert all(len(p) <= BUDGET for p in _split_text(text, BUDGET, overlap=0))
+
+
+# --- Windows writes BOMs, and a BOM is not content ---------------------------
+
+def test_a_bom_never_reaches_a_chunk(tmp_path):
+    """Notepad and PowerShell's `Out-File -Encoding utf8` both write a BOM. Read
+    as plain utf-8 it becomes a real character at the head of the first chunk —
+    visible in results as "?# Titolo", and embedded into the vector along with
+    everything else. Found by ingesting a document the way a Windows user makes
+    one, not by a unit test."""
+    p = tmp_path / "bom.md"
+    p.write_bytes("\ufeff# Titolo\n\n" + ("contenuto vero. " * 20)).encode("utf-8") \
+        if False else p.write_bytes(("\ufeff# Titolo\n\n" + "contenuto vero. " * 20).encode("utf-8"))
+    chunks = chunk_file(p, BUDGET)
+    assert chunks
+    joined = "".join(c.text for c in chunks)
+    assert "\ufeff" not in joined, "il BOM è finito nel testo indicizzato"
+    assert joined.lstrip().startswith("# Titolo")
+
+
+def test_a_file_without_a_bom_is_unchanged(tmp_path):
+    p = tmp_path / "plain.md"
+    p.write_text("# Titolo\n\n" + "contenuto vero. " * 20, encoding="utf-8")
+    assert "\ufeff" not in "".join(c.text for c in chunk_file(p, BUDGET))

@@ -312,13 +312,12 @@ neurag/
 ├── db.py           # KnowledgeGraph: 3-tier DB, vector search, node/chunk CRUD
 ├── chunker.py      # Adaptive chunking: AST (Python), definition-aware (Kotlin/Java/TS/JS), Markdown, PDF, DOCX
 ├── embedder.py     # NullEmbedder (lexical) / FastEmbedEmbedder (384-dim, shared with Neuron)
-├── reranker.py     # NullReranker (OFF) / FastEmbedReranker (cross-encoder, opt-in)
 ├── ingest.py       # Auto-ingest: folder → nodes → chunks → embeddings → links (server-side)
 ├── importer.py     # Bulk YAML import
 ├── selfcheck.py    # Deterministic self-tests (no model download)
 ├── models.py       # Data classes: Chunk, QueryResult
 ├── clients.py      # MCP client registration (shared pattern with Neuron)
-├── settings.py     # Persistent config (rerank toggle, etc.)
+├── settings.py     # Persistent config (embedding model, chunk size)
 ├── shortcut.py     # Desktop shortcut creation (cross-platform)
 └── tests/          # Test suite (24 link tests + executor/settings tests)
 ```
@@ -366,7 +365,6 @@ when you need different chunk sizes, embedding models, or search behavior.
 |---|---|---|
 | `NEURAG_EMBEDDER` | `"auto"` | Embedder: `auto` (fastembed if installed) / `fastembed` / `null` (lexical only) |
 | `NEURAG_EMBED_MODEL` | `"paraphrase-multilingual-MiniLM-L12-v2"` | FastEmbed model (384-dim, multilingual IT/EN) |
-| `NEURAG_RERANK` | `"off"` | Cross-encoder reranker: `on` / `off` |
 | `NEURAG_RERANK_MODEL` | `"Xenova/ms-marco-MiniLM-L-6-v2"` | Reranker model |
 | `NEURAG_TURSO_DATABASE_URL` | (empty) | Remote Turso DB URL (separate from Neuron!) |
 | `NEURAG_TURSO_AUTH_TOKEN` | (empty) | Remote Turso auth token (falls back to `TURSO_AUTH_TOKEN`) |

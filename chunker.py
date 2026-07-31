@@ -181,7 +181,7 @@ def chunk_markdown(filepath: Path) -> list[Chunk]:
     chunk under `Install > Windows > venv` encodes where it lives. Without it a
     paragraph saying "run the script" is unfindable by "windows install".
     """
-    lines = filepath.read_text(encoding="utf-8").split("\n")
+    lines = filepath.read_text(encoding="utf-8-sig").split("\n")
     chunks: list[Chunk] = []
     stack: list[tuple[int, str]] = []      # (level, title) — the heading path
     current_section = "intro"
@@ -220,7 +220,7 @@ def chunk_python_ast(filepath: Path) -> list[Chunk]:
 
     Decorators are kept with their target. Falls back to line chunking if the
     file doesn't parse (partial edits, non-CPython syntax)."""
-    source = filepath.read_text(encoding="utf-8")
+    source = filepath.read_text(encoding="utf-8-sig")
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -279,7 +279,7 @@ _DEF_RE = re.compile(
 def chunk_code_generic(filepath: Path, hard_cap: int = 160) -> list[Chunk]:
     """Definition-aware chunking for non-Python code: a new chunk starts at each
     top-level definition, with a size cap so a giant body can't run away."""
-    lines = filepath.read_text(encoding="utf-8").split("\n")
+    lines = filepath.read_text(encoding="utf-8-sig").split("\n")
     chunks: list[Chunk] = []
     cur: list[str] = []
     state = {"section": "top", "tags": [], "idx": 0}
@@ -311,7 +311,7 @@ def chunk_code_generic(filepath: Path, hard_cap: int = 160) -> list[Chunk]:
 
 def chunk_lines(filepath: Path, max_lines: int = 60) -> list[Chunk]:
     """Plain size-based chunking — text and config files with no code structure."""
-    lines = filepath.read_text(encoding="utf-8").split("\n")
+    lines = filepath.read_text(encoding="utf-8-sig").split("\n")
     chunks: list[Chunk] = []
     buf: list[str] = []
     idx = 0

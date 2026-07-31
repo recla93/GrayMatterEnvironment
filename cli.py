@@ -705,6 +705,15 @@ def _run_via_gm(tool: str, tool_args: dict) -> bool:
         return False
     if not gm_still_manages("neurag"):
         return False
+    # Un argomento OPZIONALE non passato è una chiave ASSENTE, non una chiave a
+    # `null`: lo schema MCP lo dichiara `{"type": "string"}` e un null esplicito
+    # non valida. Le CLI passano i default di argparse così come sono, quindi
+    # `neurag ingest <path>` senza `--godnode` moriva con
+    # "Input validation error: None is not of type 'string'" — cioè il caso
+    # normale, ogni volta che GM è acceso. Lo stesso valeva per `--parent` di
+    # add-node. Il filtro sta qui, nell'imbuto, e non nei due chiamanti: così
+    # copre anche il terzo che qualcuno aggiungerà.
+    tool_args = {k: v for k, v in (tool_args or {}).items() if v is not None}
     try:
         r = _send_ipc({"action": "gm-neurag", "tool": tool, "args": tool_args})
     except Exception as e:  # noqa: BLE001

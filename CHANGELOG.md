@@ -1,6 +1,6 @@
 # Changelog — NeuRAG
 
-## Unreleased
+## 1.3.0 (2026-07-31)
 - **Il reranker cross-encoder è stato misurato e RIMOSSO.** Era opt-in e spento
   di default dalla 1.1.1, e non era mai stato misurato. Ora sì, sul set del
   benchmark:
