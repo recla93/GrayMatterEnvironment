@@ -1,6 +1,148 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **Il benchmark di recupero esiste come artefatto** (`bench/`, DESIGN-EVOLUTION
+  §7). Prima i numeri delle fasi (recall@5 67% → 94%) venivano da un set di
+  query che viveva dentro una sessione: riproducibile da nessuno, confrontabile
+  con niente — ed era il blocco dichiarato per innestare lo spreading activation
+  nel ranking.
+  - `bench/queries.json`: 30 query IT+EN, metà **identifier** (stringhe esatte:
+    la classe su cui il vettoriale puro falliva) e metà **concept** (parafrasi
+    senza sovrapposizione lessicale con la risposta). `bench/run.py` riporta
+    recall@5 e MRR@10 **per kind e per lingua**: è il totale che aveva nascosto
+    la scoperta di P3, e un numero solo non può regredire nel modo che conta.
+  - Il corpus è il repo stesso, l'unico che viaggia col commit. `bench/` viene
+    **tolto dal vault dopo l'ingest**: `.json` è indicizzabile, quindi
+    `queries.json` sarebbe finito in un chunk con ogni domanda accanto al file
+    che la risponde. Tolto il nodo, non aggiunta una regola globale su "bench"
+    che seguirebbe gli utenti in progetti dove quella cartella è conoscenza.
+  - Le query girano con `touch=False`: rispondere alza la salienza dei tag, la
+    salienza alimenta lo spreading activation, e un benchmark che scalda il
+    vault che misura smette di essere un corpus fisso dopo il primo giro.
+  - **Onestà sulla ground truth.** Il primo giro dava 0.800; quattro delle sei
+    miss erano ground truth scritta stretta (elencava il modulo che implementa e
+    ignorava il documento che risponde), non fallimenti del recupero. La
+    correzione è stata fatta *dopo* aver visto i risultati — cioè il modo esatto
+    in cui un benchmark diventa un ornamento — quindi è dichiarata in
+    `queries.json` → `history` e resa non ripetibile: la metà `identifier` è
+    **ricalcolata da disco** da `tests/test_bench_set.py` (expect = ogni file
+    ingerito che contiene la stringa: non è negoziabile), la metà `concept` è
+    **congelata**, perché "risponde alla domanda?" è un giudizio.
+- **Un vault preso in prestito legge e non scrive.** Il fallback sqlite3 qui
+  sotto aveva un effetto collaterale che non avevo previsto: il lock esclusivo
+  di pyturso stava facendo rispettare **per caso** la regola del single-writer,
+  e degradare l'ha tolta di mezzo — due motori con due implementazioni diverse
+  del WAL potevano scrivere lo stesso file insieme. Misurato: un secondo
+  processo scriveva davvero mentre il primo teneva il lock.
+  Ora, **solo nel caso lockato**, la connessione è avvolta in
+  `_ReadOnlyConnection`: le letture passano, una scrittura alza `VaultUnavailable`
+  e indirizza al processo proprietario, dove `_run_via_gm` già manda le
+  scritture. Le letture erano il guadagno, le scritture erano il bug.
+  La distinzione è quella che serve: una macchina **senza** pyturso ottiene un
+  sqlite3 normale e scrivibile — quello è NeuRAG standalone (I2), non un vault
+  in prestito. `_init_schema` viene saltato sul tier in prestito: lo schema lo
+  mantiene chi possiede il file, e senza quel salto un `CREATE TABLE IF NOT
+  EXISTS` avrebbe colpito la guardia e rimarcato corrotto un vault leggibile.
+- **Non si ritenta più un lock.** I retry esistono per una corsa transitoria
+  (cartella non ancora pronta); un lock non è transitorio, pyturso lo tiene per
+  tutta la vita del processo proprietario. Ritentare era spreco garantito
+  proprio nel caso più frequente — ogni comando CLI col server MCP acceso.
+  Misurato sul vault vivo: apertura da **2.86s a 1.01s**, contro 1.13s a vault
+  libero. Cioè: il percorso lockato non costa più niente in più di quello
+  normale. I tentativi registrati passano da 3 a 1.
+- **Lo spreading activation nel ranking: misurato, e RIMOSSO.** Era rimasto
+  spento di default; un ramo inutilizzato sul percorso caldo del recupero è un
+  costo di manutenzione che la misura non giustifica, quindi è stato tolto —
+  insieme a `spread`, `_fuse_activation`, `SPREAD_SEEDS`/`SPREAD_HOPS` e al
+  macchinario `--ab`/`_moved`/`report_ab` del bench che serviva solo a
+  confrontarlo. I numeri e il perché restano qui sotto: è la documentazione a
+  conservare l'esperimento, non il codice.
+  `related` / `knowledge_related` restano intatti — è lì che l'attivazione fa
+  quello che sa fare, cioè rispondere a chi la chiede esplicitamente.
+  Com'era fatto, per chi volesse rifarlo: entrava come
+  **terza classifica** nella fusione RRF — seed = i nodi dei migliori 3 chunk,
+  un salto, e il posto di un nodo nell'ordine di attivazione vale `1/(K+rank)`
+  per ogni suo chunk candidato. Fuso come classifica e non sommato come
+  punteggio, quindi non serve calibrare niente e nessuna gamba può soverchiare
+  le altre. Contributo per **nodo**, non per chunk: un nodo con 40 chunk nel
+  pool non deve prendersi 40 slot. Riordina soltanto — §5.5 vieta l'attivazione
+  come *generatore*.
+  Risultato: recall@5 0.967 → 0.867, MRR@10 0.823 → 0.606, 15 query mosse di cui
+  **13 in giù**. Due ragioni, entrambe del corpus: ogni link è `origin='auto'`
+  (zero conferme, mentre §5.1 argomenta l'attivazione sui pesi *hebbiani*), e la
+  distribuzione dei nodi è degenere (il godnode tiene il 70% dei chunk, `tests`
+  un altro 22%), quindi il voto è un prior quasi costante contro un segnale che
+  dipende dalla query.
+  Una cosa l'ha fatta, e va registrata perché è l'unico argomento per
+  riprovarci: q22 non ha nessuna rotta lessicale o semantica verso
+  `clients.py`, ed è l'unica miss permanente del set — l'attivazione l'ha
+  portata a rank 8 dal nulla. Se un giorno si riprova, le precondizioni da
+  verificare **prima** sono quelle due qui sopra: link davvero confermati, e
+  una distribuzione dei nodi che non siano due secchi. Altrimenti non è un
+  ri-test, è un altro lancio di dadi.
+- **Il tier sqlite3 ora esiste davvero.** I4 lo chiama "a degraded fallback",
+  `_ensure_turso` stampa "degrado a sqlite3", `status`/`doctor` lo riportano e
+  `_vector_candidates` ha un ramo di coseno in Python commentato "only the
+  sqlite3 tier lands here" — e `sqlite3.connect` non veniva chiamato **da
+  nessuna parte** in `db.py`. Il ramo lasciava `_conn = None`, quindi
+  `_init_schema` falliva con `'NoneType' object has no attribute 'execute'`,
+  l'errore veniva catturato, e il vault risultava **CORROTTO**.
+  Ecco come un vault sano veniva diagnosticato come rotto: il server MCP tiene
+  un lock pyturso (che è esclusivo), un secondo processo non riusciva ad aprire
+  quel tier, e invece di degradare dichiarava il file guasto. sqlite3 apre e
+  legge lo stesso identico file senza lamentarsi — misurato sul vault vivo
+  mentre il server lo teneva, non supposto.
+  Ora `_connect` apre sqlite3 quando pyturso non è utilizzabile, e
+  `_open_local_turso` raccoglie il **motivo** invece di ingoiarlo, così `doctor`
+  dice "lock" e non "open locale fallito".
+  **Lock e corruzione sono problemi opposti** e avevano lo stesso messaggio: il
+  primo si risolve da solo quando l'altro processo molla, il secondo solo
+  sostituendo il file — e la cura del secondo è `--wipe-knowledge`. Un vault
+  sano ma occupato era a un messaggio di distanza dall'essere cancellato su
+  consiglio. `open_failure_message()` li distingue, e lo usano sia la guardia
+  sia `status()`, così diagnosi ed errore non possono contraddirsi.
+  Un test asseriva il bug (`test_neurag_lock.py` si aspettava `Turso (pending)`,
+  cioè il processo B senza connessione, come esito corretto di un lock): ora
+  asserisce la proprietà più forte — B degrada di un tier e continua a leggere.
+  **Neuron non ha mai avuto questo bug**: `_open_local_engine` finisce con
+  `return _sqlite3.connect(path)`, la sua "L2 guard". Questo file è la porta
+  keep-in-sync di quello e ha perso esattamente l'ultima riga — il modo tipico
+  in cui si rompe una porta fatta a mano: la forma sopravvive, la guardia no, e
+  i commenti continuano a descrivere l'originale.
+- **Un vault corrotto ora lo dice, su ogni superficie.** `_init_schema` ingoia
+  gli errori di schema in `self._corrupt` perché le diagnostiche possano girare
+  e raccontarlo invece di far morire tutta la CLI — giusto, e fatto a metà:
+  `search`, `park` e `query` proseguivano su una connessione senza tabelle e
+  uscivano con un "no such table" di pyturso, che nomina il sintomo e nasconde
+  la causa. In una sessione quel silenzio ha nascosto **due** errori di schema.
+  Ora la connessione viene sostituita da una `_CorruptConnection` che alza
+  `VaultCorrupt` con causa e comando di recupero. **Un punto solo**: non c'è una
+  funzione da cui passano tutti i metodi, ma c'è un oggetto — quindi un metodo
+  aggiunto fra un anno è coperto senza che nessuno se lo ricordi.
+  `status`/`health`/`doctor` tornano prima di toccare `_conn` (è ciò che li
+  lascia capaci di riportarlo) e `repair` gira prima che il DB si apra.
+  `cli.main` e `server.call_tool` la traducono in un messaggio, non in un crash.
+- **Un heading non diventa più un chunk da solo.** `_split_text` chiudeva il
+  pack greedy subito dopo l'heading ogni volta che il paragrafo seguente valeva
+  da solo un budget intero: `## 7. Verification` diventava un chunk che annuncia
+  un titolo e non dice niente. Tredici su questo repo, e `health()` li conta
+  come *serious* — quindi `ok` era **False** su ogni vault reale e l'intero
+  segnale era illeggibile.
+  Un buffer sotto `MIN_CHUNK_CHARS` viene ora portato avanti nel candidato
+  sovradimensionato, che la ricorsione ri-taglia a un separatore più fine:
+  l'heading viaggia col testo che introduce. Portato avanti e non scartato
+  perché un runt è solo *probabilmente* un heading, e la volta che è una frase
+  vera scartarlo è perdita silenziosa di dati. 13 → **0** runt, zero chunk fuori
+  budget, `health()["ok"]` **True** per la prima volta su un vault reale — e
+  MRR@10 0.809 → **0.823**, perché quei chunk occupavano posizioni in classifica.
+- **`chunk_tags` è parcheggiata** (§8.4 chiedeva di misurarlo a P3 e non fu
+  fatto). Misurato: 9360 righe per 2117 chunk e **nessun lettore** in nessuno
+  dei tre repo — il linking legge `node_tags`, l'IDF conta `node_tags`, e il
+  join per tag di Gray Matter passa da `node_tag_names`, che è ancora
+  `node_tags`. `add_chunk` non la scrive più. Parcheggiata e non cancellata
+  (I5): tabella e righe legacy restano, i delete continuano a ripulirle e
+  `health()` continua a sorvegliarle; il dato è derivato dai tag del chunker,
+  quindi un lettore futuro la ripopola con un re-ingest.
 - **Il grafo impara, e quello che impara sopravvive (P5, §5.1).**
   - `node_links.origin` separa i link derivati da quelli appresi:
     `rebuild_links()` cancella solo `origin='auto'`, e `upsert_link` rifiuta di

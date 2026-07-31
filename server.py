@@ -326,6 +326,22 @@ def _read_skill(parts: tuple[str, ...]) -> str:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    """Dispatch, with the one failure every tool shares turned into an answer.
+
+    A vault that will not open reached the MCP framework as an unhandled
+    exception, which the client renders as "Internal Server Error" — the same
+    dead end 1.1.1 fixed for `knowledge_status`/`knowledge_health` and left open
+    for every other tool. `VaultUnavailable` already carries the cause and the
+    recovery command, so the model gets told what happened instead of that
+    something did."""
+    from neurag.db import VaultUnavailable
+    try:
+        return await _call_tool(name, arguments)
+    except VaultUnavailable as exc:
+        return [TextContent(type="text", text=str(exc))]
+
+
+async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "skill":
         which = str(arguments.get("name") or "usage").strip()
         parts = _SKILLS.get(which)
@@ -597,6 +613,7 @@ def main() -> None:
         t.start()
 
     import asyncio
+    from mcp.server.lowlevel import NotificationOptions
     from mcp.server.stdio import stdio_server
 
     async def _run():
@@ -607,6 +624,17 @@ def main() -> None:
                 InitializationOptions(
                     server_name="neurag",
                     server_version=__version__,
+                    # REQUIRED pydantic field since the MCP SDK bump (1.28).
+                    # Without it every stdio start died on a ValidationError
+                    # before serving a single tool — and `SERVERS["neurag"]` is
+                    # `-m neurag.server`, so that is what every client registers.
+                    # Gray Matter hit this exact failure and fixed it in its
+                    # `_init_options()`; the fix never crossed over, and nothing
+                    # noticed because the daemon path never builds these options.
+                    capabilities=app.get_capabilities(
+                        notification_options=NotificationOptions(),
+                        experimental_capabilities={},
+                    ),
                 ),
             )
 

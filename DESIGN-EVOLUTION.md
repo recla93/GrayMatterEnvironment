@@ -51,7 +51,7 @@ These are hard constraints. Any change that violates one is wrong regardless of 
 | I1 | **The six installers stay aligned.** A knob added to one is added to all: `install.ps1` + `install.sh` × 3 repos, plus `.cmd`/`.command` if flags change. | `gray_matter/tests/test_installer_parity.py` — extend `PS1_FEATURES` / `SH_FEATURES` in the same commit |
 | I2 | **NeuRAG alone is the baseline, not a degraded mode.** Every quality gain in P0–P5 must be fully present with Neuron *and* Gray Matter absent. Neuron and GM are amplifiers on top of a system that is already good; they are never prerequisites for it. Same in reverse for Neuron. | the three-configuration matrix in §7 |
 | I3 | **Gray Matter orchestrates; it does not own data.** GM manages cross-store bridges, enriches Neuron's stimuli with knowledge, routes. It never becomes required for retrieval. | I2 + `bridges.py` existing tier rules |
-| I4 | **NeuRAG uses pyturso.** Native `vector_distance_cos` is the reason retrieval scales; the sqlite3 tier is a degraded fallback, not a target. | `db._vector_sql`, `status()["engine"]` |
+| I4 | **NeuRAG uses pyturso.** Native `vector_distance_cos` is the reason retrieval scales; the sqlite3 tier is a degraded fallback, not a target. **(2026-07-30: that fallback did not exist — `sqlite3.connect` was never called in `db.py`, so "degraded" meant `_conn = None` and a vault reported CORRUPT. Built for real; see §7 Engine.)** | `db._vector_sql`, `status()["engine"]` |
 | I5 | **Nothing is ever deleted, in any store.** Not chunks, not nodes, not concepts. Unused things are *parked* — dropped from the active working set, kept in storage, reactivatable by `recall`. Only *link weights* and *tag salience* decay, and decay means "harder to reach", never "gone". | §3; `Graph._graveyard` is already "recoverable" |
 | I6 | **Coherence across the three.** Shared vocabulary, shared vector space, shared tier ladder, shared settings shape. | `test_client_targeting.py` pattern |
 | I7 | **The GUI is verified last, every time.** The control center reads `catalog` + `settings.HELP`/`SUGGEST`; a new knob invisible in the GUI is an unfinished knob. | manual pass + `test_gui_bundling.py` |
@@ -297,10 +297,20 @@ re-ingest.
 3. **Optional `node_id=` scope** → `WHERE node_id IN (descendants)`. One clause, and the
    hierarchy finally contributes to retrieval instead of only to browsing.
 4. **MMR diversification** (λ=0.7, same as ADR-008 §5.6) so top-n is not five
-   near-duplicates from one file.
-5. **Spreading-activation expansion** — the `include_linked` design shelved in
-   `DESIGN-CROSSLINKS` §6, now buildable because the graph is no longer empty. Cue →
-   spread → completion, k≤2, activation floor, blended by link weight.
+   near-duplicates from one file. **Measured 2026-07-30 and it earns its place,
+   barely:** recall@5 0.967 with, 0.933 without; it moves exactly one query out
+   of 30 and moves it up (q27, rank 6 → 4). MRR is unchanged either way. Keep,
+   but nobody should expect much from it on a corpus like this.
+5. ~~**Spreading-activation expansion**~~ — **built, measured, removed
+   (2026-07-30).** Folding activation into the ranking as a third RRF leg cost
+   10 points of recall@5 and 22 of MRR@10 on the benchmark set: the graph
+   carries no confirmed links yet, and the node distribution is degenerate
+   enough that the vote is a near-constant prior. Full numbers in the CHANGELOG.
+   The code is gone rather than switched off — an unused branch on the hot
+   retrieval path is a maintenance cost the measurement does not justify — and
+   `related` / `knowledge_related` keep activation available where a user asks
+   for it directly. This is the entry that §7's benchmark existed to settle, and
+   it settled it against the design.
 6. Cross-encoder rerank stays where it is: opt-in, last stage.
 
 ### 5.3 Complementary Learning Systems — the missing third
@@ -439,6 +449,12 @@ tests caught it; keep every threshold in §8 on the same "report before act" dis
   `cross_ref`. That single assertion would have caught the whole defect.
 - **Retrieval:** a fixed ~30-query set over a fixed corpus, IT and EN, with known-good
   answers. Recall@5 and MRR recorded per phase. No phase may regress the previous.
+  **Built 2026-07-30:** `bench/queries.json` + `bench/run.py`, recorded in
+  `bench/results/`. P5 baseline: recall@5 0.967 / MRR@10 0.823 overall, and the
+  reading that matters is per kind — identifier 1.000/0.867, concept 0.933/0.780.
+  Read `bench/run.py`'s header before comparing two numbers: the corpus is this
+  repo, recall@5 is close to saturated on it, and the identifier half is
+  mechanically derived from disk so that only the concept half is a judgement.
 - **Standalone matrix (I2) — the primary gate.** Every phase runs the retrieval
   benchmark in all three configurations, and the *first column is the one that must be
   good*:
@@ -459,6 +475,17 @@ tests caught it; keep every threshold in §8 on the same "report before act" dis
   Line-ending rules already covered; fix the current CRLF violation first.
 - **Engine (I4):** `status()["engine"]` reports a Turso tier; the sqlite3 path is
   exercised only in the degradation test.
+  **2026-07-30 — the degradation was fiction.** `sqlite3.connect` appeared
+  nowhere in `db.py`. When pyturso could not open a file the branch set
+  `_conn = None`, `_init_schema` then failed on `NoneType`, and the vault was
+  reported CORRUPT. This is not theoretical: the live vault reported corrupt for
+  exactly this reason, because the MCP server holds pyturso's exclusive lock and
+  a second process could not take it. sqlite3 opens and reads that same file
+  fine. The tier is now real, `_open_local_turso` reports *why* it failed, and
+  `open_failure_message()` keeps "locked" from being answered with
+  `--wipe-knowledge`. Note for whoever measures next: on the sqlite3 tier the
+  vector leg is an O(N) Python cosine, so a benchmark run there measures ranking
+  quality, not engine speed.
 - **GUI (I7):** manual pass at the end of every phase — new knob visible, `reindex`
   reachable, link panel non-empty, IT/EN strings present.
 
@@ -484,8 +511,15 @@ tests caught it; keep every threshold in §8 on the same "report before act" dis
    first, act later, tunable constants like `RANK_WEIGHTS`.
 3. **Re-index cost at scale.** A model change on a 50k-chunk vault is a long job. Needs
    the background-job pattern `ingest.start_job` already uses, plus resumability.
-4. **Chunk-level vs node-level tags.** Both tables are specified; whether chunk tags earn
-   their storage should be measured at P3, not assumed.
+4. ~~**Chunk-level vs node-level tags.**~~ **ANSWERED 2026-07-30: they do not,
+   and `chunk_tags` is parked.** Measured on a real vault: 9360 rows for 2117
+   chunks, ~4.4 per chunk, and no reader in any of the three repos — linking
+   reads `node_tags`, IDF (`tags.uses`) counts `node_tags`, and Gray Matter's
+   tag join goes through `node_tag_names`, which is `node_tags` again. Write
+   cost and disk for a join nobody was making. `add_chunk` no longer writes it;
+   the table, its legacy rows, the cleanup sites and the `health()` audit all
+   stay (I5), and a future reader repopulates by re-ingesting, since the data is
+   derived from chunker tags rather than owned here.
 
 ---
 
@@ -495,5 +529,11 @@ tests caught it; keep every threshold in §8 on the same "report before act" dis
   standalone is a **requirement** (I2), not scope creep. The shape can be improved later
   with the one-asset-deployed-by-all pattern already proven this release for
   `neuron_sessionstart_hook.py` — Neuron loses nothing standalone. Separate effort.
-- `neuron/src/neuron/engine.py` — 1,133 lines imported by nothing in any repo, tests
-  included. Unrelated dead code; delete whenever convenient.
+- ~~`neuron/src/neuron/engine.py` — 1,133 lines imported by nothing in any repo, tests
+  included. Unrelated dead code; delete whenever convenient.~~
+  **Correction 2026-07-30: this was wrong, and acting on it would have broken
+  something.** `scripts/run_interactive.py` imports it. Nothing in the *package*
+  or the tests does, which is presumably how the claim got written — but "delete
+  whenever convenient" against a file with a live importer is exactly the note
+  someone acts on without re-checking. If it should go, the script goes with it,
+  and that is a decision rather than a cleanup.
