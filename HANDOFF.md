@@ -11,8 +11,8 @@ Sostituisce, per questa sessione, `feat_graph_and_chunk_ceiling__summary.md`
 
 | Suite | Esito |
 |---|---|
-| `pytest neurag/tests` | **347 passed**, 1 skipped |
-| `pytest gray_matter/tests` | **433 passed**, 1 skipped |
+| `pytest neurag/tests` | **355 passed**, 1 skipped |
+| `pytest gray_matter/tests` | **439 passed**, 1 skipped |
 | `pytest neuron/tests` | **319 passed** |
 
 I tre vanno lanciati in **processi separati** (vedi `pytest.ini`): `neuron/tests/_mockdeps.py`
@@ -326,7 +326,7 @@ Ordinati per come li affronterei.
    normale e scrivibile: quello non è un vault in prestito, è l'unico vault.
    E non si ritenta più un lock: apertura da **2.86s a 1.01s** sul vault vivo,
    contro 1.13s a vault libero.
-5c. **Il reranker: lasciato spento, con il criterio per riaccenderlo.** È l'unico
+5c. ~~**Il reranker: lasciato spento**~~ — **CHIUSO (2026-07-31): misurato e rimosso.** È l'unico
    pezzo opzionale mai misurato — spento di default, tre knob, e un modello da
    scaricare. Non serve scaricarlo per decidere: **un reranker riordina, non
    trova**, quindi il suo tetto è la recall del pool che riceve.

@@ -57,16 +57,18 @@ def _tools() -> list[Tool]:
     return [
         Tool(
             name="knowledge_ingest",
-            description="Graph-ize a folder server-side in ONE call: nodes from the "
-                        "folder structure, chunks, embeddings, links. Runs in background — "
-                        "returns a job id immediately; poll knowledge_ingest_status. "
-                        "Prefer this over knowledge_index for whole folders (no chunk "
-                        "text travels through the LLM context).",
+            description="Graph-ize a folder OR a single document server-side in ONE "
+                        "call: nodes from the folder structure, chunks, embeddings, "
+                        "links. Runs in background — returns a job id immediately; "
+                        "poll knowledge_ingest_status. Re-ingesting the same file "
+                        "REPLACES its chunks, so updating a document is just calling "
+                        "this again. Prefer this over knowledge_index: no chunk text "
+                        "travels through the model's context.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string",
-                             "description": "Absolute path of the folder to ingest"},
+                             "description": "Absolute path of a FOLDER (whole tree) or a SINGLE FILE to ingest"},
                     "godnode": {"type": "string",
                                 "description": "Root node to use/create (default: folder name)"},
                 },
@@ -415,8 +417,8 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "knowledge_ingest":
         from neurag.ingest import start_job
         path = Path(arguments["path"])
-        if not path.is_dir():
-            return [TextContent(type="text", text=f"Not a folder: {path}")]
+        if not path.exists():
+            return [TextContent(type="text", text=f"Path not found: {path}")]
         job = start_job(path, arguments.get("godnode"))
         return [TextContent(type="text", text=(
             f"Ingest started: job {job['id']} on {path}. "

@@ -628,7 +628,6 @@ class KnowledgeGraph:
         # not on `import neurag.db` — keeps MCP server startup fast. (audit 2026-07-22)
         from neurag.chunker import chunk_file, scan_directory
         from neurag.embedder import get_embedder
-        from neurag.reranker import get_reranker
         self._chunk_file = chunk_file
         self._scan_directory = scan_directory
         self._db_path = db_path or _DEFAULT_DB
@@ -648,7 +647,6 @@ class KnowledgeGraph:
         if self._corrupt:
             self._conn = _CorruptConnection(self._corrupt_err)
         self._embedder = get_embedder()  # auto: fastembed if present, else null (lexical)
-        self._reranker = get_reranker()  # OFF by default → NullReranker (zero cost)
         # Chunk ceiling comes from the LIVE model's tokenizer, not a constant:
         # every model we ship truncates at 128 tokens, and a chunk past that is
         # silently unsearchable. `chunk_max_chars` overrides for a bigger model.
@@ -2150,15 +2148,15 @@ class KnowledgeGraph:
         warm just by looking at it.
 
         """
-        rr = getattr(self, "_reranker", None)
-        rerank_on = bool(rr is not None and getattr(rr, "available", False))
-        from neurag import settings as _st
-        pool = max(top_n * 4, int(_st.get("rerank_pool") or 50)) if rerank_on \
-            else max(top_n * 4, 20)
-
-        results = self._retrieve(query, pool, node_id=node_id, deep=deep)
-        if rerank_on and results:
-            results = rr.rerank(query, results, max(top_n * 2, top_n))
+        # A cross-encoder rerank stage lived here, opt-in and off by default.
+        # Measured on bench/ 2026-07-31 and removed: recall@5 unchanged (0.967),
+        # the CONCEPT half of MRR got WORSE (0.780 -> 0.741), and the median
+        # query went from 397ms to 6815ms — 17x, +6.4s each. Its six wins were
+        # all identifier queries moving rank 2 to rank 1, inside a top-5 the
+        # model reads whole. Paying six seconds to reorder what was already
+        # visible, while making paraphrase worse, is the opposite of the trade
+        # it promised. Full numbers in the CHANGELOG.
+        results = self._retrieve(query, max(top_n * 4, 20), node_id=node_id, deep=deep)
         if diversify and len(results) > top_n:
             results = self._mmr(query, results, top_n)
         final = [_without_vector(r) for r in results[:top_n]]
@@ -2377,7 +2375,6 @@ class KnowledgeGraph:
             return {
                 "engine": getattr(self, "_engine_name", "SQLite"),
                 "embedder": getattr(getattr(self, "_embedder", None), "name", "?"),
-                "reranker": getattr(getattr(self, "_reranker", None), "name", "null"),
                 "db_path": str(self._db_path),
                 "corrupt": True,
                 "error": self._corrupt_err,
@@ -2400,7 +2397,6 @@ class KnowledgeGraph:
             "engine": engine,
             "turso_errors": getattr(self, "_turso_errors", []),
             "embedder": self._embedder.name,
-            "reranker": getattr(getattr(self, "_reranker", None), "name", "null"),
             "db_path": str(self._db_path),
             "nodes": node_count,
             "chunks": chunk_count,

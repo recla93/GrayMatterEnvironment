@@ -1,6 +1,55 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **Il reranker cross-encoder è stato misurato e RIMOSSO.** Era opt-in e spento
+  di default dalla 1.1.1, e non era mai stato misurato. Ora sì, sul set del
+  benchmark:
+
+  | | recall@5 | mrr@10 | mrr@10 *concept* | latenza mediana |
+  |---|---:|---:|---:|---:|
+  | senza | 0.967 | 0.823 | **0.780** | **397 ms** |
+  | con | 0.967 | 0.871 | **0.741** | **6815 ms** |
+
+  Recall **identica**. Le 6 query migliorate sono tutte `identifier` che passano
+  da rank 2 a rank 1 — dentro un top-5 che il modello legge comunque per intero,
+  quindi un guadagno che nessuno può usare. Le 2 peggiorate sono `concept`
+  (q16 1→3, q18 1→5): il MRR concettuale **scende**, ed è la classe che un vault
+  personale ha di più. Il costo è **17x**, +6.4 secondi per query.
+  Pagare sei secondi per riordinare ciò che era già visibile, peggiorando la
+  parafrasi, è l'opposto dello scambio che prometteva. Via `reranker.py`, i tre
+  knob (`rerank`, `rerank_pool`, `rerank_model`), `rerank_enabled()`, lo stadio
+  in `search()`, lo score `cross-encoder`, l'extra `[rerank]` e i riferimenti
+  nel catalogo di GM. Il pannello Impostazioni della GUI perde le tre voci da
+  solo: legge `settings.HELP`.
+  Nota per chi volesse riprovarci: l'unico cross-encoder multilingua è da
+  1.11 GB (i leggeri sono solo inglese, inutilizzabili su un vault IT+EN), e il
+  criterio per decidere **senza scaricarlo** è `recall@50 − recall@5`: un
+  reranker riordina e non trova, quindi quel divario è il suo tetto. Qui è
+  1 query su 30.
+- **Si può ingerire un singolo documento, non solo una cartella.** `auto_ingest`
+  accetta ora anche un file, e il dispatch sta lì — nell'imbuto da cui passano
+  CLI, job MCP e control center — quindi la funzione arriva a tutte e tre le
+  superfici senza toccarne nessuna. Prima bisognava inventare una cartella per
+  ogni PDF ricevuto.
+  Il godnode di default è la **cartella contenitore**, non il file: chi mette
+  tre documenti nella stessa cartella si aspetta di ritrovarli insieme, mentre
+  il nome del file darebbe un godnode per documento. Ri-ingerire lo stesso file
+  non duplica niente (`index_into_node` sostituisce i chunk di quella sorgente),
+  quindi **aggiornare un documento è semplicemente rilanciare l'ingest**. Un
+  tipo non indicizzabile ora elenca i tipi accettati, perché quel messaggio
+  finisce in faccia all'utente nella GUI.
+- **Il server MCP non partiva affatto** (regressione rientrata due volte).
+  `InitializationOptions` senza `capabilities` — campo obbligatorio dopo il bump
+  dell'SDK — faceva morire ogni avvio stdio con un `ValidationError` prima di
+  servire un solo tool. Siccome `SERVERS["neurag"]` è `-m neurag.server`, cioè
+  ciò che viene registrato in Claude Desktop, Cursor e gli altri, **NeuRAG
+  standalone via MCP non partiva per nessun client**. Gray Matter aveva già
+  incontrato e risolto lo stesso errore; il fix non era mai passato di qua, poi
+  è stato applicato e riperso in un commit — senza che niente se ne accorgesse,
+  perché il percorso daemon non costruisce mai quelle opzioni.
+  Ora c'è una guardia: `test_cross_project.py` verifica che **tutti e tre** i
+  server dichiarino `capabilities` da `app.get_capabilities()`, a ogni punto di
+  costruzione.
 - **Il benchmark di recupero esiste come artefatto** (`bench/`, DESIGN-EVOLUTION
   §7). Prima i numeri delle fasi (recall@5 67% → 94%) venivano da un set di
   query che viveva dentro una sessione: riproducibile da nessuno, confrontabile

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "corpus": "the neurag/ tree itself -- versioned by definition, so a result is reproducible from a commit hash alone. bench/ is dropped back out after ingest (run.py:decontaminate).",
   "ground_truth": "expect = path suffixes relative to the corpus root. A query is answered if ANY of them appears in the ranking.",
   "rules": {
@@ -8,73 +8,366 @@
   },
   "history": {
     "v1": "First run scored recall@5 0.800 overall. Six misses; four were authoring errors, not retrieval failures -- v1 listed only implementing modules and ignored the docs that answer the same question, and under-listed identifier hits. Corrected AFTER seeing results, which is stated here rather than hidden: the identifier half is now mechanical and test-enforced, and the concept half is frozen. Two misses survived the correction and are real: q22 and q27.",
-    "v2": "Rules above applied uniformly to all 30 queries."
+    "v2": "Rules above applied uniformly to all 30 queries.",
+    "v3": "q26 asked about the cross-encoder rerank stage, which was measured and REMOVED (recall unchanged, concept MRR worse, 17x slower). The query was replaced rather than repointed at the CHANGELOG entry describing its removal: measuring whether the vault documents an absence is not measuring retrieval. Its replacement asks about two processes opening one vault. Totals before and after are therefore not strictly comparable on that one query."
   },
   "kinds": {
     "identifier": "exact strings -- names, flags, env vars, constants. The class vector-only retrieval failed, at 67% recall.",
     "concept": "paraphrase, IT or EN, with no literal overlap with the answer. The class lexical retrieval is blind to."
   },
   "queries": [
-    {"id": 1,  "kind": "identifier", "lang": "en", "q": "vector_distance_cos",
-     "expect": ["DESIGN-EVOLUTION.md", "DOCTOOLUPDATE.md", "README.md", "db.py", "tests/test_retrieval_hybrid.py", "tests/test_vector_sql.py"]},
-    {"id": 2,  "kind": "identifier", "lang": "en", "q": "GM_NO_CLIENT_REGISTER",
-     "expect": ["DESIGN-EVOLUTION.md", "clients.py"]},
-    {"id": 3,  "kind": "identifier", "lang": "en", "q": "pyvenv.cfg",
-     "expect": ["DESIGN-EVOLUTION.md", "chunker.py", "install.ps1", "install.sh", "tests/test_retrieval_hybrid.py"]},
-    {"id": 4,  "kind": "identifier", "lang": "en", "q": "MAX_TAG_NODE_RATIO",
-     "expect": ["CHANGELOG.md", "DESIGN-EVOLUTION.md", "HANDOFF.md", "db.py"]},
-    {"id": 5,  "kind": "identifier", "lang": "en", "q": "f32blob",
-     "expect": ["db.py"]},
-    {"id": 6,  "kind": "identifier", "lang": "en", "q": "MMR_LAMBDA",
-     "expect": ["db.py"]},
-    {"id": 7,  "kind": "identifier", "lang": "en", "q": "NEURAG_REQUIRE_TURSO",
-     "expect": ["CHANGELOG.md", "DOCTOOLUPDATE.md", "README.md", "db.py"]},
-    {"id": 8,  "kind": "identifier", "lang": "en", "q": "_split_sql",
-     "expect": ["CHANGELOG.md", "HANDOFF.md", "db.py", "tests/test_tag_substrate.py"]},
-    {"id": 9,  "kind": "identifier", "lang": "en", "q": "PARK_RULES",
-     "expect": ["CHANGELOG.md", "db.py", "tests/test_layers.py"]},
-    {"id": 10, "kind": "identifier", "lang": "en", "q": "prefixes_for",
-     "expect": ["embedder.py", "tests/test_retrieval_hybrid.py"]},
-    {"id": 11, "kind": "identifier", "lang": "en", "q": "CREATE_NO_WINDOW",
-     "expect": ["CHANGELOG.md", "bridge.py", "cli.py", "clients.py", "db.py", "shortcut.py", "tests/test_no_console_window.py"]},
-    {"id": 12, "kind": "identifier", "lang": "en", "q": "MIN_CUE_DOC_FLOOR",
-     "expect": ["DESIGN-EVOLUTION.md", "db.py"]},
-    {"id": 13, "kind": "identifier", "lang": "en", "q": "meta.decayed_at",
-     "expect": ["CHANGELOG.md", "HANDOFF.md", "db.py", "tests/test_layers.py"]},
-    {"id": 14, "kind": "identifier", "lang": "en", "q": "lexical_only_requested",
-     "expect": ["CHANGELOG.md", "DESIGN-EVOLUTION.md", "db.py", "embedder.py", "install.ps1", "install.sh", "tests/test_standalone_embedding.py"]},
-    {"id": 15, "kind": "identifier", "lang": "en", "q": "embed_mismatch",
-     "expect": ["DESIGN-EVOLUTION.md", "db.py", "tests/test_reindex_guard.py"]},
-
-    {"id": 16, "kind": "concept", "lang": "en", "q": "how does the search combine meaning-based and word-based ranking",
-     "expect": ["db.py", "DESIGN-EVOLUTION.md", "tests/test_retrieval_hybrid.py"]},
-    {"id": 17, "kind": "concept", "lang": "it", "q": "come si sceglie il modello di embedding durante l'installazione",
-     "expect": ["install.ps1", "install.sh", "DESIGN-EVOLUTION.md", "settings.py"]},
-    {"id": 18, "kind": "concept", "lang": "en", "q": "what happens if I change the embedding model on a vault that already has content",
-     "expect": ["db.py", "DESIGN-EVOLUTION.md", "tests/test_reindex_guard.py"]},
-    {"id": 19, "kind": "concept", "lang": "it", "q": "cosa succede se il database della conoscenza e' rovinato",
-     "expect": ["db.py", "CHANGELOG.md", "cli.py", "HANDOFF.md"]},
-    {"id": 20, "kind": "concept", "lang": "en", "q": "how does a connection between two nodes get stronger when a user says it was useful",
-     "expect": ["db.py", "tests/test_hebbian.py", "CHANGELOG.md", "DESIGN-EVOLUTION.md"]},
-    {"id": 21, "kind": "concept", "lang": "it", "q": "come si mette da parte un nodo che nessuno consulta piu'",
-     "expect": ["db.py", "cli.py", "CHANGELOG.md", "HANDOFF.md", "DESIGN-EVOLUTION.md"]},
-    {"id": 22, "kind": "concept", "lang": "en", "q": "which editors and assistants can this be plugged into",
-     "expect": ["clients.py", "clients/deploy_hooks.py"]},
-    {"id": 23, "kind": "concept", "lang": "it", "q": "perche' un'etichetta e' diventata una riga invece di testo dentro una colonna",
-     "expect": ["DESIGN-EVOLUTION.md", "CHANGELOG.md", "db.py", "HANDOFF.md", "tests/test_tag_substrate.py"]},
-    {"id": 24, "kind": "concept", "lang": "en", "q": "how is a piece of text kept short enough for the model to actually read all of it",
-     "expect": ["chunker.py", "embedder.py", "DESIGN-EVOLUTION.md", "tests/test_chunker_budget.py"]},
-    {"id": 25, "kind": "concept", "lang": "it", "q": "come vengono ricostruiti i collegamenti fra i nodi dopo un aggiornamento",
-     "expect": ["db.py", "ingest.py", "docs/TOOLS.md"]},
-    {"id": 26, "kind": "concept", "lang": "en", "q": "the optional second pass that reorders results more accurately but costs latency",
-     "expect": ["reranker.py", "db.py", "settings.py", "CHANGELOG.md", "README.md"]},
-    {"id": 27, "kind": "concept", "lang": "it", "q": "quali cartelle non vengono lette quando si importa un progetto",
-     "expect": ["ingest.py", "DESIGN-EVOLUTION.md", "DOCTOOLUPDATE.md"]},
-    {"id": 28, "kind": "concept", "lang": "en", "q": "how does a folder structure on disk turn into the shape of the graph",
-     "expect": ["ingest.py", "README.md", "DOCTOOLUPDATE.md", "CHANGELOG.md", "importer.py"]},
-    {"id": 29, "kind": "concept", "lang": "it", "q": "come si riporta alla luce qualcosa che era stato messo a dormire",
-     "expect": ["db.py", "cli.py", "CHANGELOG.md", "HANDOFF.md", "DESIGN-EVOLUTION.md"]},
-    {"id": 30, "kind": "concept", "lang": "en", "q": "why does a route between ideas get weaker as time passes",
-     "expect": ["db.py", "DESIGN-EVOLUTION.md", "CHANGELOG.md", "cli.py"]}
+    {
+      "id": 1,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "vector_distance_cos",
+      "expect": [
+        "DESIGN-EVOLUTION.md",
+        "DOCTOOLUPDATE.md",
+        "README.md",
+        "db.py",
+        "tests/test_retrieval_hybrid.py",
+        "tests/test_vector_sql.py"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "GM_NO_CLIENT_REGISTER",
+      "expect": [
+        "DESIGN-EVOLUTION.md",
+        "clients.py"
+      ]
+    },
+    {
+      "id": 3,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "pyvenv.cfg",
+      "expect": [
+        "DESIGN-EVOLUTION.md",
+        "chunker.py",
+        "install.ps1",
+        "install.sh",
+        "tests/test_retrieval_hybrid.py"
+      ]
+    },
+    {
+      "id": 4,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "MAX_TAG_NODE_RATIO",
+      "expect": [
+        "CHANGELOG.md",
+        "DESIGN-EVOLUTION.md",
+        "HANDOFF.md",
+        "db.py"
+      ]
+    },
+    {
+      "id": 5,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "f32blob",
+      "expect": [
+        "db.py"
+      ]
+    },
+    {
+      "id": 6,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "MMR_LAMBDA",
+      "expect": [
+        "db.py"
+      ]
+    },
+    {
+      "id": 7,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "NEURAG_REQUIRE_TURSO",
+      "expect": [
+        "CHANGELOG.md",
+        "DOCTOOLUPDATE.md",
+        "README.md",
+        "db.py"
+      ]
+    },
+    {
+      "id": 8,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "_split_sql",
+      "expect": [
+        "CHANGELOG.md",
+        "HANDOFF.md",
+        "db.py",
+        "tests/test_tag_substrate.py"
+      ]
+    },
+    {
+      "id": 9,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "PARK_RULES",
+      "expect": [
+        "CHANGELOG.md",
+        "db.py",
+        "tests/test_layers.py"
+      ]
+    },
+    {
+      "id": 10,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "prefixes_for",
+      "expect": [
+        "embedder.py",
+        "tests/test_retrieval_hybrid.py"
+      ]
+    },
+    {
+      "id": 11,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "CREATE_NO_WINDOW",
+      "expect": [
+        "CHANGELOG.md",
+        "bridge.py",
+        "cli.py",
+        "clients.py",
+        "db.py",
+        "shortcut.py",
+        "tests/test_no_console_window.py"
+      ]
+    },
+    {
+      "id": 12,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "MIN_CUE_DOC_FLOOR",
+      "expect": [
+        "DESIGN-EVOLUTION.md",
+        "db.py"
+      ]
+    },
+    {
+      "id": 13,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "meta.decayed_at",
+      "expect": [
+        "CHANGELOG.md",
+        "HANDOFF.md",
+        "db.py",
+        "tests/test_layers.py"
+      ]
+    },
+    {
+      "id": 14,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "lexical_only_requested",
+      "expect": [
+        "CHANGELOG.md",
+        "DESIGN-EVOLUTION.md",
+        "db.py",
+        "embedder.py",
+        "install.ps1",
+        "install.sh",
+        "tests/test_standalone_embedding.py"
+      ]
+    },
+    {
+      "id": 15,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "embed_mismatch",
+      "expect": [
+        "DESIGN-EVOLUTION.md",
+        "db.py",
+        "tests/test_reindex_guard.py"
+      ]
+    },
+    {
+      "id": 16,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how does the search combine meaning-based and word-based ranking",
+      "expect": [
+        "db.py",
+        "DESIGN-EVOLUTION.md",
+        "tests/test_retrieval_hybrid.py"
+      ]
+    },
+    {
+      "id": 17,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come si sceglie il modello di embedding durante l'installazione",
+      "expect": [
+        "install.ps1",
+        "install.sh",
+        "DESIGN-EVOLUTION.md",
+        "settings.py"
+      ]
+    },
+    {
+      "id": 18,
+      "kind": "concept",
+      "lang": "en",
+      "q": "what happens if I change the embedding model on a vault that already has content",
+      "expect": [
+        "db.py",
+        "DESIGN-EVOLUTION.md",
+        "tests/test_reindex_guard.py"
+      ]
+    },
+    {
+      "id": 19,
+      "kind": "concept",
+      "lang": "it",
+      "q": "cosa succede se il database della conoscenza e' rovinato",
+      "expect": [
+        "db.py",
+        "CHANGELOG.md",
+        "cli.py",
+        "HANDOFF.md"
+      ]
+    },
+    {
+      "id": 20,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how does a connection between two nodes get stronger when a user says it was useful",
+      "expect": [
+        "db.py",
+        "tests/test_hebbian.py",
+        "CHANGELOG.md",
+        "DESIGN-EVOLUTION.md"
+      ]
+    },
+    {
+      "id": 21,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come si mette da parte un nodo che nessuno consulta piu'",
+      "expect": [
+        "db.py",
+        "cli.py",
+        "CHANGELOG.md",
+        "HANDOFF.md",
+        "DESIGN-EVOLUTION.md"
+      ]
+    },
+    {
+      "id": 22,
+      "kind": "concept",
+      "lang": "en",
+      "q": "which editors and assistants can this be plugged into",
+      "expect": [
+        "clients.py",
+        "clients/deploy_hooks.py"
+      ]
+    },
+    {
+      "id": 23,
+      "kind": "concept",
+      "lang": "it",
+      "q": "perche' un'etichetta e' diventata una riga invece di testo dentro una colonna",
+      "expect": [
+        "DESIGN-EVOLUTION.md",
+        "CHANGELOG.md",
+        "db.py",
+        "HANDOFF.md",
+        "tests/test_tag_substrate.py"
+      ]
+    },
+    {
+      "id": 24,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how is a piece of text kept short enough for the model to actually read all of it",
+      "expect": [
+        "chunker.py",
+        "embedder.py",
+        "DESIGN-EVOLUTION.md",
+        "tests/test_chunker_budget.py"
+      ]
+    },
+    {
+      "id": 25,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come vengono ricostruiti i collegamenti fra i nodi dopo un aggiornamento",
+      "expect": [
+        "db.py",
+        "ingest.py",
+        "docs/TOOLS.md"
+      ]
+    },
+    {
+      "id": 26,
+      "kind": "concept",
+      "lang": "en",
+      "q": "what happens when two processes open the same vault at the same time",
+      "expect": [
+        "db.py",
+        "tests/test_neurag_lock.py",
+        "CHANGELOG.md",
+        "HANDOFF.md"
+      ]
+    },
+    {
+      "id": 27,
+      "kind": "concept",
+      "lang": "it",
+      "q": "quali cartelle non vengono lette quando si importa un progetto",
+      "expect": [
+        "ingest.py",
+        "DESIGN-EVOLUTION.md",
+        "DOCTOOLUPDATE.md"
+      ]
+    },
+    {
+      "id": 28,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how does a folder structure on disk turn into the shape of the graph",
+      "expect": [
+        "ingest.py",
+        "README.md",
+        "DOCTOOLUPDATE.md",
+        "CHANGELOG.md",
+        "importer.py"
+      ]
+    },
+    {
+      "id": 29,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come si riporta alla luce qualcosa che era stato messo a dormire",
+      "expect": [
+        "db.py",
+        "cli.py",
+        "CHANGELOG.md",
+        "HANDOFF.md",
+        "DESIGN-EVOLUTION.md"
+      ]
+    },
+    {
+      "id": 30,
+      "kind": "concept",
+      "lang": "en",
+      "q": "why does a route between ideas get weaker as time passes",
+      "expect": [
+        "db.py",
+        "DESIGN-EVOLUTION.md",
+        "CHANGELOG.md",
+        "cli.py"
+      ]
+    }
   ]
 }

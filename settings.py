@@ -19,9 +19,6 @@ import os
 from pathlib import Path
 
 DEFAULTS = {
-    "rerank": False,        # cross-encoder rerank stage (opt-in; adds latency + model DL)
-    "rerank_pool": 50,      # candidates retrieved before rerank (top_n picked from these)
-    "rerank_model": "",     # override cross-encoder model ("" = reranker default)
     # Embedding model, chosen at install time. "" = follow Neuron / the built-in
     # multilingual default, which is what keeps the two in ONE vector space.
     # embed_dim MUST match embed_model: vectors of different widths are not
@@ -37,12 +34,6 @@ DEFAULTS = {
 # Per-knob help + suggestions surfaced by the control center (GUI reads these so
 # the NeuRAG settings card is self-describing — keep-in-sync with the knobs).
 HELP = {
-    "rerank": "Riordina i risultati con un cross-encoder: più precisione, ma "
-              "scarica un modello e aggiunge latenza. OFF di default.",
-    "rerank_pool": "Quanti candidati recuperare prima del rerank (i top-n si "
-                   "scelgono da questi). Più alto = più recall, più costo.",
-    "rerank_model": "Modello cross-encoder. Vuoto = default. Per un vault "
-                    "italiano conviene il multilingue.",
     "embed_model": "Modello di embedding del vault. Vuoto = segue Neuron "
                    "(stesso spazio vettoriale). Cambiarlo richiede un "
                    "re-index completo: vettori di modelli diversi non sono "
@@ -58,11 +49,6 @@ HELP = {
 # Free-text knobs that still have good known values → GUI shows a picker but
 # keeps custom input allowed.
 SUGGEST = {
-    "rerank_model": [
-        "",  # = reranker default (Xenova/ms-marco-MiniLM-L-6-v2, EN-centrico)
-        "jinaai/jina-reranker-v2-base-multilingual",  # IT/EN, più pesante
-        "BAAI/bge-reranker-base",
-    ],
     # Keep-in-sync with $EmbedModels in install.ps1 / EM_* in install.sh.
     "embed_model": [
         "",  # = segue Neuron (multilingue 384-dim)
@@ -125,13 +111,3 @@ def set(key, value, path=None) -> dict:
     return cfg
 
 
-def rerank_enabled(path=None) -> bool:
-    """Effective reranker state: env NEURAG_RERANK overrides the config file.
-
-    Env wins so a single `NEURAG_RERANK=on` can flip it per-process (CI, tests,
-    a one-off session) without persisting; the GUI toggle writes the config file.
-    """
-    env = os.environ.get("NEURAG_RERANK")
-    if env is not None:
-        return env.strip().lower() in ("1", "true", "yes", "on")
-    return bool(get("rerank", path))

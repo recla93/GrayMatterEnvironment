@@ -90,8 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("mapping", help="Path to the YAML mapping file")
 
     ing = sub.add_parser("ingest",
-                         help="Graph a folder: nodes from its structure, chunks, embeddings, links")
-    ing.add_argument("path", help="Folder to graph")
+                         help="Graph a folder or a single document: nodes, chunks, embeddings, links")
+    ing.add_argument("path", help="Folder to graph, or a single document")
     ing.add_argument("--godnode", default=None,
                      help="Root node to use/create (default: the folder name)")
 
@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="Environment + vault health snapshot (tier, embedder, gateway)")
 
     cfg_p = sub.add_parser("config",
-                           help="Get/set tunable knobs (rerank on/off, rerank pool, ...)")
+                           help="Get/set tunable knobs (embedding model, chunk size, ...)")
     cfg_p.add_argument("action", choices=["get", "set", "list"])
     cfg_p.add_argument("key", nargs="?", default="")
     cfg_p.add_argument("value", nargs="?", default=None)
@@ -127,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("repair",
                          help="Clean reinstall of NeuRAG ONLY (standalone, no GM): choose what to delete, then force-reinstall")
     rep.add_argument("--wipe-knowledge", action="store_true", help="delete knowledge.db")
-    rep.add_argument("--wipe-config", action="store_true", help="delete the NeuRAG config (rerank, ...)")
+    rep.add_argument("--wipe-config", action="store_true", help="delete the NeuRAG config (embedding model, chunk size)")
     rep.add_argument("--no-reinstall", action="store_true",
                      help="clean only, do not reinstall the code")
     rep.add_argument("--reinstall", action="store_true",
@@ -523,7 +523,7 @@ def _cmd_repair(args) -> None:
             "targets": [
                 {"key": "--wipe-knowledge", "label": "Knowledge NeuRAG (knowledge.db)",
                  "path": str(kdb), "exists": kdb.exists()},
-                {"key": "--wipe-config", "label": "Config NeuRAG (rerank, ...)",
+                {"key": "--wipe-config", "label": "Config NeuRAG (embedding, chunk)",
                  "path": str(cfgp), "exists": cfgp.exists()}],
             "reinstall": "neurag (installer -Force)",
             "installer": inst is not None}))
@@ -654,10 +654,6 @@ def _cmd_config(action: str, key: str = "", value=None,
         cfg = settings.load()
         if as_json:
             note = ""
-            import os as _os
-            if _os.environ.get("NEURAG_RERANK") is not None:
-                note = ("Env NEURAG_RERANK ha la precedenza sul file "
-                        f"(rerank effettivo: {'ON' if settings.rerank_enabled() else 'OFF'}).")
             print(json_mod.dumps({"knobs": [_knob_dict(k, cfg, settings)
                                             for k in sorted(settings.DEFAULTS)],
                                   "note": note}))
@@ -665,8 +661,6 @@ def _cmd_config(action: str, key: str = "", value=None,
         print("NeuRAG config (knob = valore):")
         for k in sorted(cfg):
             print(f"  {k:14} {cfg[k]}")
-        if settings.rerank_enabled():
-            print("  (rerank effettivo: ON)")
         return
     if action == "get":
         if not key:
@@ -1116,9 +1110,6 @@ def _dispatch() -> None:
         emb = s["embedder"]
         hint = "" if emb == "fastembed" else "  (lexical TF-IDF; pip install \"neurag[semantic]\" for vectors)"
         print(f"  embedder: {emb}{hint}")
-        rr = s.get("reranker", "null")
-        print(f"  reranker: {'OFF' if rr == 'null' else 'ON (' + rr + ')'}"
-              "  (neurag config set rerank on)")
         print(f"  db:       {s['db_path']}")
         if s.get("corrupt"):
             print(f"  content:  DB CORROTTO — {s['error']}")

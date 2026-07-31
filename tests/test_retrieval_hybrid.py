@@ -119,7 +119,7 @@ def test_rrf_is_rank_based_not_score_based():
 
 # --- every result says what it scored, and on which scale --------------------
 
-_STAGES = {"cosine", "bm25", "rrf", "cross-encoder"}
+_STAGES = {"cosine", "bm25", "rrf"}
 
 
 def _vault():
@@ -178,22 +178,6 @@ def test_the_lexical_only_leg_still_scores_its_results():
     assert all(h["score"] > 0 for h in hits)
     kg.close()
 
-
-def test_the_reranker_replaces_the_score_it_reorders_by():
-    """A cross-encoder that reorders while leaving the first stage's number in
-    place hands back a ranking its own score contradicts."""
-    from neurag.reranker import FastEmbedReranker, NullReranker
-
-    cand = [{"id": 1, "text": "a", "score": 0.9, "score_from": "rrf"},
-            {"id": 2, "text": "b", "score": 0.1, "score_from": "rrf"}]
-    # null routing is the identity: it ranks nothing, so it rewrites nothing
-    assert NullReranker().rerank("q", cand, 2) == cand
-
-    fake = FastEmbedReranker.__new__(FastEmbedReranker)
-    fake._m = type("M", (), {"rerank": staticmethod(lambda q, docs: [-2.0, 3.0])})()
-    out = fake.rerank("q", cand, 2)
-    assert [c["id"] for c in out] == [2, 1]
-    assert out[0]["score"] == 3.0 and out[0]["score_from"] == "cross-encoder"
 
 
 # --- e5 prefixes -------------------------------------------------------------

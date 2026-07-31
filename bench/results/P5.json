@@ -48,8 +48,8 @@
       "hit@5": true,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md"
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
       ]
     },
     {
@@ -73,9 +73,9 @@
       "rank": 2,
       "hit@5": true,
       "top": [
-        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_mega_integration.py",
         "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_mega_integration.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py"
       ]
     },
     {
@@ -113,8 +113,8 @@
       "hit@5": true,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_layers.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_layers.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md"
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_layers.py"
       ]
     },
     {
@@ -213,12 +213,12 @@
       "kind": "concept",
       "lang": "it",
       "q": "come si sceglie il modello di embedding durante l'installazione",
-      "rank": 1,
+      "rank": 3,
       "hit@5": true,
       "top": [
-        "D:/Desktop/Gray Matter Enviroment/neurag/install.sh",
-        "D:/Desktop/Gray Matter Enviroment/neurag/settings.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/README.md"
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/cli.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/install.sh"
       ]
     },
     {
@@ -243,8 +243,8 @@
       "hit@5": true,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/shortcut.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
       ]
     },
     {
@@ -268,9 +268,9 @@
       "rank": 1,
       "hit@5": true,
       "top": [
-        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
         "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/paths.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md"
       ]
     },
     {
@@ -282,8 +282,8 @@
       "hit@5": false,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/clients/cowork-plugin/neuron-guard/README.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/clients/cowork-plugin/neuron-guard/README.md"
       ]
     },
     {
@@ -295,8 +295,8 @@
       "hit@5": true,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/chunker.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md"
       ]
     },
     {
@@ -308,8 +308,8 @@
       "hit@5": true,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/chunker.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/chunker.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/chunker.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py"
       ]
     },
     {
@@ -322,20 +322,20 @@
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/ingest.py",
         "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_chunker_budget.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md"
       ]
     },
     {
       "id": 26,
       "kind": "concept",
       "lang": "en",
-      "q": "the optional second pass that reorders results more accurately but costs latency",
+      "q": "what happens when two processes open the same vault at the same time",
       "rank": 1,
       "hit@5": true,
       "top": [
-        "D:/Desktop/Gray Matter Enviroment/neurag/reranker.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_retrieval_hybrid.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/clients/claude-code-hook/neuron_sessionstart_hook.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
       ]
     },
     {
@@ -347,8 +347,8 @@
       "hit@5": true,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md"
       ]
     },
     {
@@ -356,12 +356,12 @@
       "kind": "concept",
       "lang": "en",
       "q": "how does a folder structure on disk turn into the shape of the graph",
-      "rank": 4,
+      "rank": 2,
       "hit@5": true,
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/cli.py",
-        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/README.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md"
       ]
     },
     {
@@ -372,9 +372,9 @@
       "rank": 1,
       "hit@5": true,
       "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
         "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/DOCTOOLUPDATE.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/install.sh"
+        "D:/Desktop/Gray Matter Enviroment/neurag/DOCTOOLUPDATE.md"
       ]
     },
     {
@@ -387,7 +387,7 @@
       "top": [
         "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
         "D:/Desktop/Gray Matter Enviroment/neurag/clients/cowork-plugin/neuron-guard/skills/neuron-usage/SKILL.md",
-        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_hebbian.py"
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
       ]
     }
   ],
@@ -395,12 +395,12 @@
     "all": {
       "n": 30,
       "recall@5": 0.967,
-      "mrr@10": 0.823
+      "mrr@10": 0.809
     },
     "concept": {
       "n": 15,
       "recall@5": 0.933,
-      "mrr@10": 0.78
+      "mrr@10": 0.752
     },
     "identifier": {
       "n": 15,
@@ -410,13 +410,13 @@
     "en": {
       "n": 23,
       "recall@5": 0.957,
-      "mrr@10": 0.802
+      "mrr@10": 0.813
     },
     "it": {
       "n": 7,
       "recall@5": 1.0,
-      "mrr@10": 0.893
+      "mrr@10": 0.798
     }
   },
-  "set_version": 2
+  "set_version": 3
 }

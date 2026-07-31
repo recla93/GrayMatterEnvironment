@@ -40,11 +40,10 @@ pdf = ["PyMuPDF>=1.24.0"]
 docx = ["python-docx>=1.1.0"]
 yaml = ["PyYAML>=6.0"]                  # bulk import mapping
 # Kept as no-op aliases: fastembed is a hard dependency now (see above), so
-# `neurag[semantic]` and `neurag[rerank]` still resolve for anyone whose scripts
+# `neurag[semantic]` still resolves for anyone whose scripts
 # or docs name them. Rerank remains OFF by default — the toggle is the gate, not
 # the package.
 semantic = ["fastembed>=0.5.0,<1.0"]
-rerank = ["fastembed>=0.5.0,<1.0"]
 # GUI opzionale: il control center è UNO (gray_matter.webgui). NeuRAG gira
 # standalone senza; `neurag gui` lo bootstrappa se manca. Il runtime MCP NON
 # dipende da gray-matter (import guardato) — questo extra serve solo alla GUI.

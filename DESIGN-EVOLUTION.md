@@ -311,7 +311,16 @@ re-ingest.
    `related` / `knowledge_related` keep activation available where a user asks
    for it directly. This is the entry that §7's benchmark existed to settle, and
    it settled it against the design.
-6. Cross-encoder rerank stays where it is: opt-in, last stage.
+6. ~~Cross-encoder rerank stays where it is: opt-in, last stage.~~
+   **Measured 2026-07-31 and REMOVED.** recall@5 unchanged (0.967), the concept
+   half of MRR *worse* (0.780 → 0.741), and the median query 397ms → 6815ms.
+   Its wins were identifier queries moving rank 2 → 1, inside a top-5 the model
+   reads whole. Opt-in and off by default was not enough to justify the module,
+   three knobs and a branch on the hot path. Numbers in the CHANGELOG.
+   The reusable part is the decision rule: **`recall@50 − recall@5` is the
+   ceiling of any reranker**, since it reorders and never retrieves. Measure
+   that before downloading 1.11 GB — it is the only multilingual option, the
+   small ones being English-only and therefore worse than nothing on this vault.
 
 ### 5.3 Complementary Learning Systems — the missing third
 

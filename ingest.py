@@ -53,24 +53,69 @@ def _skippable(rel_parts: tuple) -> bool:
                for p in rel_parts)
 
 
+def _ensure_godnode(kg, name: str, report: dict, say) -> dict:
+    """Riusa o crea il godnode. Estratto perché ora ci sono due ingressi."""
+    gn = kg.get_node_by_name(name)
+    if gn is None:
+        kg.add_node(name=name, node_type="godnode")
+        gn = kg.get_node_by_name(name)
+        report["nodes"] += 1
+    report["godnode"] = name
+    say(f"[godnode] {name}")
+    return gn
+
+
+def ingest_file(kg, path, godnode: "str | None" = None, say=None) -> dict:
+    """Un solo documento, senza doverlo prima mettere in una cartella.
+
+    Stessa pipeline della versione a cartella — chunk, embedding, link — perché
+    passa dagli stessi `index_into_node` e `rebuild_links`. Chiamarla due volte
+    sullo stesso file non duplica niente: `index_into_node` sostituisce i chunk
+    di quella sorgente, quindi ri-ingerire un documento aggiornato è l'operazione
+    normale e non un caso da gestire.
+
+    Il godnode di default è la cartella che contiene il file, non il file: chi
+    salva tre PDF nella stessa cartella si aspetta di ritrovarli insieme.
+    """
+    say = say or (lambda s: None)
+    path = Path(path).expanduser().resolve()
+    report = {"godnode": "", "nodes": 0, "files": 0, "chunks": 0,
+              "links": {}, "skipped": []}
+    if path.suffix.lower() not in _SUPPORTED_EXTENSIONS:
+        # Messaggio azionabile: questo arriva in faccia all'utente nella GUI.
+        raise ValueError(
+            f"'{path.suffix or path.name}' non è un tipo indicizzabile. "
+            f"Supportati: {', '.join(sorted(_SUPPORTED_EXTENSIONS))}")
+    god = (godnode or path.parent.name or "documenti").strip()
+    gn = _ensure_godnode(kg, god, report, say)
+    n = kg.index_into_node(path, gn["id"])
+    report["files"], report["chunks"] = 1, n
+    say(f"  {path.name} -> {n} chunk")
+    say("[link] ricostruzione dei collegamenti…")
+    report["links"] = kg.rebuild_links()
+    say(f"[ok] {path.name}: {n} chunk in «{god}»")
+    return report
+
+
 def auto_ingest(kg, root, godnode: "str | None" = None, say=None) -> dict:
-    """Grafizza `root` dentro `kg`. Ritorna il report; `say(riga)` per il progresso."""
+    """Grafizza `root` dentro `kg`. Ritorna il report; `say(riga)` per il progresso.
+
+    `root` può essere una cartella (l'albero intero) o un singolo file. Il
+    dispatch sta QUI e non nei chiamanti perché questa funzione è l'imbuto:
+    la CLI, il job MCP e il control center ci passano tutti, quindi il file
+    singolo arriva a tutte e tre le superfici senza toccarne nessuna.
+    """
     say = say or (lambda s: None)
     root = Path(root).expanduser().resolve()
+    if root.is_file():
+        return ingest_file(kg, root, godnode, say)
     if not root.is_dir():
-        raise FileNotFoundError(f"non è una cartella: {root}")
+        raise FileNotFoundError(f"non esiste: {root}")
 
     report = {"godnode": "", "nodes": 0, "files": 0, "chunks": 0,
               "links": {}, "skipped": []}
 
-    god = (godnode or root.name).strip()
-    gn = kg.get_node_by_name(god)
-    if gn is None:
-        kg.add_node(name=god, node_type="godnode")
-        gn = kg.get_node_by_name(god)
-        report["nodes"] += 1
-    report["godnode"] = god
-    say(f"[godnode] {god}")
+    gn = _ensure_godnode(kg, (godnode or root.name).strip(), report, say)
 
     # Cartelle → nodi, genitori prima dei figli (rglob ordinato = prefisso prima).
     node_for = {root: gn["id"]}
