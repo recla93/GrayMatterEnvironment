@@ -1,17 +1,23 @@
 """Neuron HTTP bridge launcher — expose the stdio server over HTTP for ChatGPT & co.
 
-The hard parts of "run the bridge" are (1) launching the *right* Neuron, and
-(2) getting `mcp-proxy` without a manual install. This script does both:
+The transport is the MCP SDK's own Streamable HTTP, served **in this process**
+(:mod:`neuron.http_transport`). There is nothing else to install: no external
+proxy, no separate runner.
 
-  * it launches Neuron with **this interpreter** (``sys.executable -m neuron``),
-    so if you run this script with the venv where Neuron is installed, the child
-    resolves correctly — no more bare ``python3 -m neuron`` hitting the wrong
-    Python (the usual cause of mcp-proxy's "McpError: Connection closed": the
-    child died with "No module named neuron");
-  * it finds a way to run `mcp-proxy` — preferring ``uvx`` / ``uv`` / ``pipx``,
-    which fetch it on demand, so nothing has to be pip-installed by hand;
-  * it **preflights** the Neuron command (starts it briefly) and, if it dies,
-    shows you the real error instead of a cryptic proxy stack trace.
+That used to be different, and the difference is why this paragraph exists. The
+bridge shelled out to `mcp-proxy`, a separate project on a separate release
+cycle, fetched on demand. When the MCP SDK dropped ``request_ctx`` in 1.28,
+`mcp-proxy` kept importing it and every bridge — Neuron's and NeuRAG's — died
+at startup with an ImportError nobody saw. Protocol and transport now come from
+one package, so the next breaking bump fails in our own tests instead of at a
+user's ``start``.
+
+What is left for this script to get right:
+
+  * it serves the **right** server: Gray Matter when the full suite is
+    installed, so a remote client sees every tool and not Neuron alone;
+  * it **preflights** the server (starts it briefly) and, if it dies, shows you
+    the real error instead of a cryptic stack trace.
 
 Usage::
 
@@ -127,23 +133,6 @@ def resolve_neuron_cmd(override: list[str] | None) -> list[str]:
     return [sys.executable, "-m", "neuron"]
 
 
-def resolve_proxy_runner() -> list[str] | None:
-    """Find a way to run `mcp-proxy`, preferring on-demand runners so nothing
-    needs a manual install."""
-    if shutil.which("mcp-proxy"):
-        return ["mcp-proxy"]
-    if shutil.which("uvx"):
-        return ["uvx", "mcp-proxy"]
-    if shutil.which("uv"):
-        return ["uv", "tool", "run", "mcp-proxy"]
-    if shutil.which("pipx"):
-        return ["pipx", "run", "mcp-proxy"]
-    return None
-
-
-# Need shutil for resolve_proxy_runner
-import shutil
-
 
 def preflight(server_cmd: list[str], seconds: float = 3.0) -> bool:
     """Start the MCP server briefly; if it exits immediately, show why.
@@ -192,7 +181,7 @@ def _launch_tunnel(host: str, port: int) -> subprocess.Popen | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Launch the Neuron→HTTP bridge (mcp-proxy in server mode).")
+        description="Launch the Neuron→HTTP bridge (MCP SDK Streamable HTTP).")
     parser.add_argument("--port", type=int,
                         default=_env_int("NEURON_BRIDGE_PORT", 8000),
                         help="HTTP port (default 8000, env: NEURON_BRIDGE_PORT).")
@@ -221,29 +210,11 @@ def main(argv: list[str] | None = None) -> int:
         override = override[1:]
     neuron_cmd = resolve_neuron_cmd(override or None)
 
-    proxy = resolve_proxy_runner()
-    if proxy is None:
-        print("No way to run 'mcp-proxy' was found.\n"
-              "Install a runner (any one):\n"
-              "  • uv (recommended, no pip needed):\n"
-              "      Windows : irm https://astral.sh/uv/install.ps1 | iex\n"
-              "      macOS/Linux : curl -LsSf https://astral.sh/uv/install.sh | sh\n"
-              "  • pipx : python -m pip install --user pipx\n"
-              "Then re-run this script.", file=sys.stderr)
-        return 2
-
-    # Quick smoke test: can the proxy runner actually launch mcp-proxy?
-    try:
-        r = subprocess.run(proxy + ["--version"], capture_output=True, timeout=15,
-                           creationflags=(subprocess.CREATE_NO_WINDOW
-                                          if os.name == "nt" else 0))
-        if r.returncode != 0:
-            print(f"  [!] '{' '.join(proxy)}' did not return a valid mcp-proxy.",
-                  file=sys.stderr)
-            print("      It may still work at runtime, but check your network / runner install.",
-                  file=sys.stderr)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        print(f"  [!] '{' '.join(proxy)}' — {exc}", file=sys.stderr)
+    # NATIVE transport — no mcp-proxy, no uvx. `mcp-proxy` lived on a separate
+    # release cycle and broke when the MCP SDK dropped `request_ctx` in 1.28,
+    # taking both bridges down with an ImportError nobody saw. The SDK ships
+    # `streamable_http_manager` now, so protocol and transport come from one
+    # package. keep-in-sync with neurag/bridge.py.
 
     # Port fallback: find a free port if default is occupied
     port = args.port
@@ -257,21 +228,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ✓ Using port {free} instead.", flush=True)
         port = free
 
-    full = proxy + [f"--port={port}", f"--host={args.host}", "--"] + neuron_cmd
     url = f"http://{args.host}:{port}/mcp"
 
     if args.print_cmd:
-        print(" ".join(full))
+        print(f"{sys.executable} -m neuron.bridge --host={args.host} --port={port}")
         return 0
 
     if not args.no_check and not preflight(neuron_cmd):
         return 1
 
-    # TCP keepalive: mcp-proxy doesn't expose keepalive settings directly,
-    # but we can set it via the socket after binding. For now, print guidance.
     bind_info = f"{'all interfaces' if args.host == '0.0.0.0' else args.host}:{port}"
 
-    print(f"\nStarting bridge via: {' '.join(proxy)}")
+    print("\nStarting bridge (MCP SDK Streamable HTTP, in-process)")
     print(f"  local endpoint : {url}")
     print(f"  bind           : {bind_info}")
     print(f"  server         : {'gray_matter.server (full suite)' if importlib.util.find_spec('gray_matter.server') is not None else 'neuron (standalone)'}")
@@ -287,16 +255,21 @@ def main(argv: list[str] | None = None) -> int:
     # Launch bridge
     try:
         # CREATE_NO_WINDOW (T81): under the windowless GUI, a console child
-        # (uvx/mcp-proxy) would otherwise open its own CMD window. Stdio
+        # (the old external proxy) would otherwise open its own CMD window. Stdio
         # handles are inherited regardless, so output still flows when run
         # from a real terminal.
-        flags = 0x08000000 if os.name == "nt" else 0
+        from neuron.http_transport import serve
+        if importlib.util.find_spec("gray_matter.server") is not None:
+            from gray_matter.server import app as _mcp_app   # full suite: tutti i tool
+        else:
+            from neuron.server import app as _mcp_app
 
         if want_tunnel:
             # Launch tunnel in background, then bridge in foreground
             tunnel_proc = _launch_tunnel(args.host, port)
             try:
-                rc = subprocess.call(full, creationflags=flags)
+                serve(_mcp_app, host=args.host, port=port)
+                rc = 0
             except KeyboardInterrupt:
                 rc = 0
             finally:
@@ -308,12 +281,13 @@ def main(argv: list[str] | None = None) -> int:
                         tunnel_proc.kill()
             return rc
         else:
-            return subprocess.call(full, creationflags=flags)
+            serve(_mcp_app, host=args.host, port=port)
+            return 0
 
     except KeyboardInterrupt:
         return 0
     except FileNotFoundError as exc:
-        print(f"Failed to start the proxy: {exc}", file=sys.stderr)
+        print(f"Failed to start the bridge: {exc}", file=sys.stderr)
         return 2
 
 
