@@ -61,6 +61,16 @@ def main() -> None:
                 sys.stdout.write(json.dumps({"ok": True, "tools": tools}) + "\n")
                 sys.stdout.flush()
                 continue
+            if req.get("op") == "shutdown":
+                # Flush sincrono prima di morire: il gateway attende la fine.
+                # Su Windows non esistono segnali (Popen.terminate() = kill duro),
+                # questa pipe è l'unico modo per un checkpoint finale pulito.
+                if reg is not None:
+                    try:
+                        reg.save_all()
+                    except Exception:  # noqa: BLE001 — mai bloccare l'exit
+                        pass
+                sys.exit(0)
             # ponytail: removed reg._graphs.clear() — it caused L2 race condition
             # (multiple workers clearing + reloading the same DB simultaneously).
             # The Graph reads from SQLite on every query; no in-memory cache to stale.

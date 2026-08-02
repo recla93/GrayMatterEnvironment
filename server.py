@@ -666,6 +666,31 @@ def _worker_for(server_name: str):
     return p
 
 
+def _shutdown_workers() -> None:
+    """Flush sincrono dei worker prima di morire (checkpoint finale).
+
+    Su Windows non esistono segnali: Popen.terminate() è TerminateProcess, che
+    uccide senza dare al worker la possibilità di salvare. Il worker risponde a
+    {"op": "shutdown"} facendo save_all() e uscendo; solo se non esce nel
+    timeout lo si termina a forza (l'ultimo checkpoint periodico copre il resto).
+    """
+    for name, p in list(_workers.items()):
+        try:
+            p.stdin.write(json.dumps({"op": "shutdown"}) + "\n")
+            p.stdin.flush()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+        except (BrokenPipeError, OSError):
+            pass
+        _workers.pop(name, None)
+
+
 async def _call_server_async(server_name: str, tool_name: str, arguments: dict) -> str:
     """Call a server tool via its persistent worker (imported once, model kept warm)."""
     lock = _worker_locks.setdefault(server_name, asyncio.Lock())
@@ -1213,9 +1238,9 @@ def main() -> None:
         sleep_task.cancel()
         reap_task.cancel()
         prewarm_task.cancel()
+        _shutdown_workers()
 
     asyncio.run(_run())
-
 
 def auto_register_and_run(name: str, tool_names: list[str]) -> None:
     """Called by a server (Neuron, NeuRAG) on startup.
