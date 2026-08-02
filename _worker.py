@@ -28,6 +28,14 @@ from mcp import types as _mcp_types
 # turno il grafo resta in memoria. 0 = comportamento vecchio (clear sempre).
 _FRESH_TTL = float(os.environ.get("GM_WORKER_FRESH_TTL", "5"))
 
+# Checkpoint periodico (fix B): ogni N mutazioni il grafo viene salvato su
+# disco, cosi' anche un kill sporco del processo (niente shutdown via pipe)
+# perde al massimo l'ultimo intervallo, non l'intera sessione. 0 = off.
+_CHECKPOINT_EVERY = int(os.environ.get("GM_WORKER_CHECKPOINT", "8"))
+_MUTATING = {"store_turn", "auto", "consolidate", "prune", "merge", "dedup",
+             "confirm", "dismiss"}
+_mutations = 0
+
 
 def main() -> None:
     # Il worker tiene aperto lo store: se resta indietro quando il daemon muore,
@@ -82,6 +90,17 @@ def main() -> None:
                 )
             )
             resp = loop.run_until_complete(handler(mcp_req))
+            # Checkpoint periodico: le mutazioni vengono flushato su disco
+            # ogni _CHECKPOINT_EVERY, indipendentemente dallo shutdown pulito.
+            global _mutations
+            if reg is not None and req["tool"] in _MUTATING and _CHECKPOINT_EVERY > 0:
+                _mutations += 1
+                if _mutations >= _CHECKPOINT_EVERY:
+                    try:
+                        reg.save_all()
+                    except Exception:  # noqa: BLE001 — mai rompere il turno
+                        pass
+                    _mutations = 0
             result = resp.root if hasattr(resp, "root") else resp
             text = ""
             if hasattr(result, "content") and result.content:
