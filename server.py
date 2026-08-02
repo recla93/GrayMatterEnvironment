@@ -695,25 +695,30 @@ def _reap_orphans() -> None:
     """Single-instance: termina i processi della suite rimasti orfani.
 
     Quando il client muore, il gateway e i suoi worker restano vivi (process
-    group staccato) e scrivono sullo stesso DB: piu' writer = rischio clobber
-    (i "2 gateway + 2 worker per server" del 2026-08-02). All'avvio di
-    un'istanza nuova, gli orfani registrati nel pids sono morti con il loro
-    genitore: si chiudono subito, l'ultima istanza vince. Lo shutdown pulito
-    (fix A) riduce la formazione di orfani; questo e' la rete sotto.
+    group staccato) e scrivono sullo stesso DB. All'avvio di un'istanza nuova
+    si chiudono subito, l'ultima istanza vince. Nota: il python.exe del venv
+    e' il redirector CPython — Popen vede lo stub, il vero interprete e' suo
+    figlio. Uccidere lo stub non uccide il figlio: si itera finche' il
+    registro pids non e' pulito (la morte si propaga per un paio di giri).
     """
     try:
         from gray_matter import pids as _pids
-        for o in _pids.orphans():
-            try:
-                if _pids.alive(o["pid"]):
-                    subprocess.run(
-                        ["taskkill", "/PID", str(o["pid"]), "/F"],
-                        capture_output=True, timeout=10,
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    )
-                _pids.forget(o["pid"])
-            except Exception:  # noqa: BLE001 — best-effort, mai bloccare l'avvio
-                pass
+        for _ in range(3):
+            orph = _pids.orphans()
+            if not orph:
+                return
+            for o in orph:
+                try:
+                    if _pids.alive(o["pid"]):
+                        subprocess.run(
+                            ["taskkill", "/PID", str(o["pid"]), "/F"],
+                            capture_output=True, timeout=10,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        )
+                    _pids.forget(o["pid"])
+                except Exception:  # noqa: BLE001 — best-effort, mai bloccare
+                    pass
+            time.sleep(0.3)
     except Exception:  # noqa: BLE001
         pass
 
