@@ -1,4 +1,21 @@
-# Changelog — Gray Matter
+﻿# Changelog — Gray Matter
+
+## 1.3.0 (2026-08-02)
+- **La memoria non perde più turni al riavvio.** Un worker killato senza
+  preavviso lasciava l'ultima scrittura nel WAL di SQLite e il file principale
+  fermo a un timestamp vecchio: al riavvio il grafo tornava dove era dieci
+  minuti prima e i turni intermedi sparivano. Tre fix, una per causa:
+  - **Shutdown pulito.** Il worker risponde a `{"op":"shutdown"}` via pipe con
+    `save_all()` + exit; il gateway manda il comando quando il client chiude
+    (EOF su stdin). Prima l'EOF killava il worker senza flush.
+  - **Single instance.** `_reap_orphans()` all'avvio chiude gli orfani
+    registrati nel `pids` — la suite sopravvive al client morto e due writer
+    sullo stesso DB sono contesa sul WAL. Il python.exe del venv è il
+    redirector CPython e il vero interprete è suo figlio: uccidere lo stub
+    non basta, il reap itera finché il registro non è pulito.
+  - **Checkpoint periodico.** `save_all()` ogni N mutazioni
+    (`GM_WORKER_CHECKPOINT`, default 8): la rete sotto al save-per-turno, che
+    resta la via normale di flush.
 
 ## 1.2.0 (2026-07-31)
 - **`gray-matter promote` — consolidazione CLS (DESIGN-EVOLUTION §5.3).** Il

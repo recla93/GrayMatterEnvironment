@@ -7,4 +7,4 @@ from gray_matter._env import load_dotenv_once as _load_dotenv_once
 
 _load_dotenv_once()
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"

@@ -1,0 +1,29 @@
+name: Release
+
+# Builds the Gray-Matter package and publishes a GitHub Release with all
+# artifacts attached. Runs on version tags only: pushing v* IS the release.
+# (Neuron builds the Windows pyturso wheels here too because PyPI has no
+# win_amd64 wheel; Gray-Matter depends only on mcp, so it needs no vendored
+# wheels — a plain `python -m build` covers the artifacts.)
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build           # dist/*.whl + dist/*.tar.gz
+      - run: python -m pip install dist/*.whl && python -c "import gray_matter; print(gray_matter.__version__)"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*                # gray-matter wheel + sdist
+          generate_release_notes: true
