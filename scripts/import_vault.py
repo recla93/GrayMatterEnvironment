@@ -37,7 +37,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 SKIP_DIRS = {"RAG-Nexus", "RAG-Nexus - Backup", ".obsidian", "Pics",
-             "graphify-out", ".git", "node_modules"}
+             "graphify-out", ".git", "node_modules", ".venv", "build",
+             "__pycache__", ".pytest_cache", ".idea", "vendor", "handoff"}
 
 DEFAULT_OUT = Path(__file__).resolve().parent.parent / "knowledge" / "base_knowledge.db"
 
@@ -52,6 +53,11 @@ def parse_args() -> argparse.Namespace:
                    help=f"Output DB path (default: {DEFAULT_OUT}).")
     p.add_argument("--no-embed", action="store_true",
                    help="Skip inline embedding generation even if fastembed is available.")
+    p.add_argument("--no-graphify", action="store_true",
+                   help="Skip Graphify graphs: Graphify emits one node per .md heading "
+                        "(Quando usarlo, Vantaggio, Fixed...) and per code symbol, which "
+                        "outranks real concepts in the seed. For a concept-level seed "
+                        "prefer document names only (scan_md_files).")
     return p.parse_args()
 
 
@@ -133,7 +139,11 @@ def load_graphify(path: Path) -> tuple[list[dict], list[dict]]:
 
     for gn in data.get("nodes", []):
         sf = gn.get("source_file", "")
-        if not sf or sf.startswith("."):
+        # Seed knowledge = the DOCUMENTS of the ecosystem, not code symbols.
+        # Graphify also emits .py/.ps1/.json nodes (types, filenames, tests);
+        # those pollute the seed ranking (e.g. `str` salience 92 beating every
+        # real concept). Only markdown sources describe the project.
+        if not sf or sf.startswith(".") or not sf.lower().endswith(".md"):
             continue
         kw = gn.get("label", gn["id"])
         if not is_valid_keyword(kw):
@@ -281,7 +291,12 @@ def try_embed(nodes: list[dict]) -> list[tuple[str, bytes, int]] | None:
         from fastembed import TextEmbedding
     except ImportError:
         return None
-    embedder = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+    embedder = TextEmbedding(
+        os.environ.get(
+            "NS_EMBED_MODEL",
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        )
+    )
     dim = 384
     out: list[tuple[str, bytes, int]] = []
     for i, n in enumerate(nodes):
@@ -359,10 +374,13 @@ def main():
     print(f"Vault: {vault}")
     # Graphify output, if present anywhere under the vault
     gnodes, glinks = [], []
-    for gj in vault.rglob("graphify-out/graph.json"):
-        gn, gl = load_graphify(gj)
-        print(f"  Graphify {gj}: {len(gn)} nodes, {len(gl)} links")
-        gnodes += gn; glinks += gl
+    if not args.no_graphify:
+        for gj in vault.rglob("graphify-out/graph.json"):
+            gn, gl = load_graphify(gj)
+            print(f"  Graphify {gj}: {len(gn)} nodes, {len(gl)} links")
+            gnodes += gn; glinks += gl
+    else:
+        print("  Graphify: skipped (--no-graphify)")
 
     print("Scanning .md files...")
     bnodes, blinks = scan_md_files(vault)

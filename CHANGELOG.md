@@ -1,6 +1,26 @@
 # Changelog — Neuron
 
-## 6.2.0 (2026-07-31)
+## 6.3.0 (2026-08-02)
+- **Seed knowledge rigenerato dall'intero ecosistema** (`base_knowledge.db`:
+  27 → 1130 nodi, 1525 link). Il seed precedente (10/07) conteneva solo la
+  documentazione interna dei tool e copriva una Neuron che non esiste più:
+  mancavano `dismiss`, `recall`, `introspect`. Ora il seed è la mappa completa
+  di Gray Matter Environment — architettura, flussi, ADR, bug noti e risoluzioni
+  di gray_matter, neurag e Neuron stesso — costruito da
+  `scripts/import_vault.py` sul workspace dev con i grafi graphify dei tre repo.
+  Conseguenza pratica: un grafo nuovo fa warm-start dal seed e un client "sa" chi
+  è l'ecosistema senza aver mai letto i README.
+- **Embedding del seed allineati al runtime (ADR-001)**. `import_vault.py`
+  generava i vettori con `all-MiniLM-L6-v2` (solo EN) mentre il server usa
+  `paraphrase-multilingual-MiniLM-L12-v2` (EN+IT): il seed nasceva con vettori
+  di un modello diverso, scartati e ricalcolati a ogni avvio (spazi vettoriali
+  non confrontabili). Lo script ora legge `NS_EMBED_MODEL` con lo stesso default
+  del runtime — una sola env governa la suite, come già fatto per NeuRAG.
+- **`import_vault.py` ignora i contenitori tecnici** (`.venv`, `build`, `vendor`,
+  `handoff`, caches): prima scannerizzava anche il `.venv` del repo, portando
+  nel seed nodi da `site-packages` estranei.
+
+
 - **Un archivio corrotto ora dice cosa fare** (`db.corrupt_store_hint`). Un
   `graph.db` malformato arrivava come `DatabaseError: file is not a database` in
   cima a un traceback: il sintomo, senza il file e senza un rimedio. È lo stesso
