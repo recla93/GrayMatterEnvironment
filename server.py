@@ -691,6 +691,33 @@ def _shutdown_workers() -> None:
         _workers.pop(name, None)
 
 
+def _reap_orphans() -> None:
+    """Single-instance: termina i processi della suite rimasti orfani.
+
+    Quando il client muore, il gateway e i suoi worker restano vivi (process
+    group staccato) e scrivono sullo stesso DB: piu' writer = rischio clobber
+    (i "2 gateway + 2 worker per server" del 2026-08-02). All'avvio di
+    un'istanza nuova, gli orfani registrati nel pids sono morti con il loro
+    genitore: si chiudono subito, l'ultima istanza vince. Lo shutdown pulito
+    (fix A) riduce la formazione di orfani; questo e' la rete sotto.
+    """
+    try:
+        from gray_matter import pids as _pids
+        for o in _pids.orphans():
+            try:
+                if _pids.alive(o["pid"]):
+                    subprocess.run(
+                        ["taskkill", "/PID", str(o["pid"]), "/F"],
+                        capture_output=True, timeout=10,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                _pids.forget(o["pid"])
+            except Exception:  # noqa: BLE001 — best-effort, mai bloccare l'avvio
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _call_server_async(server_name: str, tool_name: str, arguments: dict) -> str:
     """Call a server tool via its persistent worker (imported once, model kept warm)."""
     lock = _worker_locks.setdefault(server_name, asyncio.Lock())
@@ -1211,6 +1238,7 @@ def _init_options() -> InitializationOptions:
 def main() -> None:
     """Run Gray-Matter as a stdio MCP server with background IPC listener."""
     _record_self("stdio")
+    _reap_orphans()
     async def _run():
         # Start background tasks
         ipc_task = asyncio.create_task(_ipc_listener(exit_on_busy=False))
@@ -1280,6 +1308,7 @@ def run_daemon() -> None:
     or `gray-matter start`) — there's no MCP client to attach stdio to, so main()'s
     stdio_server() would just exit on a detached process."""
     _record_self("daemon")
+    _reap_orphans()
 
     async def _run():
         # Stessa self-discovery di main(): era cablata SOLO nel ramo stdio, così
