@@ -1,6 +1,13 @@
 # Changelog — NeuRAG
 
 ## 1.3.1 (2026-08-03)
+- **NeuRAG ha una CI.** Non ne aveva: 369 test che nessuna automazione ha mai
+  eseguito, e un `release.yml` che pubblicava su un tag senza chiedere niente a
+  nessuno di loro. Ora `ci.yml` gira su ogni push e la pubblicazione dipende da
+  un job `test`. Entrambi clonano i tre repo, perché `test_standalone_invariant`
+  lancia NeuRAG dalla cartella padre per dimostrare che carica **senza** peer.
+- **Il numero di versione è controllato** fra `pyproject`, `__version__`, badge
+  del README e testa del CHANGELOG.
 - Wheel Gray Matter vendorizzata riportata a **1.4.0**: era rimasta a
   1.2.0, quindi un'installazione standalone apriva un control center di
   due versioni indietro. Nessun cambiamento in NeuRAG stesso.

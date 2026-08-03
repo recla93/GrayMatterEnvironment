@@ -1,0 +1,55 @@
+name: CI
+
+# NeuRAG had no CI at all until 2026-08-03: 369 tests that no automation ever
+# ran, and a release workflow that published on a tag without asking any of
+# them. See gray_matter/.github/workflows/ci.yml for the incident this pair of
+# files exists to prevent.
+#
+# WHY THREE CHECKOUTS
+# `test_standalone_invariant` runs NeuRAG from the parent directory to prove it
+# loads with NO peer present (the I2 invariant), and a few tests import neuron /
+# gray_matter inside the test body. Both need the siblings laid out as they are
+# on a developer machine:
+#
+#     <workspace>/neurag   <workspace>/neuron   <workspace>/gray_matter
+#
+# All three are installed here, unlike in Gray Matter's CI, because these tests
+# import the peers rather than only reading their files.
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: neurag
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/Neuron
+          path: neuron
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/gray-matter
+          path: gray_matter
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the suite
+        run: |
+          pip install -e ./neurag[dev]
+          pip install -e ./neuron
+          pip install -e ./gray_matter
+
+      - name: Check syntax
+        working-directory: neurag
+        run: python -m compileall .
+
+      - name: Run tests
+        working-directory: neurag
+        run: python -m pytest tests/ -v

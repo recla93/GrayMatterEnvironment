@@ -16,8 +16,36 @@ permissions:
   contents: write
 
 jobs:
+  # --- 0. The gate ---------------------------------------------------------
+  # A tag used to publish without asking the 369 tests anything. Same
+  # three-repo layout as ci.yml, and for the same reason.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: neurag
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/Neuron
+          path: neuron
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/gray-matter
+          path: gray_matter
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -e ./neurag[dev]
+          pip install -e ./neuron
+          pip install -e ./gray_matter
+      - working-directory: neurag
+        run: python -m pytest tests/ -q
+
   # --- 1. Compile pyturso for Windows (no win_amd64 on PyPI → we build it) ---
   build-pyturso-win:
+    needs: test                      # red tests, no release
     runs-on: windows-latest          # already has Rust + MSVC + Windows SDK
     strategy:
       fail-fast: false
