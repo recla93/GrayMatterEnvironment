@@ -1,5 +1,31 @@
 # Changelog — Neuron
 
+## 6.4.0 (2026-08-03)
+- **Quattro modalità di retrieval, zero tool nuovi.** La modalità è *stato*,
+  non superficie: `semantic` (default, invariato), `focus` (pesa i nodi vicini
+  al compito attivo), `brainstorm` (penalizza la somiglianza con la query, così
+  emergono i nodi lontani), `pattern` (suggerisce il prossimo passo da sequenze
+  ricorrenti). La strategia si applica in `_resolve_context` **prima** del sort
+  e arriva come parametro: standalone la passa il chiamante, con Gray Matter la
+  inietta il proxy dal blackboard (`cervello/mode`, `cervello/focus`). Neuron
+  non legge mai il DB di GM.
+- **`modes.py`**: strategie pure con self-check eseguibile. Il materiale di
+  `pattern` è il log append-only `turns.jsonl`, non il grafo: il grafo non
+  preserva lo storico dei turni, e `nd.turn` è il turno di *creazione* del
+  nodo, non l'ultimo tocco — indicizzarci una cache sarebbe stato sbagliato.
+- **`pre_turn` non consegna più i fatti di un nodo solo.** Prima
+  `recent_episodes(nodes_pt[0][0], 2)`: gli episodi del primo in classifica,
+  con entrambi i numeri costanti letterali. Conseguenza, ogni concetto in più
+  era un concorrente in più per l'unico posto, e alzare `max_tokens` non
+  aumentava i fatti. Ora i fatti vengono dai primi `fact_nodes` nodi
+  (default **3**, parametro dichiarato), ognuno attribuito al suo nodo;
+  `fact_nodes=1` riproduce il comportamento precedente. `files:` aveva lo
+  stesso taglio a rango 1 ed è allineato.
+- **Allineamento versione**: `__version__` era rimasto a `6.2.0` mentre
+  `pyproject.toml` diceva `6.3.0` — la 6.3.0 è uscita con il valore sbagliato.
+- Fix: la freccia unicode nel riepilogo di `reembed.py` crashava la console
+  Windows cp1252.
+
 ## 6.3.0 (2026-08-02)
 - **Seed knowledge rigenerato dall'intero ecosistema** (`base_knowledge.db`:
   27 → 1130 nodi, 1525 link). Il seed precedente (10/07) conteneva solo la
