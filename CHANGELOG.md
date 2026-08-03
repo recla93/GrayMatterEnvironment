@@ -23,6 +23,31 @@
   stesso taglio a rango 1 ed è allineato.
 - **Allineamento versione**: `__version__` era rimasto a `6.2.0` mentre
   `pyproject.toml` diceva `6.3.0` — la 6.3.0 è uscita con il valore sbagliato.
+- **Una release non esce più con i test rossi.** Il tag andava dritto alla
+  compilazione delle cinque wheel pyturso e alla pubblicazione: `ci.yml` girava
+  su ogni push ma niente collegava le due cose. Ora `release.yml` ha un job
+  `test` da cui il resto dipende.
+- **Il numero di versione è controllato, non ripetuto a mano** — `pyproject`,
+  `__version__`, il badge del README e la testa del CHANGELOG devono
+  concordare. Avrebbe preso da solo il `__version__` fermo a `6.2.0` che la
+  6.3.0 ha spedito dentro la wheel.
+- **La scrittura dichiara cosa ha perso.** `add_episode` troncava a
+  `EPISODE_MAX_CHARS` e sfrattava i più vecchi oltre `EPISODES_PER_NODE` in
+  silenzio, e `store_turn` non guardava nemmeno il valore di ritorno. Ora la
+  risposta porta `episode_lost` con i caratteri persi e i turni sfrattati, e i
+  due env var che alzano i limiti sono documentati.
+- **`pre_turn` dichiara attraverso cosa risponde** (`db=turso-local`,
+  `db=sqlite!degraded`). Il degrado L2 cambia il motore che serve la chiamata e
+  si annunciava solo su stderr, dove nessun chiamante guarda.
+- **Il handshake parla una volta per sessione**, chiunque lo registri: il
+  plugin Cowork e l'installer lo caricano da percorsi diversi, quindi girava
+  due volte. `claim(session_id)` con `O_EXCL`; fail-open, perché un handshake
+  mai detto costa più di uno detto due volte.
+- **Via la modalità `brainstorm`**: era un no-op. Toglieva `0.3*sim` mentre la
+  similarità pesa `0.5`, e ri-ordinava per anti-rilevanza un pool già filtrato
+  per rilevanza. I candidati inattesi richiedono il grafo intero più i chunk:
+  è `gray_matter_brainstorm`, e sta in GM. Restano `semantic`, `focus`,
+  `pattern`.
 - Fix: la freccia unicode nel riepilogo di `reembed.py` crashava la console
   Windows cp1252.
 

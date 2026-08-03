@@ -15,8 +15,27 @@ permissions:
   contents: write
 
 jobs:
+  # --- 0. The gate ---------------------------------------------------------
+  # ci.yml already runs this suite on every push, but a TAG could still publish
+  # with it red: nothing connected the two. Now it does. Compiling five pyturso
+  # wheels before knowing whether the code works was the wrong order anyway.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-all-MiniLM-L6-v2-v1
+      - run: pip install -e .[dev]
+      - run: python -m pytest tests/ -q
+
   # --- 1. Compile pyturso for Windows (no win_amd64 on PyPI → we build it) ---
   build-pyturso-win:
+    needs: test                        # red tests, no release
     runs-on: windows-latest          # already has Rust + MSVC + Windows SDK
     strategy:
       fail-fast: false
