@@ -29,7 +29,7 @@ from fastembed import TextEmbedding
 
 from neuron import __version__, db as _db
 from neuron import curation as _cur   # T54 gate (stdlib-only module)
-from neuron import modes as _modes    # modalità operative del retrieval (focus/brainstorm/pattern)
+from neuron import modes as _modes    # modalità operative del retrieval (focus/pattern)
 from neuron import project as _project   # G1/G4: project_id + path canonicalization (stdlib-only)
 # T57: extraction moved verbatim to its own module; every public name is
 # re-imported here so existing imports/tests via neuron.server keep working.
@@ -582,8 +582,8 @@ async def list_tools() -> list[Tool]:
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                     "mode": {
                         "type": "string",
-                        "enum": ["semantic", "focus", "brainstorm", "pattern"],
-                        "description": "Modalità di retrieval: semantic (default), focus (boost sul compito attivo), brainstorm (nodi lontani), pattern (prossimo passo da schemi ricorrenti).",
+                        "enum": ["semantic", "focus", "pattern"],
+                        "description": "Modalità di retrieval: semantic (default), focus (boost sul compito attivo), pattern (prossimo passo da schemi ricorrenti). Per i candidati inattesi serve gray_matter_brainstorm: richiede il grafo intero piú i chunk, che una modalità non ha.",
                         "default": "semantic",
                     },
                     "focus": {
@@ -914,8 +914,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["semantic", "focus", "brainstorm", "pattern"],
-                        "description": "Modalità di retrieval: semantic (default), focus (boost sul compito attivo), brainstorm (nodi lontani), pattern (prossimo passo da schemi ricorrenti).",
+                        "enum": ["semantic", "focus", "pattern"],
+                        "description": "Modalità di retrieval: semantic (default), focus (boost sul compito attivo), pattern (prossimo passo da schemi ricorrenti). Per i candidati inattesi serve gray_matter_brainstorm: richiede il grafo intero piú i chunk, che una modalità non ha.",
                         "default": "semantic",
                     },
                     "focus": {
@@ -1082,15 +1082,14 @@ def _resolve_context(
                               + RANK_WEIGHTS["recency"] * recency
                               + RANK_WEIGHTS["trust"] * (nd.trust / max_trust))
 
-    # Modalità operative: ri-pesano node_scores PRIMA del sort. semantic =
-    # invariato; focus = boost sui nodi simili al compito attivo (il focus arriva
-    # come parametro: iniettato dal proxy GM dal blackboard, o passato a mano in
-    # standalone); brainstorm = penalizza la somiglianza (nodi lontani).
+    # Modalità operative: ri-pesano node_scores PRIMA del sort, ma DOPO la
+    # selezione dei candidati — una modalità può cambiare l'ordine, mai il pool.
+    # semantic = invariato; focus = boost sui nodi simili al compito attivo (il
+    # focus arriva come parametro: iniettato dal proxy GM dal blackboard, o
+    # passato a mano in standalone).
     if mode == "focus" and focus:
         focus_sim = dict(_search_embeddings([focus], top_n=len(g.nodes), graph=g))
         node_scores = _modes.focus_boost(node_scores, focus_sim)
-    elif mode == "brainstorm":
-        node_scores = _modes.brainstorm_spread(node_scores, sim_map)
     top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
 
     # FASE 5.6: MMR diversification at depth>=2 — avoid returning near-duplicate

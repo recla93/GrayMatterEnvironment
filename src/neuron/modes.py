@@ -6,8 +6,6 @@ Strategie di ranking pure applicate da `_resolve_context`:
 - ``focus``: boost sui nodi simili al compito attivo. Il focus arriva come
   PARAMETRO (standalone: passato a mano; con GM: iniettato dal proxy dal
   blackboard `cervello/focus`) — Neuron non legge mai il DB di GM.
-- ``brainstorm``: penalizza i nodi più simili alla query (il contrario della
-  rilevanza) → emergono i nodi lontani, associazioni inaspettate.
 - ``pattern``: suggerisce il prossimo passo da sequenze ricorrenti di keyword
   nei turni (coppie consecutive >= min_count, dal mock). Il materiale è lo
   storico dei TURNI (topic + keywords per turno), che il grafo NON preserva:
@@ -22,7 +20,14 @@ import json
 from collections import Counter
 from pathlib import Path
 
-MODES = ("semantic", "focus", "brainstorm", "pattern")
+MODES = ("semantic", "focus", "pattern")
+
+# Niente modalita' "brainstorm" qui: generare candidati inattesi richiede il
+# grafo INTERO piu' i chunk NeuRAG, quindi tocca due componenti ed e' di GM
+# (gray_matter_brainstorm, che si costruisce il pool con vector_search). Una
+# modalita' puo' solo ri-pesare i candidati gia' selezionati per rilevanza:
+# ri-ordinare per anti-rilevanza un insieme filtrato per rilevanza non fa
+# emergere niente di lontano, perche' i nodi lontani non sono mai candidati.
 PATTERN_MIN_COUNT = 2
 
 
@@ -35,18 +40,6 @@ def focus_boost(node_scores: dict[str, float], focus_sim: dict[str, float],
     for kw, s in focus_sim.items():
         if kw in out:
             out[kw] += boost * s
-    return out
-
-
-# --- brainstorm ---------------------------------------------------------
-
-def brainstorm_spread(node_scores: dict[str, float], sim_map: dict[str, float],
-                      factor: float = 0.3) -> dict[str, float]:
-    """Penalizza la somiglianza con la query: i nodi lontani salgono."""
-    out = dict(node_scores)
-    for kw, s in sim_map.items():
-        if kw in out:
-            out[kw] -= factor * s
     return out
 
 
@@ -111,11 +104,6 @@ if __name__ == "__main__":
     ns = {"wal": 0.8, "persistenza": 0.6, "checkpoint": 0.7}
     boosted = focus_boost(ns, {"persistenza": 1.0, "wal": 0.1})
     assert boosted["persistenza"] > boosted["wal"], boosted
-
-    # brainstorm: il nodo piu' simile scende sotto il piu' lontano
-    spread = brainstorm_spread({"wal": 0.8, "fantasia": 0.4},
-                               {"wal": 1.0, "fantasia": 0.0}, factor=0.5)
-    assert spread["fantasia"] > spread["wal"], spread
 
     # pattern: estrazione e match (caso del mock)
     turns = [
