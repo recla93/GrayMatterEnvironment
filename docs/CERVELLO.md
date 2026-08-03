@@ -75,11 +75,20 @@ disponibili: sono operazioni, ortogonali alla modalità.
 |---|---|
 | `semantic` (default) | ranking standard a similarità |
 | `focus` | pesa i nodi correlati al compito corrente (`cervello/focus`) |
-| `brainstorm` | nodi più distanti: novità sopra rilevanza |
 | `pattern` | retrieval + "prossimo passo" se lo stato matcha uno schema |
 
 **Tetto di quattro modalità.** Nuove solo se un caso d'uso reale le chiede. La
 modalità cambia il comportamento del flusso, mai i tool.
+
+**Una modalità cambia l'ordine, mai il pool.** Le strategie si applicano prima
+del sort ma **dopo** la selezione dei candidati, che è fatta per rilevanza
+(match sui keyword, hit vettoriali, vicini di link). Da qui il confine con i
+tool: `focus` e `pattern` ri-pesano candidati già pertinenti, ed è tutto ciò
+che serve loro. La creatività no — ha bisogno di ciò che nel pool **non c'è**,
+quindi non può essere una modalità e infatti è un tool di GM, che il pool se lo
+costruisce da sé. Una `brainstorm` come modalità è esistita in 6.4.0 ed era un
+no-op: ri-ordinare per anti-rilevanza un insieme filtrato per rilevanza non fa
+emergere niente.
 
 Regola del collegamento: **Neuron non legge mai il DB di GM.** La modalità
 arriva come parametro — standalone la passa il chiamante, con GM la inietta il
