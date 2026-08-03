@@ -35,8 +35,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - working-directory: gray_matter
-        run: pip install -e .[dev]
+      - run: |
+          pip install -e ./gray_matter[dev]
+          pip install -e ./neuron
+          pip install -e ./neurag
       - working-directory: gray_matter
         run: python -m pytest tests/ -q
 

@@ -15,8 +15,12 @@ name: CI
 #
 #     <workspace>/gray_matter   <workspace>/neuron   <workspace>/neurag
 #
-# Only gray_matter is installed: the cross-repo tests read files from disk, they
-# do not import the peers.
+# All three are INSTALLED, not merely checked out. The first CI run said so:
+# 42 tests failed on `No module named 'neuron.paths'`. Several suites reach the
+# peers by module name through parametrization (`[neuron.clients]`) rather than
+# a top-level import, so having the files on disk is not enough — a grep for
+# import statements does not find them, and this workflow found them on the
+# first try. Which is the argument for having it.
 
 on: [push, pull_request]
 
@@ -42,9 +46,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        working-directory: gray_matter
-        run: pip install -e .[dev]
+      - name: Install the suite
+        run: |
+          pip install -e ./gray_matter[dev]
+          pip install -e ./neuron
+          pip install -e ./neurag
 
       - name: Check syntax
         working-directory: gray_matter
