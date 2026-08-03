@@ -24,6 +24,22 @@ was to empty the Cowork plugin's hooks.json. Now all three tools deploy THIS
 file to the SAME path -- deploying twice is idempotent -- and a single owner is
 resolved at runtime. The double handshake cannot happen by construction.
 
+HOW MANY TIMES
+--------------
+Owner-resolution answers WHO speaks, not HOW OFTEN. Idempotence-by-path only
+holds inside one channel: the Cowork plugin registers this same script from
+${CLAUDE_PLUGIN_ROOT}, a different path from ~/.claude/hooks, so a machine with
+both channels wired ran it TWICE and the session opened with the identical
+block repeated -- observed 2026-08-03. Each process sees only itself, so no
+amount of runtime owner-resolution can dedupe them.
+
+So the guard is a session-scoped claim: the first process to create the marker
+for this session_id speaks, the others exit silently. O_EXCL makes the claim
+atomic, so two hooks racing at startup cannot both win. Fail-open by design --
+if anything at all goes wrong (no stdin, no session_id, unwritable temp) we
+speak, because a handshake said twice costs tokens while a handshake never said
+costs the whole memory loop.
+
 It also fixes the mirror bug: the tool-name prefix used to be hardcoded to
 `mcp__gray-matter__`, so a STANDALONE install told the model to call tools that
 do not exist in that session (exactly the old `mcp__neuron5__*` failure, in the
@@ -35,8 +51,9 @@ stdlib only, and it never imports neuron / neurag / gray_matter: the registry is
 plain JSON on disk. A broken install, a half-written venv or a missing registry
 costs a silent no-op, never a slow or failed session start.
 
-KEEP IN SYNC: byte-identical copies live in all three tools
-(neuron/src/neuron/clients/, neurag/clients/, gray_matter/clients_assets/).
+KEEP IN SYNC: byte-identical copies live in the two tools that ship client
+assets (neuron/src/neuron/clients/ and neurag/clients/, each with a Claude Code
+and a Cowork copy). Gray Matter ships none -- it deploys theirs.
 `test_handshake.py` fails if they drift.
 """
 
@@ -144,10 +161,50 @@ def handshake(slug: str, installed=None) -> str:
     return ""          # gateway with no peers: nothing to push
 
 
+def _session_id() -> str:
+    """The session id Claude Code hands the hook on stdin, or '' if unreadable.
+
+    Never blocks and never raises: stdin is already closed or already filled by
+    the host when a hook runs, and a missing id simply means no claim is made.
+    """
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return ""
+        payload = json.loads(sys.stdin.read() or "{}")
+        sid = payload.get("session_id") if isinstance(payload, dict) else None
+        return str(sid) if sid else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def claim(session_id: str, tmpdir=None) -> bool:
+    """True if THIS process is the one that speaks for ``session_id``.
+
+    Atomic via O_EXCL: of two hooks racing at session start, exactly one
+    creates the marker and the loser stays quiet. Fail-open — an empty id or an
+    unwritable temp dir returns True, because the cost of speaking twice is
+    tokens and the cost of never speaking is the whole loop.
+    """
+    if not session_id:
+        return True
+    import tempfile
+    base = Path(tmpdir) if tmpdir else Path(tempfile.gettempdir())
+    marker = base / ("neuron-handshake-%s" % "".join(
+        c for c in session_id if c.isalnum() or c in "-_")[:64])
+    try:
+        fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+
+
 def main() -> None:
     have = installed_slugs()
     slug = owner(have)
-    if slug:
+    if slug and claim(_session_id()):
         text = handshake(slug, have)
         if text:
             print(text)
