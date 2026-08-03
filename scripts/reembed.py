@@ -164,7 +164,7 @@ def main(argv=None) -> int:
             except Exception: pass
 
     print(f"\n{'(dry-run) ' if args.dry_run else ''}Totale nodi processati: {total_nodes}. "
-          f"meta.embed_model → {NS_EMBED_MODEL}")
+          f"meta.embed_model -> {NS_EMBED_MODEL}")
     return 0
 
 
