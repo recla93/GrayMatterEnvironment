@@ -379,6 +379,38 @@ def test_pre_turn_returns_status_and_context():
         srv._g = old_g
 
 
+def test_pre_turn_declares_the_route_it_answered_through():
+    """R1: uno stato che cambia il comportamento dev'essere osservabile nella
+    risposta del tool. Il degrado L2 (Turso -> sqlite3 sullo stesso file)
+    cambia il motore che serve la chiamata e si annunciava solo su stderr."""
+    pytest.importorskip("mcp")
+    import asyncio
+    import neuron.server as srv
+    import neuron.db as ndb
+
+    g = _make_graph_with_data()
+    old_g = srv._g
+    srv._g = _make_registry_with({"default": g}, "default")
+    old_degraded = set(ndb.DEGRADED_PATHS)
+
+    async def _run():
+        return await srv.call_tool("pre_turn", {"topic": "kotlin flow"})
+
+    try:
+        ndb.DEGRADED_PATHS.clear()
+        nominal = asyncio.run(_run())[0].text.splitlines()[0]
+        assert "db=" in nominal, "la riga di stato deve dichiarare il percorso"
+        assert "degraded" not in nominal
+
+        ndb.DEGRADED_PATHS.add("/qualche/graph.db")
+        degraded = asyncio.run(_run())[0].text.splitlines()[0]
+        assert "db=sqlite!degraded" in degraded, degraded
+    finally:
+        ndb.DEGRADED_PATHS.clear()
+        ndb.DEGRADED_PATHS.update(old_degraded)
+        srv._g = old_g
+
+
 def test_pre_turn_facts_span_several_nodes():
     """facts: comes from the top FACT_NODES nodes, not only rank 1 — and
     fact_nodes=1 restores the old single-node window."""

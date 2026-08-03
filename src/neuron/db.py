@@ -36,6 +36,7 @@ __all__ = [
     "connect", "connect_local", "RemoteTursoConnection",
     "REMOTE_TURSO", "ENGINE_NAME", "VECTOR_SQL_SUPPORTED",
     "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN",
+    "DEGRADED_PATHS", "route",
 ]
 
 
@@ -77,6 +78,29 @@ else:
 VECTOR_SQL_SUPPORTED = REMOTE_TURSO or LOCAL_TURSO_ENGINE
 
 ENGINE_NAME = "Turso (cloud)" if REMOTE_TURSO else ("Turso (local)" if LOCAL_TURSO_ENGINE else "SQLite")
+
+# Files whose connection fell back to sqlite3 via the L2 guard. The degrade
+# changes WHICH engine answers — native vector-SQL is gone for those calls — so
+# it is state that changes behaviour, and until now it was announced only on
+# stderr, where no caller of the tool ever looks. `route()` puts it where the
+# answer is read.
+DEGRADED_PATHS: set = set()
+
+
+def route() -> str:
+    """Compact tag for the path this process is actually answering through.
+
+    Goes in the status line of every pre_turn: the nominal routes are boring on
+    purpose, the degraded one is meant to be noticed. A tool that can silently
+    change the engine under you owes you that word.
+    """
+    if DEGRADED_PATHS:
+        return "sqlite!degraded"
+    if REMOTE_TURSO:
+        return "turso-cloud"
+    if LOCAL_TURSO_ENGINE:
+        return "turso-local"
+    return "sqlite"
 
 # Session-level PRAGMAs are meaningless against a remote HTTP database — the
 # server manages its own journaling/sync. Introspective PRAGMAs like
@@ -433,6 +457,7 @@ def _open_local_engine(path: str):
     import sys as _sys
     print(f"neuron: local Turso open failed ({last!r}) after retries — degrading "
           f"to sqlite3 for this connection (L2 guard).", file=_sys.stderr)
+    DEGRADED_PATHS.add(path)
     return _sqlite3.connect(path)
 
 

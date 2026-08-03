@@ -1964,8 +1964,14 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     ctx_label = _g.active
     total_pt  = len(g_pt.links)
     active_pt = len(g_pt.get_active_links())
+    # R1: la riga di stato dichiara anche ATTRAVERSO COSA sta rispondendo. Il
+    # degrado L2 (Turso → sqlite3 sullo stesso file) cambia il motore che serve
+    # la chiamata e finora si annunciava solo su stderr, dove nessun chiamante
+    # guarda: uno stato che cambia il comportamento va letto dove si legge la
+    # risposta.
     status_line = (f"[neuron] ctx={ctx_label} turn={g_pt.turn_count} "
-                   f"nodes={len(g_pt.nodes)} links={total_pt}(active {active_pt})")
+                   f"nodes={len(g_pt.nodes)} links={total_pt}(active {active_pt}) "
+                   f"db={_db.route()}")
     # Compact context via shared helper (no recursive MCP call)
     search_kws_pt: set[str] = {topic_pt} if topic_pt else set()
     if isinstance(extra_kws_pt, list):
