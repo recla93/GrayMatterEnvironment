@@ -1,5 +1,10 @@
 # Changelog — NeuRAG
 
+## 1.3.1 (2026-08-03)
+- Wheel Gray Matter vendorizzata riportata a **1.4.0**: era rimasta a
+  1.2.0, quindi un'installazione standalone apriva un control center di
+  due versioni indietro. Nessun cambiamento in NeuRAG stesso.
+
 ## 1.3.0 (2026-07-31)
 - **Il reranker cross-encoder è stato misurato e RIMOSSO.** Era opt-in e spento
   di default dalla 1.1.1, e non era mai stato misurato. Ora sì, sul set del
