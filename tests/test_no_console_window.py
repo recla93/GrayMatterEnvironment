@@ -91,9 +91,12 @@ def test_worker_spawn_has_no_window():
     import re
 
     src = _code_of(server)
-    # ogni creationflags nel modulo deve essere "senza finestra"
-    for m in re.finditer(r"creationflags\s*=\s*((?:\w+\.)?\w+(?:\s*\|\s*(?:\w+\.)?\w+)*)", src):
-        expr = m.group(1).strip()
+    # ogni creationflags nel modulo deve essere "senza finestra". Si prende
+    # tutta la riga: una forma come getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # e' corretta, ma un pattern che si ferma al primo identificatore vede solo
+    # "getattr" e la boccia.
+    for m in re.finditer(r"creationflags\s*=\s*([^\n]+)", src):
+        expr = m.group(1).strip().rstrip(",")
         if expr in ("0", "creationflags"):
             continue
         assert "CREATE_NO_WINDOW" in expr, f"spawn senza CREATE_NO_WINDOW: {expr}"
