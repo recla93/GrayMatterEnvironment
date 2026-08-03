@@ -1,0 +1,55 @@
+name: CI
+
+# Gray Matter had no CI at all until 2026-08-03: 466 tests that no automation
+# ever ran. That is how v1.3.0 shipped with the vendored Gray Matter wheels
+# still at 1.2.0 — `test_gui_bundling` calls itself "THE stale-release guard",
+# it was correct, it was red, and nothing interrogated it.
+#
+# WHY THREE CHECKOUTS
+# Six test files reach for the sibling repos (`parents[2]`): the packaging guard
+# reads neuron/ and neurag/ vendor dirs, the handshake guard compares the client
+# assets byte for byte. Checked out alone, those tests would have to be skipped
+# — and a guard that stays silent is indistinguishable from one that approves,
+# which is the exact failure this workflow exists to end. So the siblings come
+# along, laid out the way the tests expect:
+#
+#     <workspace>/gray_matter   <workspace>/neuron   <workspace>/neurag
+#
+# Only gray_matter is installed: the cross-repo tests read files from disk, they
+# do not import the peers.
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gray_matter
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/Neuron
+          path: neuron
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/NeuRAG
+          path: neurag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: gray_matter
+        run: pip install -e .[dev]
+
+      - name: Check syntax
+        working-directory: gray_matter
+        run: python -m compileall .
+
+      - name: Run tests
+        working-directory: gray_matter
+        run: python -m pytest tests/ -v

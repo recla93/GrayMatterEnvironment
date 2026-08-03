@@ -13,7 +13,35 @@ permissions:
   contents: write
 
 jobs:
+  # --- 0. The gate ---------------------------------------------------------
+  # A tag used to go straight to publish. The suite existed, the stale-release
+  # guard existed and was RED, and v1.3.0 shipped anyway with the vendored
+  # wheels two versions behind. A guard nothing runs is a comment.
+  # Same three-repo layout as ci.yml, and for the same reason.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gray_matter
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/Neuron
+          path: neuron
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/NeuRAG
+          path: neurag
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - working-directory: gray_matter
+        run: pip install -e .[dev]
+      - working-directory: gray_matter
+        run: python -m pytest tests/ -q
+
   build-release:
+    needs: test                        # red tests, no release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

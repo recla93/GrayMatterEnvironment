@@ -20,6 +20,17 @@
   `getattr(subprocess, "CREATE_NO_WINDOW", 0)`, che è corretto, perché il suo
   pattern si fermava al primo identificatore. Una guardia rossa per un falso
   positivo insegna a ignorare le guardie.
+- **Gray Matter ha una CI.** Non ne aveva: 466 test che nessuna automazione ha
+  mai eseguito. È così che la 1.3.0 è uscita con le wheel vendorizzate ferme a
+  1.2.0 — `test_gui_bundling` si autodefinisce *"THE stale-release guard"*, era
+  corretto, era rosso, e niente lo interrogava. `ci.yml` gira su ogni push e
+  `release.yml` ha un job `test` da cui la pubblicazione dipende: un tag con i
+  test rossi non produce più una release. Entrambi clonano i tre repo, perché
+  sei file di test leggono i fratelli e farli skippare avrebbe ricreato il
+  problema dentro la soluzione.
+- **Il numero di versione è controllato** fra `pyproject`, `__version__`, badge
+  del README e testa del CHANGELOG. Al primo giro ha trovato il badge fermo a
+  1.2.0, due release indietro.
 - Nota di rilascio: le wheel di Gray Matter vendorizzate in `neuron/` e
   `neurag/` sono state ricostruite. La 1.3.0 le aveva lasciate a 1.2.0 e il
   test che esiste per accorgersene era rosso.
