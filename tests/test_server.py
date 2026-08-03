@@ -379,6 +379,36 @@ def test_pre_turn_returns_status_and_context():
         srv._g = old_g
 
 
+def test_pre_turn_facts_span_several_nodes():
+    """facts: comes from the top FACT_NODES nodes, not only rank 1 — and
+    fact_nodes=1 restores the old single-node window."""
+    pytest.importorskip("mcp")
+    import asyncio
+    import neuron.server as srv
+
+    g = _make_graph_with_data()
+    g.add_episode("kotlin flow", "chose flow over channel", turn=4)
+    g.add_episode("coroutines", "structured concurrency by default", turn=5)
+    old_g = srv._g
+    srv._g = _make_registry_with({"default": g}, "default")
+
+    async def _run(args):
+        return await srv.call_tool("pre_turn", args)
+
+    try:
+        base = {"topic": "kotlin flow", "keywords": ["coroutines"], "max_tokens": 600}
+        wide = asyncio.run(_run(base))[0].text
+        assert "chose flow over channel" in wide
+        assert "structured concurrency by default" in wide, \
+            "rank-2 node must contribute facts too"
+        assert "kotlin flow: " in wide, "facts must be attributed to their node"
+
+        narrow = asyncio.run(_run({**base, "fact_nodes": 1}))[0].text
+        assert "structured concurrency by default" not in narrow
+    finally:
+        srv._g = old_g
+
+
 def test_pre_turn_empty_graph():
     """pre_turn on empty graph returns status with 'no context'."""
     pytest.importorskip("mcp")

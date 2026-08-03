@@ -90,6 +90,11 @@ MAX_REFERENCES_PER_TURN = 20
 # Approximate chars per token for budget calculations
 CHARS_PER_TOKEN = 4
 
+# How many top-ranked nodes contribute facts/files to pre_turn. Declared, not a
+# literal: a recall that only ever returns rank 1 makes every extra concept a
+# competitor for the single slot. Override per call with pre_turn(fact_nodes=N).
+FACT_NODES = 3
+
 # Link type abbreviations for compact output
 LINK_TYPE_ABBR = {
     "deepening":    "+d",
@@ -917,6 +922,12 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Compito attivo per la modalità focus (iniettato dal proxy GM dal blackboard).",
                         "default": "",
+                    },
+                    "fact_nodes": {
+                        "type": "integer",
+                        "description": f"Quanti nodi in cima alla classifica contribuiscono facts/files (default {FACT_NODES}, minimo 1). Alzalo per un richiamo più largo, abbassalo a 1 per il solo nodo primo.",
+                        "default": FACT_NODES,
+                        "minimum": 1,
                     },
                 },
                 "required": ["topic"],
@@ -1933,6 +1944,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     char_budget_pt = max_tokens_pt * CHARS_PER_TOKEN
     mode_pt   = arguments.get("mode", "semantic")
     focus_pt  = arguments.get("focus") or None
+    _fact_nodes_pt = max(1, int(arguments.get("fact_nodes", FACT_NODES)))
     # Status line
     g_pt = _g.get()
     ctx_label = _g.active
@@ -1955,15 +1967,25 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         parts_pt.append("nodes:" + ",".join(
             f"{kw}({sc:.0f})" for kw, sc in nodes_pt[:5]
         ))
-        # T56: surface the top node's stored FACTS (episodes), newest first —
-        # "we decided X because Y", not just "we talked about X".
-        _facts = g_pt.recent_episodes(nodes_pt[0][0], 2)
+        # T56: surface stored FACTS (episodes), newest first — "we decided X
+        # because Y", not just "we talked about X". Taken from the top
+        # fact_nodes ranked nodes, each attributed: weak convergence from
+        # several nodes beats one strong node, and unattributed facts aren't
+        # inspectable. Overflow is cut by char_budget_pt below, as before.
+        _facts = [f"{kw}: {f}"
+                  for kw, _ in nodes_pt[:_fact_nodes_pt]
+                  for f in g_pt.recent_episodes(kw, 2)]
         if _facts:
             parts_pt.append("facts: " + " | ".join(_facts))
-        # G1: surface the top node's file refs (project-relative paths) so a
-        # returning session recalls WHERE it worked without re-searching files.
-        _top_node = g_pt.get_node(nodes_pt[0][0])
-        _files = _project.render_file_refs(_top_node.references if _top_node else None)
+        # G1: surface file refs (project-relative paths) so a returning session
+        # recalls WHERE it worked without re-searching files. Same rank window
+        # as the facts, deduped in first-seen order.
+        _files: list[str] = []
+        for kw, _ in nodes_pt[:_fact_nodes_pt]:
+            _nd = g_pt.get_node(kw)
+            for f in _project.render_file_refs(_nd.references if _nd else None):
+                if f not in _files:
+                    _files.append(f)
         if _files:
             parts_pt.append("files: " + " | ".join(_files))
     if fallback_pt:
