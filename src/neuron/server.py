@@ -58,6 +58,7 @@ from neuron.models import (
     WEIGHT_ORDER, TANGENTIAL_EXPIRY_TURNS,
     SALIENCE_DECAY_THRESHOLD, SALIENCE_DECAY_AMOUNT,
     CONSOLIDATE_SIM_THRESHOLD,
+
     VECTOR_DIM, pack_vector, unpack_vector, register_embed_fn,
 )
 
@@ -493,10 +494,16 @@ async def list_tools() -> list[Tool]:
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                     "episode": {
                         "type": "string",
-                        "description": ("ONE compact fact sentence for this turn (max ~200 chars), "
-                                        "e.g. 'chose https over wss because Turso rejects the ws "
-                                        "handshake'. Attached to the first keyword; pre_turn will "
-                                        "surface it later as a fact, not just a theme."),
+                        "description": ("ONE compact fact sentence for this turn, e.g. 'chose https "
+                                        "over wss because Turso rejects the ws handshake'. Attached "
+                                        "to the first keyword; pre_turn will surface it later as a "
+                                        "fact, not just a theme. Two hard limits, both raisable by "
+                                        "env var and both reported back in 'episode_lost' when you "
+                                        "cross them: the sentence is cut past a character cap "
+                                        "(NEURON_EPISODE_MAX_CHARS), and each node keeps only its "
+                                        "most recent episodes (NEURON_EPISODES_PER_NODE) — past "
+                                        "that the OLDEST is evicted, so a heavily used node loses "
+                                        "its early history."),
                     },
                     "entities": {
                         "type": "array", "items": {"type": "string"},
@@ -1367,8 +1374,9 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # T56: one compact fact sentence for this turn, attached to the first
     # (most salient) keyword — nodes carry decisions, not just themes.
     _episode_txt = str(arguments.get("episode", "") or "").strip()
+    _episode_report: dict = {}
     if _episode_txt:
-        g.add_episode(keywords[0], _episode_txt, turn)
+        _episode_report = g.add_episode(keywords[0], _episode_txt, turn)
 
     for ld in new_links_data:
         lk = Link(
@@ -1922,6 +1930,13 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
         "nodes_total": len(g.nodes),
         "links_total": len(g.links),
         "context_window": context_window,
+        # Ciò che la scrittura ha perso, dichiarato nella risposta della
+        # scrittura stessa: troncamento dell'episode e sfratto dei più vecchi
+        # oltre il cap. Assente quando non si è perso niente.
+        **({"episode_lost": {k: v for k, v in _episode_report.items()
+                             if k != "stored"}}
+           if _episode_report.get("truncated") or _episode_report.get("dropped_turns")
+           else {}),
     }, ensure_ascii=False, indent=2))]
 
 

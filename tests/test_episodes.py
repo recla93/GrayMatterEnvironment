@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from neuron.models import (  # noqa: E402
-    EPISODES_PER_NODE, Graph, Node,
+    EPISODE_MAX_CHARS, EPISODES_PER_NODE, Graph, Node,
 )
 
 
@@ -38,6 +38,25 @@ class TestEpisodes(unittest.TestCase):
         g.add_episode("a", "v1", turn=2)
         g.add_episode("a", "v2", turn=2)
         self.assertEqual(g.recent_episodes("a"), ["v2"])
+
+    def test_write_reports_what_it_lost(self):
+        """Regola 1: mai troncare o scartare in silenzio. Il report della
+        scrittura dice di quanto si è oltre e cosa è stato sfrattato."""
+        g = Graph()
+        g.add_node(_node("a"))
+        # sotto i limiti: nessuna perdita da dichiarare
+        clean = g.add_episode("a", "corto", turn=1)
+        self.assertEqual(clean, {"stored": True})
+        # troncamento: il report conta i caratteri persi
+        long = g.add_episode("a", "x" * (EPISODE_MAX_CHARS + 17), turn=2)
+        self.assertEqual(long["truncated"], 17)
+        # sfratto: il report nomina i turni buttati dal cap
+        for t in range(3, EPISODES_PER_NODE + 4):
+            rep = g.add_episode("a", f"fact {t}", turn=t)
+        self.assertIn("dropped_turns", rep)
+        self.assertEqual(len(g.episodes["a"]), EPISODES_PER_NODE)
+        # nodo inesistente: falsy, come prima
+        self.assertFalse(g.add_episode("ghost", "fact", turn=1))
 
     def test_cap_drops_oldest_and_tracks_removal(self):
         g = Graph()

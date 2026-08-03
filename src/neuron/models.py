@@ -477,32 +477,46 @@ class Graph:
     # Episodes (T56) — compact facts attached to a node
     # ------------------------------------------------------------------
 
-    def add_episode(self, keyword: str, text: str, turn: "int | None" = None) -> bool:
+    def add_episode(self, keyword: str, text: str, turn: "int | None" = None) -> dict:
         """Attach one compact fact sentence to ``keyword`` for this turn.
 
         Capped at EPISODES_PER_NODE per node (oldest dropped, its row deleted at
         the next save). One episode per (keyword, turn): a second call in the
-        same turn overwrites. Returns False when the node doesn't exist —
-        episodes only ever decorate real concepts."""
+        same turn overwrites.
+
+        Returns a REPORT of what the write actually did, so nothing is lost in
+        silence: ``{}`` (falsy) when nothing was stored — unknown node, or empty
+        text; otherwise ``{"stored": True}`` plus ``truncated`` (characters cut)
+        and ``dropped_turns`` (episodes evicted by the cap) when the write lost
+        something. A limit you can cross without noticing is not a limit, it's a
+        trap: the caller is expected to surface these to the user."""
         keyword = self._norm(keyword)
         if self._node_map.get(keyword) is None:
-            return False
-        text = (text or "").strip()[:EPISODE_MAX_CHARS]
+            return {}
+        raw  = (text or "").strip()
+        text = raw[:EPISODE_MAX_CHARS]
         if not text:
-            return False
+            return {}
+        report: dict = {"stored": True}
+        if len(raw) > EPISODE_MAX_CHARS:
+            report["truncated"] = len(raw) - EPISODE_MAX_CHARS
         turn = self.turn_count if turn is None else turn
         eps = self.episodes.setdefault(keyword, [])
         eps[:] = [e for e in eps if e["turn"] != turn]
         eps.append({"turn": turn, "text": text})
         eps.sort(key=lambda e: e["turn"])
+        dropped: list[int] = []
         while len(eps) > EPISODES_PER_NODE:
             old = eps.pop(0)
+            dropped.append(old["turn"])
             self._removed_episodes.add((keyword, old["turn"]))
             self._dirty_episodes.discard((keyword, old["turn"]))
+        if dropped:
+            report["dropped_turns"] = dropped
         self._dirty_episodes.add((keyword, turn))
         self._removed_episodes.discard((keyword, turn))
         self._dirty = True
-        return True
+        return report
 
     def recent_episodes(self, keyword: str, n: int = 2) -> list[str]:
         """Latest ``n`` fact texts for a node, newest first (for pre_turn)."""
