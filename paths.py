@@ -93,6 +93,7 @@ def neurag_config() -> Path:
 
 
 def gm_bridges() -> Path:    return gm_home() / "bridges.db"   # was bridges.json (migrated once)
+def gm_state() -> Path:      return gm_home() / "state.db"    # blackboard (TTL + versioni)
 
 
 def data_paths() -> dict:

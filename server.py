@@ -319,6 +319,75 @@ async def _safety_net_note(tool_name: str, arguments: dict, result: str) -> str:
     return f"\n\n🧠 (GM safety-net) {forgotten}"
 
 
+def _inject_neuron_mode(arguments: dict) -> None:
+    """Modalità operative dal blackboard: se il talamo ha scritto `cervello/mode`
+    e `cervello/focus`, li inietta nelle chiamate a Neuron (get_context/pre_turn).
+    L'agente può sempre sovrascriverli passandoli esplicitamente. Best-effort:
+    blackboard assente o rotto → la chiamata passa senza modalità (= semantic)."""
+    try:
+        from gray_matter.state import state_get
+        entry = state_get("cervello/mode")
+        if entry and "mode" not in arguments:
+            arguments["mode"] = entry["value"]
+        focus = state_get("cervello/focus")
+        if focus and "focus" not in arguments:
+            arguments["focus"] = focus["value"]
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _tool_brainstorm(args: dict) -> list[TextContent]:
+    """Cervello (GM, talamo): seed + elementi piu' DISTANTI di Neuron/NeuRAG.
+    Nodi: distanza = 1-cos dalla vector_search di Neuron (vettori reali, come da
+    spec mock). Chunk: il rank di knowledge_query fa da proxy di distanza (l'ultimo
+    e' il meno atteso). Niente auto-combinazione; ordinati per distanza decrescente."""
+    import json as _json
+    import re as _re
+    seed = str(args.get("seed", "")).strip()
+    n = min(max(int(args.get("n", 5) or 5), 1), 10)
+    if not seed:
+        return [TextContent(type="text", text=(
+            "gray_matter_brainstorm: serve un 'seed' non vuoto. Combina il seed "
+            "con gli elementi piu' distanti (bassa similarita') di Neuron e NeuRAG."))]
+
+    pool: list[tuple[str, float]] = []   # (target, distance)
+    try:
+        out = await _call_server_async("neuron", "vector_search",
+                                       {"keywords": [seed], "top_n": 50})
+        for line in out.splitlines():
+            m = _re.search(r"cos=([\d.]+)", line)
+            if not m:
+                continue
+            kw = line.split("cos=")[0].strip()
+            if kw:
+                pool.append((kw, 1.0 - float(m.group(1))))
+    except Exception:  # noqa: BLE001 — neuron assente: resta solo il pool NeuRAG
+        pass
+
+    try:
+        out = await _call_server_async("neurag", "knowledge_query",
+                                       {"query": seed, "top_n": 8})
+        lines = [l.strip() for l in out.splitlines()
+                 if l.strip().startswith("[")]
+        total = max(len(lines), 1)
+        for i, l in enumerate(lines):
+            pool.append((l, (i + 1) / total))
+    except Exception:  # noqa: BLE001 — neurag assente: resta solo il pool Neuron
+        pass
+
+    if not pool:
+        return [TextContent(type="text", text=(
+            f"gray_matter_brainstorm: nessun materiale da Neuron/NeuRAG per "
+            f"'{seed}'."))]
+
+    scored = [{"idea": f"{seed} + {t}", "target": t, "distance": round(d, 4)}
+              for t, d in pool if t.lower() != seed.lower()]
+    scored.sort(key=lambda c: c["distance"], reverse=True)
+    body = _json.dumps({"seed": seed, "candidates": scored[:n]},
+                       ensure_ascii=False, indent=2)
+    return [TextContent(type="text", text=body)]
+
+
 _is_sleeping: bool = False
 
 # version= explicitly: without it the SDK reports ITS OWN version in the
@@ -385,6 +454,51 @@ async def list_tools() -> list[Tool]:
             "required": ["neuron_concept", "neurag_node"],
         },
     ))
+    tools.append(Tool(
+        name="gray_matter_state_set",
+        description="Blackboard (GM, talamo): pubblica key=value con TTL opzionale (secondi). Chiavi 'org/componente/nome'. Ritorna l'entry con versione.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Chiave, es. 'cervello/mode'"},
+                "value": {"description": "Valore arbitrario (JSON)"},
+                "ttl": {"type": "number", "description": "Scadenza in secondi (default: mai)"},
+            },
+            "required": ["key", "value"],
+        },
+    ))
+    tools.append(Tool(
+        name="gray_matter_state_get",
+        description="Blackboard: legge key. None se assente o scaduta (lo stato decade da solo).",
+        inputSchema={
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    ))
+    tools.append(Tool(
+        name="gray_matter_state_delta",
+        description="Blackboard: cambi dalla versione since in poi, filtro per prefisso di chiave (scadute incluse).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "prefix": {"type": "string", "description": "Prefisso chiave (default '')"},
+                "since_version": {"type": "integer", "description": "Versione da cui elencare i cambi (default 0)"},
+            },
+        },
+    ))
+    tools.append(Tool(
+        name="gray_matter_brainstorm",
+        description="Cervello (GM, talamo): combina un seed con gli elementi piu' DISTANTI (bassa similarita') di Neuron (nodi) e NeuRAG (chunk) — candidati inattesi, ordinati per distanza. Serve 'seed'.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "seed": {"type": "string", "description": "Concetto da cui generare idee"},
+                "n": {"type": "integer", "description": "Numero candidati (default 5, max 10)"},
+            },
+            "required": ["seed"],
+        },
+    ))
 
     # Tools from registered servers (F12: re-publish REAL schemas, fetched once
     # from each worker and cached; fall back to an empty schema if unavailable so
@@ -438,9 +552,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if neuron and neuron.is_alive() and neuron.collaborative:
             # max_tokens esplicito: `get_context` ha il suo budget in caratteri
             # ma il default (400) lo decideva Neuron, non l'utente.
-            tasks.append(_call_server_async("neuron", "get_context",
-                                            {"topic": topic, "depth": 1,
-                                             "max_tokens": MEMORY_MAX_TOKENS}))
+            n_args = {"topic": topic, "depth": 1,
+                      "max_tokens": MEMORY_MAX_TOKENS}
+            _inject_neuron_mode(n_args)   # modalità dal blackboard
+            tasks.append(_call_server_async("neuron", "get_context", n_args))
             labels.append("neuron")
 
         neurag = _registry.get_server("neurag")
@@ -588,6 +703,27 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                              arguments.get("rationale", ""))
         return [TextContent(type="text", text="Bridge saved." if created else "Bridge already exists.")]
 
+    if name == "gray_matter_state_set":
+        from gray_matter.state import state_set
+        entry = state_set(arguments["key"], arguments.get("value"),
+                          arguments.get("ttl"))
+        return [TextContent(type="text", text=json.dumps(entry))]
+
+    if name == "gray_matter_state_get":
+        from gray_matter.state import state_get
+        entry = state_get(arguments["key"])
+        return [TextContent(type="text", text=json.dumps(entry) if entry
+                            else "state: None (absent or expired)")]
+
+    if name == "gray_matter_state_delta":
+        from gray_matter.state import state_delta
+        delta = state_delta(arguments.get("prefix", ""),
+                            int(arguments.get("since_version", 0)))
+        return [TextContent(type="text", text=json.dumps(delta))]
+
+    if name == "gray_matter_brainstorm":
+        return await _tool_brainstorm(arguments)
+
     # A write to episodic memory can make a cached pulse stale: drop the entries
     # for the just-written topic so the next pulse rebuilds fresh (targeted, not a
     # full flush — other topics keep their cache).
@@ -598,6 +734,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     server = _registry.find_server_by_tool(name)
     if server is None:
         return [TextContent(type="text", text=f"Tool '{name}' not found in any registered server.")]
+
+    # Modalità dal blackboard: il talamo decide, Neuron esegue (parametro).
+    if server.name == "neuron" and name in ("get_context", "pre_turn"):
+        _inject_neuron_mode(arguments)
 
     result = await _call_server_async(server.name, name, arguments)
     # Rete di sicurezza stimoli: se il piggyback di Neuron non passa da troppi
