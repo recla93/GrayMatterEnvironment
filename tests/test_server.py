@@ -252,7 +252,7 @@ def test_resolve_context_normalizes_search_kws():
     srv._g = _make_registry_with({"default": g}, "default")
 
     try:
-        links, nodes, fallback, inherited, _ = srv._resolve_context(
+        links, nodes, fallback, inherited, _, _pats = srv._resolve_context(
             {"Kotlin Flow"},   # uppercase -- should still match
             depth=1, g=g, ctx="",
         )
@@ -275,7 +275,7 @@ def test_resolve_context_inheritance():
     srv._g = _make_registry_with({"default": default_g, "backend": child_g}, "backend")
 
     try:
-        links, nodes, fallback, inherited, _ = srv._resolve_context(
+        links, nodes, fallback, inherited, _, _pats = srv._resolve_context(
             {"kotlin flow"},
             depth=1, g=child_g, ctx="",
         )
