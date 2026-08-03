@@ -130,6 +130,24 @@ def test_registry_failures_are_silent(monkeypatch, tmp_path):
     assert m.installed_slugs() == {"neuron"}, "a broken file must not hide a good one"
 
 
+def test_only_one_hook_speaks_per_session(tmp_path):
+    """Il bug del 2026-08-03: la sessione si apriva con lo STESSO blocco due
+    volte, perché il plugin Cowork registra questo script da CLAUDE_PLUGIN_ROOT
+    e l'installer da ~/.claude/hooks — due percorsi, due esecuzioni, e la
+    risoluzione del proprietario non può accorgersene perché ogni processo vede
+    solo sé stesso. Il primo che rivendica la sessione parla."""
+    m = _hook()
+    assert m.claim("sess-abc", tmp_path) is True, "il primo deve parlare"
+    assert m.claim("sess-abc", tmp_path) is False, "il secondo deve tacere"
+    # sessioni diverse non si rubano il turno
+    assert m.claim("sess-xyz", tmp_path) is True
+    # fail-open: senza session_id si parla, meglio due volte che mai
+    assert m.claim("", tmp_path) is True
+    assert m.claim("", tmp_path) is True
+    # temp non scrivibile: si parla lo stesso, mai un'eccezione all'avvio
+    assert m.claim("sess-abc", tmp_path / "non" / "esiste") is True
+
+
 def test_hook_imports_no_tool_package():
     """stdlib only: importing neuron/gray_matter here would make a broken venv
     able to slow down or fail every session start."""
