@@ -1,5 +1,29 @@
 ﻿# Changelog — Gray Matter
 
+## 1.4.0 (2026-08-03)
+- **Blackboard: lo stato condiviso dell'ecosistema.** `state_set` /
+  `state_get` / `state_delta` — key-value con TTL e versioni su `state.db`
+  (separato da `bridges.db`). È l'unica infrastruttura nuova del progetto
+  "cervello": lo stato condiviso non può vivere nei depositi, che sono locali
+  a ogni archivio. `state_delta` include le entry **scadute**: il consumatore
+  deve poter vedere che una chiave è decaduta, non solo che è sparita.
+- **La modalità di Neuron arriva dal blackboard.** `_inject_neuron_mode` legge
+  `cervello/mode` e `cervello/focus` e li inietta in `get_context`/`pre_turn`,
+  sia nel pass-through sia nel `pulse`. Il `mode` esplicito dell'agente vince
+  sempre: l'iniezione è un default, non un'imposizione.
+- **`gray_matter_brainstorm`**: un solo tool con il ciclo dentro. Genera
+  candidati da nodi Neuron (distanza `1-cos` sui vettori reali) e chunk NeuRAG
+  (rank come proxy della distanza), poi ordina per distanza decrescente — i più
+  inattesi in cima. Nessun `evaluate` separato: la valutazione è
+  l'ordinamento.
+- Fix: la guardia sulla finestra di console bocciava
+  `getattr(subprocess, "CREATE_NO_WINDOW", 0)`, che è corretto, perché il suo
+  pattern si fermava al primo identificatore. Una guardia rossa per un falso
+  positivo insegna a ignorare le guardie.
+- Nota di rilascio: le wheel di Gray Matter vendorizzate in `neuron/` e
+  `neurag/` sono state ricostruite. La 1.3.0 le aveva lasciate a 1.2.0 e il
+  test che esiste per accorgersene era rosso.
+
 ## 1.3.0 (2026-08-02)
 - **La memoria non perde più turni al riavvio.** Un worker killato senza
   preavviso lasciava l'ultima scrittura nel WAL di SQLite e il file principale
