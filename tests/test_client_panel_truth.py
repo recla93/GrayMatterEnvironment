@@ -123,3 +123,38 @@ def test_the_shortcut_marker_records_the_recipe_not_just_a_flag(monkeypatch, tmp
 
     sc.ensure_desktop_shortcut("gray-matter", "Gray Matter", ["-m", "gray_matter.cli", "gui"])
     assert calls["built"] == 1, "ricostruito di nuovo: non è più idempotente"
+
+
+# --- il registro degli errori non deve morire sull'errore che deve mostrare ---
+# Segnalato dal campo come "i client danno errori di path in GUI": UN config con
+# `command` in una forma inattesa (dict, lista vuota, numero) faceva alzare a
+# os.path.exists()
+#   TypeError: path should be string, bytes, os.PathLike or integer, not dict
+# che usciva da clients_state e portava via il PANNELLO INTERO — quindi anche i
+# client sani diventavano invisibili. I sei config non li scriviamo solo noi:
+# l'utente li edita a mano e i client cambiano schema, quindi la forma di
+# `command` e' input non fidato, non un invariante.
+from gray_matter.webgui import _as_command_path  # noqa: E402
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (r"C:\py\python.exe", r"C:\py\python.exe"),              # stringa: la forma normale
+    ([r"C:\py\python.exe", "-m", "x"], r"C:\py\python.exe"),  # argv: primo elemento
+    ([], None),                                             # lista vuota: niente IndexError
+    ([None, "python"], "python"),                           # primo utile, non il primo
+    ({"exe": "python"}, None),                              # dict: illeggibile, non esplode
+    (42, None),                                             # numero: idem
+    (None, None),                                           # assente
+    ("", None),                                             # stringa vuota != path valido
+])
+def test_command_shapes_never_reach_os_path(raw, expected):
+    assert _as_command_path(raw) == expected
+
+
+def test_every_shape_is_safe_for_os_path_exists():
+    """La garanzia che conta: qualunque cosa esca di qui si puo' dare a
+    os.path.exists() senza TypeError."""
+    for raw in ("x", ["x"], [], {}, 42, None, "", [None], ({"a": 1},)):
+        got = _as_command_path(raw)
+        assert got is None or isinstance(got, str)
+        os.path.exists(got or "")      # non deve alzare

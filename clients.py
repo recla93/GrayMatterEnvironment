@@ -188,6 +188,12 @@ CLIENTS: dict[str, dict] = {
     "codex": {"label": "Codex CLI", "paths": lambda: [_home(".codex", "config.toml")],
               "keys": ["mcp_servers"], "style": "args", "format": "toml",
               "create_if_missing": False},
+    # ChatGPT non gira su questa macchina: non ha un file da scrivere, ci arriva
+    # via HTTP pubblico. "Registrarlo" significa accendere il bridge ed esporlo
+    # con un tunnel — `remote: True` e' quello che dice a register() di non
+    # cercargli un config e di non contarlo come "client non trovato".
+    "chatgpt": {"label": "ChatGPT", "paths": lambda: [], "keys": [],
+                "style": "remote", "remote": True, "create_if_missing": False},
 }
 
 
@@ -277,11 +283,24 @@ def _register_claude_cli(spec: dict, servers: list[str], py: str,
             if r.returncode != 0:
                 # l'errore VERO nel report, non un muto "cli failed"
                 tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["?"])[-1]
-                # "already exists in user config" = già registrato: è il caso
-                # IDEMPOTENTE (re-run dell'installer), non un errore. Segnalarlo
-                # rosso faceva sembrare fallito ogni reinstall.
+                # "already exists in user config": `claude mcp add` non aggiorna,
+                # rifiuta. Trattarlo come successo idempotente lasciava in piedi
+                # la entry VECCHIA — ed e' cosi' che, spostando il venv, Claude
+                # Code e' rimasto l'unico client puntato a un interprete che non
+                # esiste piu' (`spawn ... python.exe ENOENT`) mentre gli altri
+                # cinque erano stati riscritti. Non si puo' sapere se la entry
+                # esistente e' identica o stantia: si rimuove e si riscrive, cosi'
+                # dopo la registrazione il valore e' quello corrente, punto.
                 if "already exists" in tail.lower():
-                    continue
+                    rm = _claude_argv("mcp", "remove", "--scope", "user", s)
+                    if rm is not None:
+                        subprocess.run(rm, capture_output=True, text=True,
+                                       timeout=60, creationflags=_NO_WINDOW)
+                        r = subprocess.run(argv, capture_output=True, text=True,
+                                           timeout=60, creationflags=_NO_WINDOW)
+                    if r.returncode == 0:
+                        continue
+                    tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["?"])[-1]
                 ok = False
                 errors.append(f"{s}: {tail[:120]}")
         except Exception as exc:  # noqa: BLE001
@@ -388,6 +407,16 @@ def register(servers: "list[str] | None" = None, *, py: "str | None" = None,
                  "detail": "no installed servers to register"}]
     for ckey, spec in CLIENTS.items():
         if only and ckey not in only:
+            continue
+        if spec.get("remote"):
+            # Client che non gira qui (ChatGPT): non ha un config da scrivere,
+            # si raggiunge via bridge+tunnel. Solo se richiesto ESPLICITAMENTE —
+            # accendere un tunnel pubblico non e' una cosa da fare per default
+            # dentro un "registra nei client rilevati".
+            if not only:
+                continue
+            from gray_matter import chatgpt
+            results.append(chatgpt.register())
             continue
         paths = [p for p in spec["paths"]() if os.path.exists(p)]
         # One key across the three repos (I6): the peers read and write

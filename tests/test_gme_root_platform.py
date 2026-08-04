@@ -30,13 +30,13 @@ def home(tmp_path, monkeypatch):
 
 def test_macos_uses_the_same_root_as_every_data_location(home, monkeypatch):
     monkeypatch.setattr(gme.sys, "platform", "darwin")
-    assert gme.gme_root() == home / ".local" / "share" / "GrayMatterEnvironment"
+    assert gme.gme_root() == home / ".local" / "share" / "GrayMatterEnvironment" / "registry"
 
 
 def test_macos_keeps_reading_an_existing_library_registry(home, monkeypatch):
     """Aligning the rule must not make the GUI report 'no tools installed'."""
     monkeypatch.setattr(gme.sys, "platform", "darwin")
-    legacy = home / "Library" / "Application Support" / "GrayMatterEnvironment"
+    legacy = home / "Library" / "Application Support" / "GrayMatterEnvironment" / "registry"
     legacy.mkdir(parents=True)
     (legacy / "neuron.json").write_text("{}", encoding="utf-8")
 
@@ -45,8 +45,8 @@ def test_macos_keeps_reading_an_existing_library_registry(home, monkeypatch):
 
 def test_macos_prefers_the_aligned_root_once_it_exists(home, monkeypatch):
     monkeypatch.setattr(gme.sys, "platform", "darwin")
-    (home / "Library" / "Application Support" / "GrayMatterEnvironment").mkdir(parents=True)
-    aligned = home / ".local" / "share" / "GrayMatterEnvironment"
+    (home / "Library" / "Application Support" / "GrayMatterEnvironment" / "registry").mkdir(parents=True)
+    aligned = home / ".local" / "share" / "GrayMatterEnvironment" / "registry"
     aligned.mkdir(parents=True)
 
     assert gme.gme_root() == aligned
@@ -54,12 +54,12 @@ def test_macos_prefers_the_aligned_root_once_it_exists(home, monkeypatch):
 
 def test_linux_is_untouched(home, monkeypatch):
     monkeypatch.setattr(gme.sys, "platform", "linux")
-    assert gme.gme_root() == home / ".local" / "share" / "GrayMatterEnvironment"
+    assert gme.gme_root() == home / ".local" / "share" / "GrayMatterEnvironment" / "registry"
 
 
 def test_windows_is_untouched(home, monkeypatch):
     monkeypatch.setattr(gme.sys, "platform", "win32")
-    assert gme.gme_root() == home / "AppData" / "Local" / "GrayMatterEnvironment"
+    assert gme.gme_root() == home / "AppData" / "Local" / "GrayMatterEnvironment" / "registry"
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])

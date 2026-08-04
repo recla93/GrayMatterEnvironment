@@ -132,6 +132,24 @@ def _say(msg: str) -> None:
         pass
 
 
+def _as_command_path(cmd) -> "str | None":
+    """L'interprete dichiarato in un config client, o None se illeggibile.
+
+    I sei client scrivono `command` in forme diverse e NON controllate da noi:
+    stringa, lista argv, e — quando l'utente ha modificato il file a mano o il
+    client ha cambiato schema — anche dict o numeri. Restituire il valore grezzo
+    a `os.path.exists()` alzava un TypeError che usciva da clients_state e
+    portava via il pannello intero. Qui: str se si riesce, altrimenti None e il
+    chiamante lo segnala come problema di QUEL file.
+    """
+    if isinstance(cmd, str):
+        return cmd or None
+    if isinstance(cmd, (list, tuple)):
+        first = next((x for x in cmd if isinstance(x, str) and x), None)
+        return first
+    return None
+
+
 def _cli_argv(tool: str, *cmd: str) -> list[str]:
     """argv per un comando CLI di un ambiente (``python -m <tool>.cli <cmd...>``).
 
@@ -950,9 +968,21 @@ class Api:
                         node = node.get(k) if isinstance(node, dict) else None
                     if isinstance(node, dict) and "gray-matter" in node:
                         info["registered"] = True
-                        cmd = node["gray-matter"].get("command")
-                        info["command"] = cmd[0] if isinstance(cmd, list) else cmd
-                if info["registered"] and info["command"]:
+                        entry = node["gray-matter"]
+                        raw_cmd = entry.get("command") if isinstance(entry, dict) else None
+                        info["command"] = _as_command_path(raw_cmd)
+                        if info["command"] is None and raw_cmd is not None:
+                            # Forma che non sappiamo leggere: si SEGNALA, non si
+                            # passa a os.path.exists(). È così che un solo config
+                            # con `command` a dict (o lista vuota, o numero)
+                            # buttava giù l'INTERO pannello con
+                            #   TypeError: path should be string... not dict
+                            # cioè proprio il registro degli errori che muore
+                            # sull'errore che dovrebbe mostrare.
+                            info["problem"] = ("registered, but `command` has an "
+                                               f"unreadable shape ({type(raw_cmd).__name__}): "
+                                               f"{raw_cmd!r}")
+                if info["registered"] and isinstance(info["command"], str) and info["command"]:
                     if not os.path.exists(info["command"]):
                         info["problem"] = ("registered, but the interpreter is GONE: "
                                            f"{info['command']}")

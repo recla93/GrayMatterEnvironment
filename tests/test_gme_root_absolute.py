@@ -23,7 +23,12 @@ def test_gme_root_is_absolute_even_with_a_stripped_environment(monkeypatch, var)
 
     root = gme.gme_root()
     assert root.is_absolute(), f"gme_root() relativo senza {var}: {root}"
-    assert root.name == "GrayMatterEnvironment"
+    # La foglia e' `registry` sul layout nuovo, ma su una macchina che ha ancora
+    # il registro PIATTO pre-suite e' `GrayMatterEnvironment` stessa — ed e'
+    # giusto cosi', il ramo di compatibilita' deve vincere. L'invariante che
+    # questo test difende e' un altro: il path e' assoluto e sta sotto la radice
+    # suite, non nella cwd di turno.
+    assert "GrayMatterEnvironment" in root.parts, root
 
 
 def test_gme_root_prefers_the_platform_location(monkeypatch, tmp_path):
@@ -35,7 +40,7 @@ def test_gme_root_prefers_the_platform_location(monkeypatch, tmp_path):
     else:
         pytest.skip("macOS ancora la posizione a ~/Library, niente env var")
 
-    assert gme.gme_root() == tmp_path / "GrayMatterEnvironment"
+    assert gme.gme_root() == tmp_path / "GrayMatterEnvironment" / "registry"
 
 
 def test_reading_the_registry_creates_nothing(monkeypatch, tmp_path):

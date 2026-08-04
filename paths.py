@@ -26,15 +26,37 @@ SLUG = os.environ.get("NEURON_SLUG", "neuron")
 MANIFEST_SCHEMA = 1
 
 
-def _user_base() -> Path:
-    if os.environ.get("GM_HOME"):
-        return Path(os.environ["GM_HOME"])
+SUITE_DIR = "GrayMatterEnvironment"
+
+
+def _os_base() -> Path:
+    """La radice dati per-OS. Regola identica nei tre tool."""
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     else:
         base = os.environ.get("XDG_DATA_HOME") or os.path.join(
             os.path.expanduser("~"), ".local", "share")
-    return Path(base)
+    # LOCALAPPDATA/XDG vuoti (servizio, scheduled task, env ripulito) davano un
+    # path RELATIVO: la cartella finiva nella cwd del processo di turno. È il
+    # buco che gme.user_base() documenta di aver gia' tappato una volta.
+    return Path(base or os.path.expanduser("~"))
+
+
+def _user_base() -> Path:
+    """La radice UNICA della suite: <base>/GrayMatterEnvironment.
+
+    Prima erano quattro radici scollegate — `graymatter/` (GM),
+    `GrayMatterEnvironment/` (solo il registro), `neuron/graphs`, `neurag/` — e
+    nessuna diceva all'utente che appartenevano allo stesso prodotto. Una sola
+    cartella per i path json e per i dati dei tool: si vede cosa c'e', si copia
+    su un'altra macchina, si cancella, in un colpo solo.
+
+    GM_HOME resta l'override e vale la RADICE SUITE (non la base dell'OS), come
+    lo usano gia' install.ps1 e install.sh.
+    """
+    if os.environ.get("GM_HOME"):
+        return Path(os.environ["GM_HOME"])
+    return _os_base() / SUITE_DIR
 
 
 # --- Code / control (removed on uninstall) ---------------------------------
@@ -54,7 +76,25 @@ def neuron_graphs() -> Path:
         from neuron import paths as _np
         return _np.graphs_dir()
     except Exception:  # noqa: BLE001 — Neuron non installato: fallback storico
-        return _user_base() / SLUG / "graphs"
+        return legacy_or_new(_os_base() / SLUG / "graphs",
+                             _user_base() / SLUG / "graphs")
+
+
+def legacy_or_new(legacy: Path, new: Path) -> Path:
+    """LA regola di transizione, una sola volta: se i dati stanno ancora nella
+    vecchia posizione e la nuova non esiste, si continua a leggere la vecchia.
+
+    Cambiare dove si guarda non deve MAI poter far sparire una memoria: il
+    trasloco lo fa `migrate_to_suite_root()`, esplicitamente, e finche' non e'
+    avvenuto tutto continua a funzionare da dov'e'."""
+    try:
+        if new.exists():
+            return new
+        if legacy.exists():
+            return legacy
+    except OSError:
+        pass
+    return new
 
 
 def _neurag_dir_fallback() -> Path:
@@ -68,9 +108,9 @@ def _neurag_dir_fallback() -> Path:
     if os.environ.get("NEURAG_HOME"):
         return Path(os.environ["NEURAG_HOME"])
     current = _user_base() / "neurag"
-    legacy = Path.home() / ".local" / "share" / "neurag"
-    if current != legacy and legacy.exists() and not current.exists():
-        return legacy
+    for legacy in (_os_base() / "neurag", Path.home() / ".local" / "share" / "neurag"):
+        if current != legacy and legacy.exists() and not current.exists():
+            return legacy
     return current
 
 
@@ -92,6 +132,82 @@ def neurag_config() -> Path:
 
 def gm_bridges() -> Path:    return gm_home() / "bridges.db"   # was bridges.json (migrated once)
 def gm_state() -> Path:      return gm_home() / "state.db"    # blackboard (TTL + versioni)
+
+
+def migrate_to_suite_root(*, dry_run: bool = False) -> list[dict]:
+    """Porta le quattro vecchie radici sotto ``<base>/GrayMatterEnvironment``.
+
+    COPIA e verifica, poi rimuove l'originale — mai un move cieco: se la copia
+    non arriva intera, l'originale e' ancora li' ed e' `legacy_or_new()` a
+    continuare a leggerlo. Idempotente: rilanciarla non fa nulla.
+
+    Non tocca il venv: non e' spostabile (pyvenv.cfg e gli script hanno path
+    assoluti) e i client MCP registrati puntano al suo interprete. Quello si
+    sposta ricreandolo, cioe' al prossimo -Clear.
+    """
+    import shutil
+
+    suite = _user_base()
+    base = _os_base()
+    moves = [
+        (base / "graymatter", suite / "graymatter"),
+        (base / SLUG, suite / SLUG),
+        (base / "neurag", suite / "neurag"),
+        (Path.home() / ".local" / "share" / "neurag", suite / "neurag"),
+        (base / SUITE_DIR / "registry", suite / "registry"),   # no-op se gia' li'
+    ]
+    # Il registro piatto pre-suite: i .json stanno nella radice suite stessa.
+    out: list[dict] = []
+    for src, dst in moves:
+        try:
+            if not src.exists() or src.resolve() == dst.resolve():
+                continue
+        except OSError:
+            continue
+        rec = {"from": str(src), "to": str(dst), "ok": False, "detail": ""}
+        if dry_run:
+            rec.update(ok=True, detail="[dry-run]")
+            out.append(rec)
+            continue
+        try:
+            if dst.exists():
+                rec["detail"] = "destinazione gia' presente: lasciato dov'e'"
+                out.append(rec)
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src, dst)
+            src_n = sum(1 for _ in src.rglob("*") if _.is_file())
+            dst_n = sum(1 for _ in dst.rglob("*") if _.is_file())
+            if dst_n < src_n:
+                rec["detail"] = f"copia incompleta ({dst_n}/{src_n}): originale intatto"
+                out.append(rec)
+                continue
+            shutil.rmtree(src, ignore_errors=True)
+            rec.update(ok=True, detail=f"{dst_n} file")
+        except OSError as exc:
+            rec["detail"] = str(exc)
+        out.append(rec)
+
+    # Registro piatto -> registry/
+    flat = suite
+    reg = suite / "registry"
+    try:
+        loose = [p for p in flat.glob("*.json")] if flat.is_dir() else []
+        if loose and not dry_run:
+            reg.mkdir(parents=True, exist_ok=True)
+            for p in loose:
+                dest = reg / p.name
+                if not dest.exists():
+                    shutil.copy2(p, dest)
+                p.unlink(missing_ok=True)
+            out.append({"from": str(flat) + "/*.json", "to": str(reg),
+                        "ok": True, "detail": f"{len(loose)} entry"})
+        elif loose:
+            out.append({"from": str(flat) + "/*.json", "to": str(reg),
+                        "ok": True, "detail": "[dry-run]"})
+    except OSError as exc:
+        out.append({"from": str(flat), "to": str(reg), "ok": False, "detail": str(exc)})
+    return out
 
 
 def data_paths() -> dict:

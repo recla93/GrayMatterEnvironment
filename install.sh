@@ -69,21 +69,38 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 # Il repo GM (zip GitHub) BUNDLE-A entrambi i tool come sottocartelle: cercali
 # prima DENTRO il repo ($HERE), poi come sibling ($ROOT, checkout multi-repo).
-find_peer() {  # $1 = nome dir del tool → stampa il path se esiste
-    for d in "$HERE/$1" "$ROOT/$1"; do
-        [ -f "$d/pyproject.toml" ] && { echo "$d"; return 0; }
+# La cartella si IDENTIFICA dal pyproject, non dal nome. Confrontare il nome
+# esatto rendeva INVISIBILE, in silenzio, ogni peer scaricato come zip: GitHub
+# estrae in Neuron-master, neurag-main, gray-matter-main; uno zip di release in
+# neurag-1.3.1. È così che una full-suite finiva con Neuron installato e NeuRAG
+# no, senza un messaggio, perché "peer assente" è uno stato legittimo.
+project_name() {  # $1 = dir → stampa il nome del pacchetto dichiarato
+    [ -f "$1/pyproject.toml" ] || return 1
+    sed -n 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$1/pyproject.toml" 2>/dev/null | head -1 | tr 'A-Z_' 'a-z-'
+}
+find_peer_in() {  # $1 = nome pacchetto, $2 = parent
+    [ -d "$2" ] || return 1
+    for d in "$2/$1" "$2/$(printf '%s' "$1" | cut -c1 | tr 'a-z' 'A-Z')$(printf '%s' "$1" | cut -c2-)"; do
+        if [ -f "$d/pyproject.toml" ] && [ "$(project_name "$d")" = "$1" ]; then
+            echo "$d"; return 0
+        fi
+    done
+    for d in "$2"/*/; do
+        [ -d "$d" ] || continue
+        if [ "$(project_name "${d%/}" 2>/dev/null || true)" = "$1" ]; then
+            echo "${d%/}"; return 0
+        fi
     done
     return 1
 }
-# Variant: search siblings of a specific parent (for coupled mode)
-find_peer_in() {  # $1 = nome dir, $2 = parent
-    [ -f "$2/$1/pyproject.toml" ] && { echo "$2/$1"; return 0; }
-    return 1
+find_peer() {  # $1 = nome pacchetto → stampa il path se esiste
+    find_peer_in "$1" "$HERE" || find_peer_in "$1" "$ROOT" || return 1
 }
 
 
-NEURON_DIR=$(find_peer neuron || find_peer Neuron || true)
-NEURAG_DIR=$(find_peer neurag || find_peer Neurag || true)
+NEURON_DIR=$(find_peer neuron || true)
+NEURAG_DIR=$(find_peer neurag || true)
 # Wheel offline (pyturso non ha wheel win_amd64 su PyPI): si prendono da OGNI
 # vendor presente, non da quella di Neuron. I tre tool sono standalone — dare per
 # scontata neuron/vendor lasciava un install GM+NeuRAG senza wheel. pip accetta
@@ -101,9 +118,15 @@ done
 # Un install ESISTENTE non viene migrato (un venv non è spostabile, e i client MCP
 # registrati puntano al vecchio interprete): resta valido dov'è e converge al
 # prossimo --clear.
-GM_BASE="${GM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}"
+OS_BASE="${XDG_DATA_HOME:-$HOME/.local/share}"
+# Radice UNICA della suite; GM_HOME resta l'override e vale gia' la radice suite.
+GM_BASE="${GM_HOME:-$OS_BASE/GrayMatterEnvironment}"
 VENV="$GM_BASE/graymatter/.venv"
-[ -d "$GM_BASE/gray-matter/.venv" ] && [ ! -d "$VENV" ] && VENV="$GM_BASE/gray-matter/.venv"
+# Le due posizioni precedenti: un venv non e' spostabile, se ce n'e' gia' uno lo
+# si usa e converge alla nuova al primo --clear.
+for _old in "$OS_BASE/graymatter/.venv" "$OS_BASE/gray-matter/.venv"; do
+    if [ -d "$_old" ] && [ ! -d "$VENV" ]; then VENV="$_old"; break; fi
+done
 # INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
 # POSIX unlinks mapped files happily, so this is not the Windows lock that makes
 # pip fail there; the hazard here is a stale server writing to the same store
@@ -199,11 +222,11 @@ if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
     OTHER_PEERS=""
     case "$PEER_LABEL" in
         neuron|Neuron)
-            _d=$(find_peer_in neurag "$PEER_PARENT" 2>/dev/null || find_peer_in Neurag "$PEER_PARENT" 2>/dev/null || true)
+            _d=$(find_peer_in neurag "$PEER_PARENT" 2>/dev/null || true)
             [ -n "$_d" ] && OTHER_PEERS="$_d:NeuRAG"
             ;;
         neurag|Neurag)
-            _d=$(find_peer_in neuron "$PEER_PARENT" 2>/dev/null || find_peer_in Neuron "$PEER_PARENT" 2>/dev/null || true)
+            _d=$(find_peer_in neuron "$PEER_PARENT" 2>/dev/null || true)
             [ -n "$_d" ] && OTHER_PEERS="$_d:Neuron"
             ;;
     esac
@@ -232,13 +255,16 @@ if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
     done
 else
     # Full suite mode — tools bundled INSIDE the GM repo zip, or siblings.
-    [ -z "${GM_NO_NEURON:-}" ] && [ -n "$NEURON_DIR" ] && install_peer "$NEURON_DIR" "Neuron"
-    [ -z "${GM_NO_NEURAG:-}" ] && [ -n "$NEURAG_DIR" ] && install_peer "$NEURAG_DIR" "NeuRAG"
-    # Un peer assente veniva saltato in SILENZIO: chi scarica il solo repo GM si
-    # ritrovava il gateway da solo convinto di aver installato la suite, e lo
-    # scopriva molto dopo da un `status` con zero tool di memoria. Il gateway
-    # funziona benissimo anche da solo (pulse gestisce i server assenti) — ma
-    # va detto adesso, non intuito dopo. Non è un errore: si avvisa e si tira dritto.
+    #
+    # GM è l'ORCHESTRATORE: se un peer manca se lo scarica, non si limita a dire
+    # all'utente di clonarselo. Prima era il contrario e non aveva senso — un
+    # peer (neuron/install.sh) sa tirarsi dentro GM con tre fallback, mentre GM,
+    # l'unico che dichiara di installare la full suite, stampava un messaggio e
+    # proseguiva a metà. Nessun tag fisso: il branch di default è quello che la
+    # CI dei peer testa, e una costante da allineare a mano è la deriva che il
+    # guard su GM_VERSION ha appena chiuso. Ogni passo degrada: git → zip → avviso.
+    peer_repo() { case "$1" in neuron) echo "recla93/Neuron" ;; neurag) echo "recla93/neurag" ;; esac; }
+
     report_missing_peer() {  # $1 = label, $2 = dir repo, $3 = url
         echo ""
         echo "  [i] $1 not found next to Gray Matter — it will NOT be installed."
@@ -246,12 +272,69 @@ else
         echo "      To add it: clone $3 into a '$2' folder next to this one,"
         echo "      then run this installer again."
     }
-    [ -z "${GM_NO_NEURON:-}" ] && [ -z "$NEURON_DIR" ] && \
-        report_missing_peer "Neuron (semantic memory)" \
-                            "neuron" "https://github.com/recla93/Neuron"
-    [ -z "${GM_NO_NEURAG:-}" ] && [ -z "$NEURAG_DIR" ] && \
-        report_missing_peer "NeuRAG (knowledge base)" \
-                            "neurag" "https://github.com/recla93/neurag"
+
+    fetch_peer() {  # $1 = pacchetto, $2 = label → stampa il path, o niente
+        _repo=$(peer_repo "$1"); _target="$ROOT/$1"
+        echo "" >&2
+        echo "  $2 non è accanto a Gray Matter: lo scarico ($_repo)." >&2
+        if command -v git >/dev/null 2>&1; then
+            if git clone --depth 1 "https://github.com/$_repo.git" "$_target" >&2 2>&1; then
+                _d=$(find_peer_in "$1" "$ROOT" || true)
+                [ -n "$_d" ] && { echo "      [OK] $2 in $_d" >&2; echo "$_d"; return 0; }
+            fi
+            rm -rf "$_target"
+            echo "      git clone non utilizzabile - provo lo zip." >&2
+        fi
+        # zip del branch di default: main e master entrambi, invece di incollare
+        # qui il branch di ogni repo (si sposta senza avvisare). Lo zip estrae in
+        # <repo>-<branch> e find_peer lo riconosce dal pyproject, quindi il
+        # rename è un di più, non un requisito.
+        for _b in main master; do
+            _tmp=$(mktemp -d); _zip="$_tmp/$1.zip"
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL -o "$_zip" "https://github.com/$_repo/archive/refs/heads/$_b.zip" 2>/dev/null || true
+            elif command -v wget >/dev/null 2>&1; then
+                wget -qO "$_zip" "https://github.com/$_repo/archive/refs/heads/$_b.zip" 2>/dev/null || true
+            fi
+            if [ -s "$_zip" ] && command -v unzip >/dev/null 2>&1 && unzip -q "$_zip" -d "$_tmp" 2>/dev/null; then
+                _ex=$(find "$_tmp" -maxdepth 2 -name pyproject.toml -exec dirname {} \; 2>/dev/null | head -1)
+                if [ -n "$_ex" ]; then
+                    # rename best-effort: se fallisce si usa dov'è, invece di
+                    # buttare via il download
+                    if mv "$_ex" "$_target" 2>/dev/null; then _dest="$_target"; else _dest="$_ex"; fi
+                    if [ "$(project_name "$_dest" 2>/dev/null || true)" = "$1" ]; then
+                        echo "      [OK] $2 in $_dest" >&2; echo "$_dest"; return 0
+                    fi
+                fi
+            fi
+            rm -rf "$_tmp"
+        done
+        return 1
+    }
+
+    resolve_peer() {  # $1 = pacchetto, $2 = label, $3 = dir gia' trovata
+        [ -n "$3" ] && { echo "$3"; return 0; }
+        _f=$(fetch_peer "$1" "$2" || true)
+        [ -n "$_f" ] && { echo "$_f"; return 0; }
+        echo "      download non riuscito (rete/git assenti?)." >&2
+        report_missing_peer "$2" "$1" "https://github.com/$(peer_repo "$1")" >&2
+        return 1
+    }
+
+    if [ -z "${GM_NO_NEURON:-}" ]; then
+        NEURON_DIR=$(resolve_peer neuron "Neuron (semantic memory)" "$NEURON_DIR" || true)
+        if [ -n "$NEURON_DIR" ]; then
+            [ -d "$NEURON_DIR/vendor" ] && FINDLINKS="$FINDLINKS --find-links $NEURON_DIR/vendor"
+            install_peer "$NEURON_DIR" "Neuron"
+        fi
+    fi
+    if [ -z "${GM_NO_NEURAG:-}" ]; then
+        NEURAG_DIR=$(resolve_peer neurag "NeuRAG (knowledge base)" "$NEURAG_DIR" || true)
+        if [ -n "$NEURAG_DIR" ]; then
+            [ -d "$NEURAG_DIR/vendor" ] && FINDLINKS="$FINDLINKS --find-links $NEURAG_DIR/vendor"
+            install_peer "$NEURAG_DIR" "NeuRAG"
+        fi
+    fi
 fi
 
 # Last stop before the dependency phase (pyturso / fastembed write into
@@ -349,6 +432,15 @@ else CLIENT_SEL="detected"; fi
 # Dice a `cli install` che il padrone dell'ultima parola è questo script: il suo
 # "Done. Restart your AI apps." finiva in MEZZO all'output (peer, modello, icona)
 # e un log in cui un passo dopo falliva si leggeva come "finito, poi esploso".
+# Trasloco sotto la radice unica PRIMA di registrare: se i dati si spostano
+# dopo, manifest e registro puntano gia' ai path vecchi.
+"$VPY" -c "from gray_matter.paths import migrate_to_suite_root
+for r in migrate_to_suite_root():
+    print(('  [OK] ' if r['ok'] else '  [!] ') + r['from'] + ' -> ' + r['to'] + '  ' + r['detail'])" || true
+
+# Cosa c'era gia' e se e' allineato — vedi la nota in install.ps1.
+"$VPY" -m gray_matter.preflight || true
+
 export GM_INSTALLER=1
 "$VPY" -m gray_matter.cli install --client "$CLIENT_SEL" \
     || "$VPY" -m gray_matter.cli register --gateway --client "$CLIENT_SEL" || true

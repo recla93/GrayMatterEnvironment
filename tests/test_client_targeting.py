@@ -84,7 +84,7 @@ def test_detected_is_a_subset_of_known_clients(name):
 # --- The matrices stay as their owners decided -------------------------------
 
 CANONICAL = {"claude-desktop", "claude-code", "cursor", "vscode",
-             "opencode", "windsurf", "codex", "zed"}
+             "opencode", "windsurf", "codex", "zed", "chatgpt"}
 
 
 def test_all_three_tools_offer_the_same_clients():
@@ -94,6 +94,10 @@ def test_all_three_tools_offer_the_same_clients():
     registered, so that client got nothing). Superseded 2026-07-29.
 
     `vscode` covers GitHub Copilot: Copilot reads VS Code's own User/mcp.json."""
+    # `chatgpt` e' nell'elenco: e' remoto (bridge+tunnel, nessun config locale)
+    # ma DEVE esserci anche in standalone — un peer che offre meno client del
+    # gateway rende lo standalone inutile. Ognuno espone il proprio bridge:
+    # Neuron :8000, NeuRAG :8001, la suite intera :8002.
     sets = {name: set(_mod(name).CLIENTS) for name in TOOLS}
     for name, got in sets.items():
         assert got == CANONICAL, (

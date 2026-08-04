@@ -110,16 +110,30 @@ def _legacy_macos_root() -> Path:
 
 
 def gme_root() -> Path:
-    """GME folder location. Same per-OS rule as the rest of the suite.
+    """Dove vivono i JSON dei tool: ``<base>/GrayMatterEnvironment/registry``.
 
-    An existing registry always wins: a Mac that already registered its tools
-    under `~/Library/Application Support` keeps being read there, so aligning
-    the rule cannot make the GUI suddenly report "no tools installed"."""
-    current = user_base() / "GrayMatterEnvironment"
+    ``GrayMatterEnvironment/`` e' diventata la radice UNICA della suite (ci
+    stanno anche graymatter/, neuron/, neurag/), quindi il registro scende di un
+    livello: i suoi file non devono stare mescolati alle cartelle dati, o
+    "cancella il registro" e "cancella i dati" diventano lo stesso gesto.
+
+    Un registro ESISTENTE vince sempre — sia quello vecchio piatto in
+    ``GrayMatterEnvironment/*.json``, sia quello macOS in Library — cosi'
+    spostare la regola non puo' far dire alla GUI "nessun tool installato".
+    """
+    suite = user_base() / "GrayMatterEnvironment"
+    current = suite / "registry"
+    if current.is_dir():
+        return current
+    # registro piatto pre-suite: <base>/GrayMatterEnvironment/*.json
+    if suite.is_dir() and any(suite.glob("*.json")):
+        return suite
     if sys.platform == "darwin":
+        # Anche qui le due forme: registry/ e il piatto di prima.
         legacy = _legacy_macos_root()
-        if legacy != current and legacy.is_dir() and not current.is_dir():
-            return legacy
+        for cand in (legacy / "registry", legacy):
+            if cand.is_dir() and any(cand.glob("*.json")):
+                return cand
     return current
 
 
@@ -187,15 +201,65 @@ def read_tool(key: str) -> dict[str, Any] | None:
         return None
 
 
-def write_tool(data: dict[str, Any]) -> None:
-    """Write a tool's JSON to GME.  Atomic (tmp + rename)."""
+def _merge_entry(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """`new` sopra `old`, senza perdere quello che `new` non sa.
+
+    Tre regole, ognuna per una perdita di dati vista davvero:
+
+    * un valore nuovo a ``None`` NON cancella un valore vecchio reale.
+      ``register_installed()`` scrive sempre ``linked_to: None`` perche' non ha
+      modo di saperlo, e a ogni reinstall azzerava il gateway che gestisce il
+      tool.
+    * i dict si fondono in profondita' (``health``), non si sostituiscono: un
+      writer che aggiorna solo il pid buttava via ping/memoria/uptime.
+    * ``installed_at`` resta quello della PRIMA installazione. Riscriverlo a
+      ogni giro rendeva impossibile dire da quanto un tool e' li'.
+    """
+    out = dict(old)
+    for k, v in new.items():
+        if v is None and out.get(k) is not None:
+            continue
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            merged = dict(out[k])
+            merged.update({kk: vv for kk, vv in v.items()
+                           if vv is not None or merged.get(kk) is None})
+            out[k] = merged
+            continue
+        out[k] = v
+    if old.get("installed_at"):
+        out["installed_at"] = old["installed_at"]
+    return out
+
+
+def write_tool(data: dict[str, Any], *, merge: bool = True) -> None:
+    """Write a tool's JSON to GME.  Atomic (tmp + rename), e in MERGE.
+
+    Il registro e' condiviso: ci scrivono l'installer, la GUI, il monitor di
+    salute e ogni tool della suite, in momenti diversi e da versioni diverse.
+    Sovrascrivere il file intero con quello che sa UN solo writer e' come si
+    perdono campi che nessuno ha mai deciso di buttare. `merge=False` resta per
+    i casi in cui si vuole davvero azzerare l'entry.
+    """
     key = data.get("key")
     if not key:
         raise ValueError("JSON must have a 'key' field")
     ensure_gme()                      # the only place that creates the folder
     path = tool_json_path(key)
+    if merge:
+        existing = read_tool(key)
+        if existing is None and path.exists():
+            # File presente ma illeggibile (JSON rotto, troncato a meta' da un
+            # crash). Sovrascriverlo in silenzio significa distruggere l'unica
+            # copia di quello che c'era: si mette da parte, poi si riscrive.
+            try:
+                path.replace(path.with_suffix(".json.corrupt"))
+            except OSError:
+                pass
+        elif existing:
+            data = _merge_entry(existing, data)
     tmp = path.with_suffix(".tmp")
     _ensure_defaults(data)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
                    encoding="utf-8")
     tmp.replace(path)  # atomic on same filesystem

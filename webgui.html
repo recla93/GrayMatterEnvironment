@@ -176,7 +176,20 @@
   /* --- infrastructure panels --- */
   .infra{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-bottom:18px}
   .infra-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
-  .infra-card h4{margin:0 0 8px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  .infra-card h4{margin:0 0 8px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);font-weight:600;
+                 cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+  .infra-card h4:hover{color:var(--fg)}
+  /* Il caret ruota, il corpo sparisce. Niente altezze animate: la card cambia
+     contenuto a ogni refresh e un'animazione su altezza calcolata sfarfalla. */
+  .infra-card h4::before{content:"\25BE";font-size:9px;transition:transform .12s;opacity:.7}
+  .infra-card.collapsed h4::before{transform:rotate(-90deg)}
+  .infra-card.collapsed h4{margin-bottom:0}
+  .infra-card.collapsed > *:not(h4){display:none}
+  /* Console collassabile: si nasconde il log, la barra dei comandi resta —
+     serve poter fermare/avviare anche con la console chiusa. */
+  footer.collapsed #log{display:none}
+  footer.collapsed #stdin-bar{display:none}
+  #btn-console-toggle{min-width:26px}
   .infra-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px}
   .infra-row .label{color:var(--dim);min-width:80px;font-family:var(--mono)}
   .infra-row .value{color:var(--fg);font-family:var(--mono);word-break:break-all}
@@ -238,6 +251,7 @@
 
 <footer>
   <div class="bar">
+    <button id="btn-console-toggle" title=""></button>
     <span class="t" id="console-title"></span>
     <span class="run" id="running"></span>
     <span class="spacer"></span>
@@ -269,6 +283,8 @@ const STRINGS = {
     envs_title: "Ambienti",
     not_installed: "non installato",
     console_title: "Console",
+    console_collapse: "Chiudi la console",
+    console_expand: "Apri la console",
     btn_stop: "Ferma",
     btn_start: "Avvia",
     btn_copy: "Copia",
@@ -359,6 +375,8 @@ const STRINGS = {
     envs_title: "Environments",
     not_installed: "not installed",
     console_title: "Console",
+    console_collapse: "Collapse the console",
+    console_expand: "Expand the console",
     btn_stop: "Stop",
     btn_start: "Start",
     btn_copy: "Copy",
@@ -1037,6 +1055,21 @@ document.getElementById("btn-clear").addEventListener("click", async () => {
   document.getElementById("log").replaceChildren();
 });
 
+// Console collassabile. La barra con Avvia/Ferma resta SEMPRE visibile: chiudere
+// la console non deve togliere i comandi, solo il rumore.
+function applyConsoleCollapsed(){
+  const off = localStorage.getItem("gm_console_collapsed") === "1";
+  document.querySelector("footer").classList.toggle("collapsed", off);
+  const b = document.getElementById("btn-console-toggle");
+  b.textContent = off ? "▴" : "▾";
+  b.title = T(off ? "console_expand" : "console_collapse");
+}
+document.getElementById("btn-console-toggle").addEventListener("click", () => {
+  const off = localStorage.getItem("gm_console_collapsed") === "1";
+  localStorage.setItem("gm_console_collapsed", off ? "0" : "1");
+  applyConsoleCollapsed();
+});
+
 // Copia tutta la console: serve per mandare la trace di un errore. WebView2/
 // pywebview a volte non danno navigator.clipboard → fallback textarea+execCommand,
 // e come ultima rete un metodo Api lato Python che scrive negli appunti.
@@ -1068,6 +1101,21 @@ document.getElementById("btn-copy").addEventListener("click", async () => {
   } catch(e){ done(false); }
 });
 
+// Card collassabile. Lo stato sta in localStorage per chiave, non nel DOM:
+// refreshInfra() ricostruisce le card da zero a ogni giro, quindi qualunque
+// stato tenuto nell'elemento verrebbe buttato via al primo refresh.
+function infraCard(key, title){
+  const card = el("div", {class:"infra-card"});
+  if (localStorage.getItem("gm_collapsed_" + key) === "1") card.classList.add("collapsed");
+  const h = el("h4", {}, title);
+  h.addEventListener("click", () => {
+    const now = card.classList.toggle("collapsed");
+    localStorage.setItem("gm_collapsed_" + key, now ? "1" : "0");
+  });
+  card.append(h);
+  return card;
+}
+
 async function refreshInfra(){
   try {
     const [tunnel, bridge, cloud] = await Promise.all([
@@ -1077,8 +1125,7 @@ async function refreshInfra(){
     container.replaceChildren();
 
     // Tunnel card
-    const tCard = el("div", {class:"infra-card"});
-    tCard.append(el("h4", {}, T("tunnel_title")));
+    const tCard = infraCard("tunnel", T("tunnel_title"));
     if (tunnel.ok && tunnel.backends.length){
       tCard.append(el("div", {class:"infra-row"},
         el("span", {class:"label"}, T("tunnel_backend")),
@@ -1099,8 +1146,7 @@ async function refreshInfra(){
     container.append(tCard);
 
     // Bridge card
-    const bCard = el("div", {class:"infra-card"});
-    bCard.append(el("h4", {}, T("bridge_title")));
+    const bCard = infraCard("bridge", T("bridge_title"));
     if (bridge.ok){
       bCard.append(el("div", {class:"infra-row"},
         el("span", {class:"label"}, T("bridge_server")),
@@ -1119,8 +1165,7 @@ async function refreshInfra(){
     container.append(bCard);
 
     // Cloud card
-    const cCard = el("div", {class:"infra-card"});
-    cCard.append(el("h4", {}, T("cloud_title")));
+    const cCard = infraCard("cloud", T("cloud_title"));
     if (cloud.ok){
       for (const [name, db] of Object.entries(cloud.databases)){
         cCard.append(el("div", {class:"infra-row"},
@@ -1300,6 +1345,7 @@ function applyLang(){
   document.getElementById("loading-msg").textContent = T("loading_catalog");
   document.getElementById("nav-title").textContent = T("envs_title");
   document.getElementById("console-title").textContent = T("console_title");
+  applyConsoleCollapsed();
   document.getElementById("btn-start").textContent = T("btn_start");
   document.getElementById("btn-stop").textContent = T("btn_stop");
   document.getElementById("btn-copy").textContent = T("btn_copy");

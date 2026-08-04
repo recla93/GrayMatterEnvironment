@@ -34,26 +34,46 @@ $Root = Split-Path -Parent $Here
 $ForceArgs = @(); if ($Force) { $ForceArgs = @("--force-reinstall", "--no-deps") }
 # Il repo GM (zip GitHub) bundle-a i tool come sottocartelle: cerca prima
 # DENTRO il repo ($Here), poi come sibling ($Root, checkout multi-repo).
-function Find-Peer([string[]]$names) {
-    foreach ($n in $names) {
-        foreach ($base in @($Here, $Root)) {
-            $d = Join-Path $base $n
-            if (Test-Path (Join-Path $d "pyproject.toml")) { return $d }
+#
+# La cartella si IDENTIFICA dal pyproject, non dal nome. Confrontare il nome
+# esatto ("neuron"/"Neuron") rendeva INVISIBILE, in silenzio, ogni peer
+# scaricato come zip: GitHub estrae in `Neuron-master`, `neurag-main`,
+# `gray-matter-main`, e uno zip di release in `neurag-1.3.1`. È esattamente così
+# che un'installazione full-suite finiva con Neuron installato e NeuRAG no —
+# senza un solo messaggio, perché "peer assente" è uno stato legittimo.
+function Get-ProjectName([string]$dir) {
+    $toml = Join-Path $dir "pyproject.toml"
+    if (-not (Test-Path $toml)) { return "" }
+    foreach ($l in (Get-Content $toml -ErrorAction SilentlyContinue)) {
+        if ($l -match '^\s*name\s*=\s*"(.+?)"') {
+            return $Matches[1].ToLower().Replace('_', '-')
         }
+    }
+    return ""
+}
+function Find-PeerIn([string]$pkg, [string]$parent) {
+    if (-not $parent -or -not (Test-Path $parent)) { return $null }
+    # 1) nome esatto: il layout di sviluppo, e il caso piu' comune
+    foreach ($n in @($pkg, $pkg.Substring(0,1).ToUpper() + $pkg.Substring(1))) {
+        $d = Join-Path $parent $n
+        if ((Test-Path (Join-Path $d "pyproject.toml")) -and (Get-ProjectName $d) -eq $pkg) { return $d }
+    }
+    # 2) qualunque sottocartella il cui pyproject dichiari QUESTO pacchetto
+    foreach ($d in (Get-ChildItem -Directory $parent -ErrorAction SilentlyContinue)) {
+        if ((Get-ProjectName $d.FullName) -eq $pkg) { return $d.FullName }
     }
     return $null
 }
-# Variant: search siblings of a specific parent (for coupled mode)
-function Find-PeerIn([string[]]$names, [string]$parent) {
-    foreach ($n in $names) {
-        $d = Join-Path $parent $n
-        if (Test-Path (Join-Path $d "pyproject.toml")) { return $d }
+function Find-Peer([string]$pkg) {
+    foreach ($base in @($Here, $Root)) {
+        $d = Find-PeerIn $pkg $base
+        if ($d) { return $d }
     }
     return $null
 }
 
-$NeuronDir = Find-Peer @("neuron", "Neuron")
-$NeuragDir = Find-Peer @("neurag", "Neurag")
+$NeuronDir = Find-Peer "neuron"
+$NeuragDir = Find-Peer "neurag"
 # Wheel offline (pyturso non ha wheel win_amd64 su PyPI): si prendono da OGNI
 # vendor presente, non da quella di Neuron. I tre tool sono standalone — dare
 # per scontata `neuron/vendor` lasciava un install GM+NeuRAG senza wheel, cioè
@@ -214,13 +234,21 @@ function Stop-VenvProcesses([string]$VenvPath) {
 # scheduled task, env ripulito) `Join-Path ""` NON restituisce un path relativo,
 # solleva — e sotto EAP=Stop l'installer muore lì, prima di dire qualsiasi cosa.
 # È lo stesso buco che gme.user_base() documenta di aver già tappato in Python.
-$GmBase = if ($env:GM_HOME) { $env:GM_HOME }
-          elseif ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
+$OsBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
           elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE "AppData\Local" }
-          else { throw "Né GM_HOME né LOCALAPPDATA né USERPROFILE sono impostati: non so dove installare." }
-$Venv       = Join-Path $GmBase "graymatter\.venv"
-$LegacyVenv = Join-Path $GmBase "gray-matter\.venv"
-if ((Test-Path $LegacyVenv) -and -not (Test-Path $Venv)) { $Venv = $LegacyVenv }
+          else { throw "Né LOCALAPPDATA né USERPROFILE sono impostati: non so dove installare." }
+# Radice UNICA della suite. GM_HOME resta l'override e vale gia' la radice
+# suite, come in paths.py: sotto ci vanno graymatter/, registry/, neuron/,
+# neurag/ — una cartella sola da guardare, copiare o cancellare.
+$GmBase = if ($env:GM_HOME) { $env:GM_HOME } else { Join-Path $OsBase "GrayMatterEnvironment" }
+$Venv = Join-Path $GmBase "graymatter\.venv"
+# Le due posizioni precedenti, nell'ordine in cui sono esistite. Un venv non e'
+# spostabile (pyvenv.cfg e gli script hanno path assoluti, e i client MCP
+# puntano al suo interprete): se ce n'e' gia' uno lo si continua a usare, e
+# converge alla posizione nuova al primo -Clear.
+foreach ($old in @((Join-Path $OsBase "graymatter\.venv"), (Join-Path $OsBase "gray-matter\.venv"))) {
+    if ((Test-Path $old) -and -not (Test-Path $Venv)) { $Venv = $old; break }
+}
 Stop-VenvProcesses $Venv
 # -Clear: throw the venv away and rebuild. A "clean" option existed before, but
 # only as a letter in an interactive prompt — and -Force skipped that prompt, so
@@ -416,11 +444,11 @@ if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml
     # that matters is a GUI installer with no stdin, where Read-Host hangs.
     # Same env contract in both branches now.
     if ($PeerLabel -ne "neuron" -and $PeerLabel -ne "Neuron" -and -not $env:GM_NO_NEURON) {
-        $nd = Find-PeerIn @("neuron", "Neuron") $PeerParent
+        $nd = Find-PeerIn "neuron" $PeerParent
         if ($nd) { $OtherPeers += @{dir=$nd; label="Neuron"} }
     }
     if ($PeerLabel -ne "neurag" -and $PeerLabel -ne "Neurag" -and -not $env:GM_NO_NEURAG) {
-        $nd = Find-PeerIn @("neurag", "Neurag") $PeerParent
+        $nd = Find-PeerIn "neurag" $PeerParent
         if ($nd) { $OtherPeers += @{dir=$nd; label="NeuRAG"} }
     }
     # -Yes / GM_YES = "don't ask": include what was found (the recommended
@@ -450,13 +478,17 @@ if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml
     }
 } else {
     # Full suite mode — tools bundled INSIDE the GM repo zip, or siblings.
-    if (-not $env:GM_NO_NEURON -and $NeuronDir) { Install-Peer $NeuronDir "Neuron" }
-    if (-not $env:GM_NO_NEURAG -and $NeuragDir) { Install-Peer $NeuragDir "NeuRAG" }
-    # Un peer assente veniva saltato in SILENZIO: chi scarica il solo repo GM si
-    # ritrovava il gateway da solo convinto di aver installato la suite, e lo
-    # scopriva molto dopo da un `status` con zero tool di memoria. Il gateway
-    # funziona anche da solo (pulse gestisce i server assenti) — ma va detto
-    # adesso, non intuito dopo. Non è un errore: si avvisa e si tira dritto.
+    #
+    # GM è l'ORCHESTRATORE: se un peer manca se lo scarica, non si limita a dire
+    # all'utente di clonarselo. Prima era il contrario, e non aveva senso:
+    # neuron/install.ps1 (Get-GrayMatter) tira dentro GM con tre fallback, mentre
+    # GM — l'unico che dichiara di installare la full suite — stampava un
+    # messaggio e proseguiva a metà. Nessun tag fisso qui: il branch di default è
+    # quello che la CI dei peer testa, e una costante di versione da tenere
+    # allineata a mano è esattamente la deriva che il guard su GM_VERSION ha
+    # appena chiuso. Ogni passo degrada: git → zip → il vecchio messaggio.
+    $PeerRepos = @{ "neuron" = "recla93/Neuron"; "neurag" = "recla93/neurag" }
+
     function Report-MissingPeer([string]$Label, [string]$Dir, [string]$Url) {
         Write-Host ""
         Write-Host "  [i] $Label not found next to Gray Matter - it will NOT be installed."
@@ -464,13 +496,70 @@ if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml
         Write-Host "      To add it: clone $Url into a '$Dir'"
         Write-Host "      folder next to this one, then run this installer again."
     }
-    if (-not $env:GM_NO_NEURON -and -not $NeuronDir) {
-        Report-MissingPeer "Neuron (semantic memory)" `
-                           "neuron" "https://github.com/recla93/Neuron"
+
+    function Get-PeerFromGitHub([string]$pkg, [string]$label) {
+        $repo = $PeerRepos[$pkg]
+        $target = Join-Path $Root $pkg
+        Write-Host ""
+        Write-Host "  $label non è accanto a Gray Matter: lo scarico ($repo)."
+        # 1) git — aggiornabile, ed è quello che vuole uno sviluppatore.
+        if (Get-Command git -ErrorAction SilentlyContinue) {
+            # NIENTE 2>&1: git scrive "Cloning into..." su stderr e PS 5.1 lo
+            # trasformerebbe in un NativeCommandError su un clone riuscito.
+            & git clone --depth 1 "https://github.com/$repo.git" $target
+            $d = Find-PeerIn $pkg $Root
+            if ($d) { Write-Host "      [OK] $label in $d"; return $d }
+            Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
+            Write-Host "      git clone non ha prodotto un checkout usabile - provo lo zip."
+        }
+        # 2) zip del branch di default. `main` e `master` entrambi, invece di
+        #    incollare qui il branch di ogni repo: si sposta senza avvisare.
+        #    Lo zip estrae in `<repo>-<branch>` e Find-Peer ora lo riconosce dal
+        #    pyproject, quindi il rename è un di più, non un requisito.
+        $tmp = Join-Path $env:TEMP "gm-peer-$pkg-$PID"
+        foreach ($branch in @("main", "master")) {
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+            $zip = Join-Path $tmp "$pkg.zip"
+            try {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                Invoke-WebRequest -UseBasicParsing -OutFile $zip `
+                    -Uri "https://github.com/$repo/archive/refs/heads/$branch.zip"
+            } catch { continue }
+            if (-not (Test-Path $zip)) { continue }
+            try { Expand-Archive -Path $zip -DestinationPath $tmp -Force } catch { continue }
+            $ex = Get-ChildItem -Directory $tmp -ErrorAction SilentlyContinue |
+                  Where-Object { Test-Path (Join-Path $_.FullName "pyproject.toml") } |
+                  Select-Object -First 1
+            if (-not $ex) { continue }
+            # Il rename è best-effort: se fallisce (lock, permessi) si lascia la
+            # cartella dov'è e la si usa comunque, invece di buttare il download.
+            $dest = $target
+            try { Move-Item -Path $ex.FullName -Destination $dest -Force -ErrorAction Stop }
+            catch { $dest = $ex.FullName }
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+            if ((Get-ProjectName $dest) -eq $pkg) { Write-Host "      [OK] $label in $dest"; return $dest }
+        }
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        return $null
     }
-    if (-not $env:GM_NO_NEURAG -and -not $NeuragDir) {
-        Report-MissingPeer "NeuRAG (knowledge base)" `
-                           "neurag" "https://github.com/recla93/neurag"
+
+    function Resolve-Peer([string]$pkg, [string]$label, [string]$dir) {
+        if ($dir) { return $dir }
+        $fetched = Get-PeerFromGitHub $pkg $label
+        if ($fetched) { return $fetched }
+        Write-Host "      download non riuscito (rete/git assenti?)."
+        Report-MissingPeer $label $pkg "https://github.com/$($PeerRepos[$pkg])"
+        return $null
+    }
+
+    if (-not $env:GM_NO_NEURON) {
+        $NeuronDir = Resolve-Peer "neuron" "Neuron (semantic memory)" $NeuronDir
+        if ($NeuronDir) { $Find += Get-FindLinks @($NeuronDir); Install-Peer $NeuronDir "Neuron" }
+    }
+    if (-not $env:GM_NO_NEURAG) {
+        $NeuragDir = Resolve-Peer "neurag" "NeuRAG (knowledge base)" $NeuragDir
+        if ($NeuragDir) { $Find += Get-FindLinks @($NeuragDir); Install-Peer $NeuragDir "NeuRAG" }
     }
 }
 
@@ -609,6 +698,21 @@ function Invoke-BestEffort([string]$label, [scriptblock]$cmd) {
         Write-Host "  [!] $label skipped: $($_.Exception.Message)"
     } finally { $ErrorActionPreference = $prevEap }
 }
+
+# Trasloco sotto la radice unica, PRIMA di registrare qualsiasi cosa: se i dati
+# si spostano dopo, il manifest e il registro puntano gia' ai path vecchi.
+# Copia + verifica + rimozione, mai un move cieco (vedi migrate_to_suite_root).
+Invoke-BestEffort "migrazione sotto GrayMatterEnvironment" {
+    & $VPy -c "from gray_matter.paths import migrate_to_suite_root
+for r in migrate_to_suite_root():
+    print(('  [OK] ' if r['ok'] else '  [!] ') + r['from'] + ' -> ' + r['to'] + '  ' + r['detail'])"
+}
+
+# Cosa c'era gia' e se era allineato. Va DOPO l'install dei pacchetti (serve un
+# venv da cui importare) ma PRIMA di registrare i client, cosi' un interprete
+# morto o una suite incompleta si leggono qui e non come `spawn ... ENOENT`
+# tre giorni dopo. Non aggiusta niente da solo: dice cosa e come.
+Invoke-BestEffort "controllo dell'esistente" { & $VPy -m gray_matter.preflight }
 
 Write-Host "Installing the gateway (register + hooks + manifest)..."
 # Where to register: explicit -Client wins, else ask when there is a console,
