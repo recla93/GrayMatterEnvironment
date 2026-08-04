@@ -9,6 +9,7 @@ Runs as a stdio MCP server that:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import socket
@@ -48,7 +49,7 @@ _cfg = _settings.load()
 from gray_matter.cli import (GRAY_MATTER_HOST, GRAY_MATTER_PORT,  # noqa: E402
                              GRAY_MATTER_PORT_SPAN, resolve_port, write_port_file,
                              clear_port_file, port_is_free, gm_answers,
-                             _send_ipc, IPC_TOOL_TIMEOUT)
+                             _send_ipc, IPC_TOOL_TIMEOUT, ensure_ipc_token)
 HEARTBEAT_INTERVAL = _cfg["heartbeat_interval"]  # seconds
 HEARTBEAT_TIMEOUT = 15.0  # seconds — after 3 missed beats, mark dead
 IDLE_SLEEP_TIMEOUT = _cfg["idle_sleep_timeout"]  # sleep after this long idle
@@ -772,6 +773,11 @@ async def _prewarm_workers():
     `_worker_for` still handles it on demand. Disable with GM_PREWARM=0."""
     if os.environ.get("GM_PREWARM", "1" if _cfg["prewarm"] else "0") == "0":
         return
+    # Warming is the daemon's job when there is one: a gateway that pre-warms
+    # spawns exactly the local worker set the shared model exists to avoid, and
+    # it would do it eagerly at startup, before any tool call could delegate.
+    if _daemon_reachable():
+        return
     while True:
         for s in _registry.alive_servers():
             if s.name in _prewarmed or not s.collaborative:
@@ -863,8 +869,66 @@ def _reap_orphans() -> None:
         pass
 
 
+# --- Shared worker set ------------------------------------------------------
+# The workers hold the embedding models (~1.1 GB for the pair) AND the write
+# handle on the graph store. One set PER GATEWAY meant every open AI client paid
+# the gigabyte again and, worse, put another writer on the same DB — the clobber
+# risk pids.orphans() already warns about. So: the daemon owns the workers, and
+# a stdio gateway asks it over IPC. If no daemon answers, the gateway spawns its
+# own set exactly as before — the fallback is the old code path, untouched.
+_IS_DAEMON = False
+_daemon_gone_until = 0.0        # backoff so a missing daemon isn't probed per call
+
+
+def _daemon_reachable() -> bool:
+    global _daemon_gone_until
+    if _IS_DAEMON or os.environ.get("GM_SHARED_WORKERS", "1") == "0":
+        return False
+    if time.time() < _daemon_gone_until:
+        return False
+    if gm_answers(GRAY_MATTER_HOST, resolve_port()):
+        return True
+    _daemon_gone_until = time.time() + 30
+    return False
+
+
+async def _via_daemon(payload: dict, timeout: float = 60.0):
+    """Send one IPC request to the daemon; None means 'no daemon, do it yourself'.
+
+    Blocking socket work goes to the executor: this runs inside the stdio
+    server's event loop and a 60 s tool call would otherwise freeze the client.
+    """
+    if not _daemon_reachable():
+        return None
+    global _daemon_gone_until
+    loop = asyncio.get_running_loop()
+    try:
+        resp = await loop.run_in_executor(None, lambda: _send_ipc(payload, timeout))
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(resp, dict) or "error" in resp:
+        # A refused connection means the daemon died mid-flight -> fall back and
+        # stop probing for a bit. An "unauthorized" is NOT transient: still fall
+        # back, but it is worth seeing in the log rather than silently degrading.
+        err = (resp or {}).get("error", "")
+        if err == "unauthorized":
+            print("gray-matter: IPC token rejected — running workers locally",
+                  file=sys.stderr)
+        _daemon_gone_until = time.time() + 30
+        return None
+    return resp.get("result")
+
+
 async def _call_server_async(server_name: str, tool_name: str, arguments: dict) -> str:
-    """Call a server tool via its persistent worker (imported once, model kept warm)."""
+    """Call a server tool via its persistent worker (imported once, model kept warm).
+
+    Prefers the daemon's shared worker; spawns a local one only if there is none.
+    """
+    shared = await _via_daemon({"action": "call", "server": server_name,
+                                "tool": tool_name, "args": arguments},
+                               timeout=IPC_TOOL_TIMEOUT)
+    if shared is not None:
+        return shared
     lock = _worker_locks.setdefault(server_name, asyncio.Lock())
     async with lock:                              # one request at a time per pipe
         p = _worker_for(server_name)
@@ -916,6 +980,10 @@ async def _fetch_tool_schemas(server_name: str) -> dict:
     """F12: ask a server's worker for its real tool list (name -> {description,
     inputSchema}) so GM can re-publish accurate pass-through schemas. Best-effort:
     returns {} on any failure (caller falls back to an empty schema)."""
+    shared = await _via_daemon({"action": "schemas", "server": server_name},
+                               timeout=IPC_TOOL_TIMEOUT)
+    if shared is not None:
+        return shared
     lock = _worker_locks.setdefault(server_name, asyncio.Lock())
     async with lock:
         p = _worker_for(server_name)
@@ -1238,6 +1306,7 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
             raise SystemExit(1)
         return
     write_port_file(chosen)       # i client leggono qui la porta reale
+    ipc_token = ensure_ipc_token()   # segreto condiviso: lo crea chi fa il bind
     if chosen != GRAY_MATTER_PORT:
         print(f"gray-matter: porta preferita {GRAY_MATTER_PORT} occupata → uso {chosen}",
               file=sys.stderr)
@@ -1258,7 +1327,14 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     if action == "ping":
                         # Probe di identità: distingue un GM da un'app estranea
                         # sulla stessa porta (usato dal singleton + rendezvous).
+                        # Volutamente SENZA token: il probe deve funzionare prima
+                        # che chiunque conosca il segreto, e rivela solo "c'è un GM".
                         response = {"status": "ok", "gm": True}
+                    elif not hmac.compare_digest(str(msg.get("token", "")), ipc_token):
+                        # Ogni altra azione tocca la memoria (`call` esegue tool
+                        # arbitrari, `knowledge_cmd` scrive nel vault). Loopback
+                        # non è una barriera su una macchina multi-utente.
+                        response = {"error": "unauthorized"}
                     elif action == "register":
                         _registry.register(
                             name=msg["name"],
@@ -1290,12 +1366,24 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                         response = _build_stats()
                     elif action == "doctor":
                         response = await _build_doctor()
-                    elif action == "knowledge_cmd":
+                    elif action in ("call", "knowledge_cmd"):
+                        # ONE shared worker set per machine: a stdio gateway does
+                        # not spawn its own, it asks here. `knowledge_cmd` is the
+                        # older NeuRAG-only spelling of the same thing, kept so an
+                        # older CLI/GUI in the venv still works.
+                        srv = "neurag" if action == "knowledge_cmd" else msg.get("server", "")
                         tool_name = msg.get("tool", "knowledge_status")
                         tool_args = msg.get("args", {})
                         try:
-                            result = await _call_server_async("neurag", tool_name, tool_args)
+                            result = await _call_server_async(srv, tool_name, tool_args)
                             response = {"result": result}
+                        except Exception as e:
+                            response = {"error": str(e)}
+                    elif action == "schemas":
+                        # Same reason: the bootstrap must not spawn a local worker
+                        # just to learn the tool list.
+                        try:
+                            response = {"result": await _fetch_tool_schemas(msg.get("server", ""))}
                         except Exception as e:
                             response = {"error": str(e)}
                     elif action == "promote":
@@ -1380,10 +1468,44 @@ def _init_options() -> InitializationOptions:
     )
 
 
+def _ensure_daemon(wait: float = 5.0) -> bool:
+    """Make sure the machine-wide worker owner exists; True if we can delegate.
+
+    Without this the FIRST client still runs its own workers and only the second
+    one would share — i.e. the common single-client case would keep paying the
+    gigabyte and nothing would ever be shared.
+
+    `wait` is a budget against the MCP handshake, which is blocked while we sit
+    here: measured cold start to first `ping` is ~2 s (run_daemon opens the
+    listener concurrently with `_bootstrap_subservers`, so the slow model load
+    is NOT on this path). 5 s leaves headroom without risking a client-side
+    timeout. Best-effort throughout: if it does not come up we run local
+    workers, exactly as before.
+    """
+    if os.environ.get("GM_SHARED_WORKERS", "1") == "0":
+        return False
+    if gm_answers(GRAY_MATTER_HOST, resolve_port()):
+        return True
+    try:
+        _spawn_gray_matter()
+    except Exception:  # noqa: BLE001 — never block the MCP handshake
+        return False
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if gm_answers(GRAY_MATTER_HOST, resolve_port()):
+            return True
+        time.sleep(0.3)
+    return False
+
+
 def main() -> None:
     """Run Gray-Matter as a stdio MCP server with background IPC listener."""
     _record_self("stdio")
     _reap_orphans()
+    # Before any worker can be spawned locally: one shared set per machine.
+    if _ensure_daemon():
+        global _daemon_gone_until
+        _daemon_gone_until = 0.0
     async def _run():
         # Start background tasks
         ipc_task = asyncio.create_task(_ipc_listener(exit_on_busy=False))
@@ -1452,6 +1574,8 @@ def run_daemon() -> None:
     This is how Gray-Matter runs when started as a background daemon (autoregister
     or `gray-matter start`) — there's no MCP client to attach stdio to, so main()'s
     stdio_server() would just exit on a detached process."""
+    global _IS_DAEMON
+    _IS_DAEMON = True          # owns the workers: must never delegate to itself
     _record_self("daemon")
     _reap_orphans()
 

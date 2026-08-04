@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import signal
 import socket
 import struct
@@ -20,7 +21,14 @@ from gray_matter import __version__
 # mancava nel processo GUI, il catalogo risultava "illeggibile" e nessun
 # pulsante funzionava. `server.py` importa questi valori da qui (SSOT).
 GRAY_MATTER_HOST = "127.0.0.1"
-GRAY_MATTER_PORT = 9876          # porta PREFERITA (non più fissa: vedi sotto)
+# Porta PREFERITA (non più fissa: vedi sotto). GM_PORT la sposta di proposito —
+# lo scan del port-span reagisce a una collisione, ma non c'era modo di SCEGLIERE
+# (secondo utente sulla stessa macchina, test end-to-end accanto a una sessione
+# viva, porta bloccata da policy).
+try:
+    GRAY_MATTER_PORT = int(os.environ.get("GM_PORT") or 9876)
+except ValueError:
+    GRAY_MATTER_PORT = 9876
 GRAY_MATTER_PORT_SPAN = 40       # quante porte scandire se la preferita è occupata
 
 # Porta DINAMICA (2026-07-22): 9876 era fissa e faceva anche da singleton. Se
@@ -56,6 +64,51 @@ def clear_port_file() -> None:
         _port_file().unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# --- IPC auth -------------------------------------------------------------
+# The port takes tool calls (`call`, `knowledge_cmd`), so anything that can
+# reach it can read and WRITE the memory. It binds loopback only, but on a
+# multi-user box every local account reaches loopback. A shared secret in a
+# user-readable file is the smallest thing that closes it: whoever can read the
+# token can already read the graph DB next to it, so it grants nothing new.
+# `ping` stays unauthenticated on purpose — the singleton probe has to work
+# before anyone knows the token, and it discloses only "a GM is here".
+def _token_file() -> "Path":
+    from gray_matter import paths as _paths
+    return _paths.gm_home() / "ipc-token"
+
+
+def read_ipc_token() -> str:
+    try:
+        return _token_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def ensure_ipc_token() -> str:
+    """Return the shared secret, creating it if absent. Called by whoever binds.
+
+    O_EXCL, not "check then write": two gateways starting together would
+    otherwise each mint one and the loser would hold a token the daemon rejects.
+    The 0o600 is honoured on POSIX; on Windows the bits are ignored and the file
+    inherits the ACL of %LOCALAPPDATA%, which is already user-only.
+    """
+    existing = read_ipc_token()
+    if existing:
+        return existing
+    tok = secrets.token_hex(16)
+    p = _token_file()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(tok)
+        return tok
+    except FileExistsError:
+        return read_ipc_token()          # someone won the race: use theirs
+    except OSError:
+        return ""                        # unwritable home: degrade, don't block
 
 
 def port_is_free(host: str, port: int) -> bool:
@@ -119,6 +172,7 @@ IPC_TOOL_TIMEOUT = 60.0
 
 def _send_ipc(data: dict, timeout: float = IPC_TIMEOUT) -> dict:
     """Send a JSON IPC message to the local Gray-Matter process."""
+    data = {**data, "token": data.get("token") or read_ipc_token()}
     payload = json.dumps(data).encode("utf-8")
     length = struct.pack("!I", len(payload))
     try:
@@ -552,7 +606,13 @@ def cmd_install(dry_run: bool = False, client: str = "all") -> None:
             return
     print(("[dry-run] " if dry_run else "") + "Installing (gateway model)...")
     _print_results(executor.execute_install(dry_run=dry_run, only=only))
-    print("Done." + ("" if dry_run else " Restart your AI apps."))
+    # GM_INSTALLER=1 → install.ps1/install.sh is driving and has ~100 more lines
+    # to print (peers, embedding model, shortcut) plus its own terminator. This
+    # "Done. Restart your AI apps." landed in the MIDDLE of that, so a log where
+    # a later step failed read as "finished, then exploded". Only the outermost
+    # caller gets to say Done.
+    if not os.environ.get("GM_INSTALLER"):
+        print("Done." + ("" if dry_run else " Restart your AI apps."))
 
 
 def _uninstall_targets() -> dict:
@@ -564,14 +624,25 @@ def _uninstall_targets() -> dict:
     targets = [
         {"key": "hooks", "label": "Hook nei client",
          "path": "(configurazioni client)", "exists": bool(clients_list)},
+        # "Codice Gray Matter" used to point at `<gm_home>/app`, an empty folder.
+        # The code is in gm_home() (config, logs, manifest, state) and in the venv
+        # — and the venv is its own row because removing it also removes the
+        # peers' runtime, so it ships UNTICKED and needs an explicit yes.
         {"key": "code", "label": "Codice Gray Matter",
-         "path": str(paths.app_dir()), "exists": paths.app_dir().exists()},
+         "path": str(paths.gm_home()), "exists": paths.gm_home().exists()},
     ]
+    venv = paths.gm_venv()
+    if venv:
+        peers = paths.venv_peers()
+        targets.append({
+            "key": "venv", "default": False,
+            "label": "Venv condiviso" + (" — esegue anche " + ", ".join(peers) if peers else ""),
+            "size": paths.human_size(paths.dir_size(venv)),
+            "peers": peers, "path": str(venv), "exists": True})
+    # Same dict the removal plan gets, so the panel cannot offer a surface no
+    # action handles (it used to list neurag_config, which plan() never saw).
     data = [{"key": n, "name": n.replace("_", " "), "path": str(p), "exists": p.exists()}
-            for n, p in [("neuron_graphs", paths.neuron_graphs()),
-                         ("neurag_db", paths.neurag_db()),
-                         ("gm_bridges", paths.gm_bridges()),
-                         ("neurag_config", paths.neurag_config())]]
+            for n, p in sorted(paths.data_paths().items())]
     return {"scope": "gray-matter", "targets": targets, "data": data}
 
 
@@ -579,11 +650,12 @@ def _verify_uninstall() -> dict:
     """Accerta che GM sia davvero sparito: file rimossi + deregistrato dai client."""
     from gray_matter import paths, clients as _clients
     checks = {
-        "app_dir": not paths.app_dir().exists(),
         "manifest": not paths.manifest_path().exists(),
         "config": not paths.config_file().exists(),
         "logs": not paths.logs_dir().exists(),
         "pids": not paths.pids_path().exists(),
+        "state": not paths.gm_state().exists(),
+        "paths_record": not paths.env_file().exists(),
     }
     for entry in _clients.doctor():
         for slug in ("neuron", "neuron5", "neurag", "gray-matter"):
@@ -594,10 +666,11 @@ def _verify_uninstall() -> dict:
 
 def cmd_uninstall(purge_data: bool = False, yes: bool = False,
                   dry_run: bool = False, list_only: bool = False,
-                  as_json: bool = False) -> None:
+                  as_json: bool = False, venv: "bool | None" = None) -> None:
     """Uninstall: reap, deregister, remove hooks/code; memory is INTERACTIVE
     (asks per data path) unless --purge-data (INSTALLER-UX §6). `--list` elenca le
-    superfici; `--json` emette JSON (usato dal control center: esito + verifica)."""
+    superfici; `--json` emette JSON (usato dal control center: esito + verifica).
+    `--venv` rimuove anche il venv condiviso (default: NO — ci girano i peer)."""
     from gray_matter import executor
     if list_only:
         if as_json:
@@ -606,11 +679,13 @@ def cmd_uninstall(purge_data: bool = False, yes: bool = False,
             t = _uninstall_targets()
             print("Removable surfaces:")
             for x in t["targets"] + t["data"]:
+                size = f"  ({x['size']})" if x.get("size") else ""
                 print(f"  {'•' if x['exists'] else '·'} {x.get('label') or x.get('name')}"
-                      f"  [{x['path']}]")
+                      f"  [{x['path']}]{size}")
         return
     results = executor.execute_uninstall(
-        purge_data=purge_data, assume_yes=(yes or as_json), dry_run=dry_run)
+        purge_data=purge_data, assume_yes=(yes or as_json), dry_run=dry_run,
+        remove_venv=venv)
     if as_json:
         verification = {"ok": True, "checks": {}} if dry_run else _verify_uninstall()
         print(json.dumps({"ok": verification["ok"], "results": results,
@@ -914,6 +989,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="List the removable surfaces (--json for the GUI), remove nothing")
     uni_p.add_argument("--json", action="store_true",
                        help="JSON output: surfaces (--list) or result+verification (used by the control center)")
+    # Not covered by --yes on purpose: the venv also runs Neuron and NeuRAG, so
+    # removing it needs its own yes rather than riding along on a batch flag.
+    uni_p.add_argument("--venv", dest="venv", action="store_true", default=None,
+                       help="Also remove the shared venv (default: keep it — the peers run from it)")
+    uni_p.add_argument("--keep-venv", dest="venv", action="store_false",
+                       help="Never ask about the venv, keep it")
     renv = sub.add_parser("record-env",
                           help="Record the source folders of all three tools (used by the installer)")
     renv.add_argument("--root", default="", help="Workspace to scan for the components")
@@ -1087,7 +1168,7 @@ def main() -> None:
         cmd_install(args.dry_run, getattr(args, "client", "all"))
     elif args.command == "uninstall":
         cmd_uninstall(args.purge_data, args.yes, args.dry_run,
-                      args.list_only, args.json)
+                      args.list_only, args.json, args.venv)
     elif args.command == "record-env":
         cmd_record_env(args.root, args.gm, args.neurag, args.neuron)
     elif args.command == "repair":

@@ -39,8 +39,6 @@ def _user_base() -> Path:
 
 # --- Code / control (removed on uninstall) ---------------------------------
 def gm_home() -> Path:      return _user_base() / "graymatter"
-def app_dir() -> Path:      return gm_home() / "app"
-def gm_exe() -> Path:       return app_dir() / ("gray-matter.exe" if os.name == "nt" else "gray-matter")
 def config_file() -> Path:  return gm_home() / "config.json"
 def logs_dir() -> Path:     return gm_home() / "logs"
 def manifest_path() -> Path: return gm_home() / "manifest.json"
@@ -97,10 +95,77 @@ def gm_state() -> Path:      return gm_home() / "state.db"    # blackboard (TTL 
 
 
 def data_paths() -> dict:
-    """The user's memory — treated specially at uninstall (interactive prompt)."""
+    """The user's memory — treated specially at uninstall (interactive prompt).
+
+    SSOT: the GUI panel (`cli._uninstall_targets`) and the removal plan both read
+    THIS. They used to enumerate their own lists, and the panel's extra
+    `neurag_config` row was therefore offered to the user and then removed by
+    nothing — a surface you could tick that no action ever handled.
+    """
     return {"neuron_graphs": neuron_graphs(),
             "gm_bridges": gm_bridges(),
-            "neurag_db": neurag_db()}
+            "neurag_db": neurag_db(),
+            "neurag_config": neurag_config()}
+
+
+# --- The venv: the biggest thing the installer writes -----------------------
+# It was in no model at all: `app_dir()` (<home>/app) was labelled "the code" in
+# the uninstall panel and is an empty folder nothing ever writes into, while the
+# real code — GM plus whichever peers share the interpreter, dependencies and all
+# — sat in a venv that uninstall never mentioned and never removed.
+def gm_venv() -> "Path | None":
+    """Where GM is installed, per the manifest; else this venv if we are in one.
+
+    The manifest is authoritative because the location has changed (installs made
+    before 1.4.1 live in `<base>/gray-matter/.venv`, not `<base>/graymatter/.venv`)
+    and a new uninstaller still has to find an old one."""
+    try:
+        rec = Manifest.load().data.get("venv")
+        if rec and Path(rec).is_dir():
+            return Path(rec)
+    except Exception:  # noqa: BLE001
+        pass
+    import sys
+    if sys.prefix != sys.base_prefix:      # running from a venv = that's the one
+        return Path(sys.prefix)
+    return None
+
+
+def venv_peers() -> list:
+    """Trio tools other than GM sharing gm_venv(), per the manifest.
+
+    Removing the venv removes THEIR runtime too, which is why uninstall shows it
+    as its own unticked row instead of folding it into "remove the code"."""
+    try:
+        comps = Manifest.load().components()
+    except Exception:  # noqa: BLE001
+        return []
+    return sorted(k for k in comps if k not in ("gray_matter", "gray-matter"))
+
+
+def dir_size(path) -> int:
+    """Bytes under *path* (0 if unreadable). Best-effort: the number exists to
+    tell the user a venv is worth 1 GB, not to be accounted to the byte."""
+    total = 0
+    try:
+        for entry in os.scandir(path):
+            try:
+                total += entry.stat(follow_symlinks=False).st_size
+                if entry.is_dir(follow_symlinks=False):
+                    total += dir_size(entry.path)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return total
+
+
+def human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} GB"
 
 
 # --- Source discovery: GM registra il PROPRIO sorgente, SCOPRE quelli dei peer

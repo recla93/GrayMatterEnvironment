@@ -72,8 +72,15 @@ def plan(state: dict) -> list[dict]:
 def record_install(state: dict, path=None):
     """Persist an install manifest reflecting `state`. The gateway is always marked
     registered; sub-tools are marked present (data ensured) but not registered."""
+    import sys
     from gray_matter import paths as _paths   # lazy: keeps plan() import-free/testable
     m = _paths.Manifest.load(path)
+    # The venv is the single biggest thing an install writes and it was recorded
+    # nowhere, so uninstall could neither show it nor remove it. Recording it also
+    # makes an install at the OLD location (<base>/gray-matter/.venv) removable by
+    # a current uninstaller — both layouts are in the wild.
+    if sys.prefix != sys.base_prefix:
+        m.data["venv"] = sys.prefix
     for comp in state.get("installed", []):
         if comp != GATEWAY:
             m.record_component(comp, present=True, registered=False)

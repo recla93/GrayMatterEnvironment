@@ -12,11 +12,18 @@ from __future__ import annotations
 
 
 def plan(manifest: dict, *, purge_data: bool = False,
-         orphan_pids=None, data_paths=None) -> list[dict]:
+         orphan_pids=None, data_paths=None, venv=None, venv_peers=None) -> list[dict]:
     """Ordered, precise removal plan from an install manifest.
 
     Order: reap live processes → deregister from clients → remove per-client hooks
-    → remove code/binaries → handle the memory (ask, or wipe if purge_data)."""
+    → remove code/binaries → handle the memory (ask, or wipe if purge_data) → the
+    venv, last.
+
+    The venv is asked about, never assumed: it is shared, so removing it takes
+    Neuron's and NeuRAG's runtime with it (`venv_peers` names who else is in
+    there). `purge_data` does NOT imply it — that flag is about the user's
+    memory, and someone wiping their graphs is not thereby asking to uninstall
+    two other tools."""
     actions: list[dict] = []
     orphans = orphan_pids or []
     if orphans:
@@ -37,6 +44,9 @@ def plan(manifest: dict, *, purge_data: bool = False,
     for name, path in sorted((data_paths or {}).items()):
         actions.append({"action": "remove_data" if purge_data else "ask_data",
                         "name": name, "path": str(path)})
+    if venv:
+        actions.append({"action": "ask_venv", "path": str(venv),
+                        "peers": sorted(venv_peers or [])})
     return actions
 
 

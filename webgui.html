@@ -742,10 +742,20 @@ async function uninstallPanel(env, container){
   container.append(el("div", {class:"hint"}, "Ambito: " + (r.scope || env.key)));
   const checks = {};
   for (const t of (r.targets || [])){
+    // Only the venv is a real choice. Hooks and code are removed by every
+    // uninstall — they were rendered as tickboxes whose state was collected
+    // into `checks` and then never sent anywhere, so unticking them looked
+    // like it did something and did not.
+    const optional = t.key === "venv";
     const cb = el("input", {type:"checkbox", id:"ut_"+t.key});
+    cb.checked = optional ? (t.default === true) : true;
+    cb.disabled = !optional;
     checks[t.key] = cb;
+    const note = optional
+      ? (t.size ? " — " + t.size : "")
+      : (LANG === "en" ? " — always removed" : " — sempre rimosso");
     container.append(el("div", {class:"row"},
-      el("label", {for:"ut_"+t.key}, t.label,
+      el("label", {for:"ut_"+t.key}, t.label, note,
          t.exists ? "" : el("span", {class:"hint"}, " (assente)")),
       el("div", {}, cb, el("div", {class:"hint"}, t.path))));
   }
@@ -778,7 +788,8 @@ async function uninstallPanel(env, container){
     btn.disabled = true;
     const purge = purgeCb.checked;
     resultBox.replaceChildren(el("div", {class:"hint"}, T("migrating")));
-    const rr = await call("uninstall_run", {scope: env.key, purge_data: purge});
+    const rr = await call("uninstall_run", {scope: env.key, purge_data: purge,
+                                            remove_venv: !!(checks.venv && checks.venv.checked)});
     btn.disabled = false;
     resultBox.replaceChildren();
     if (rr && rr.error){

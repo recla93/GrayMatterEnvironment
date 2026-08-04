@@ -594,13 +594,19 @@ class Api:
         req = json.loads(args) if args else {}
         scope = req.get("scope", "gray-matter")
         purge_data = bool(req.get("purge_data", False))
-        self._emit(f"$ uninstall  scope={scope}  purge_data={purge_data}", "cmd")
+        # Its own flag, not folded into purge_data: that one is about the user's
+        # memory, this one takes the peers' runtime down with it.
+        remove_venv = bool(req.get("remove_venv", False))
+        self._emit(f"$ uninstall  scope={scope}  purge_data={purge_data}"
+                   f"  venv={remove_venv}", "cmd")
         tools = self._detect_uninstall_tools()
         if scope not in tools:
             return {"ok": False, "error": f"uninstall non disponibile per '{scope}'", "scope": scope}
         argv_template = tools[scope]
         try:
             extra = ["--purge-data"] if purge_data else []
+            if scope == "gray-matter":
+                extra.append("--venv" if remove_venv else "--keep-venv")
             argv = _cli_argv(*argv_template, *extra)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}

@@ -112,7 +112,15 @@ def main() -> None:
             import traceback
             sys.stdout.write(json.dumps({"ok": False, "error": str(e),
                                          "trace": traceback.format_exc()}) + "\n")
-        sys.stdout.flush()
+        try:
+            sys.stdout.flush()
+        except OSError:
+            # The parent went away mid-answer and the pipe is gone: nobody is
+            # left to read this line. Was a noisy `OSError: [Errno 22]` at every
+            # gateway shutdown, and now that the workers are long-lived and
+            # shared it would fire on every daemon restart. Nothing to do but
+            # stop — the next request cannot arrive either.
+            break
 
 
 if __name__ == "__main__":

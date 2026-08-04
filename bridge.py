@@ -42,16 +42,23 @@ def _find_free_port(start: int, range_size: int = 1) -> int | None:
 def resolve_gm_cmd(override: list[str] | None) -> list[str]:
     """Return the command that launches gray_matter.server.
 
-    Priority: explicit override → the installed venv (via slug + LOCALAPPDATA)
-    → this interpreter."""
+    Priority: explicit override → the installed venv (via the GME registry)
+    → this interpreter.
+
+    The venv used to be guessed as ``%LOCALAPPDATA%\\Programs\\<slug>\\.venv``,
+    a location no installer has ever written: the branch could not fire, so the
+    bridge always fell through to ``sys.executable``. The registry is where the
+    interpreter is actually recorded (``gme.register_installed`` writes
+    ``sys.prefix`` at install time), and it is per-OS, so no WIN special case."""
     if override:
         return override
-    if WIN:
-        slug = os.environ.get("GM_SLUG", "gray-matter")
-        local = os.environ.get("LOCALAPPDATA", "")
-        venv_py = os.path.join(local, "Programs", slug, ".venv", "Scripts", "python.exe")
-        if os.path.isfile(venv_py):
+    try:
+        from gray_matter import gme
+        venv_py = gme.get_python("gray-matter")
+        if venv_py and os.path.isfile(venv_py) and venv_py != sys.executable:
             return [venv_py, "-m", "gray_matter.server"]
+    except (ImportError, OSError):
+        pass
     if importlib.util.find_spec("gray_matter.server") is not None:
         return [sys.executable, "-m", "gray_matter.server"]
     return [sys.executable, "-m", "gray_matter.server"]
@@ -96,13 +103,17 @@ def preflight(server_cmd: list[str], seconds: float = 3.0) -> bool:
 def _launch_tunnel(host: str, port: int) -> subprocess.Popen | None:
     """Launch `neuron tunnel` as a background process."""
     if importlib.util.find_spec("neuron.tunnel") is not None:
+        # Same dead `Programs\<slug>\.venv` guess as resolve_gm_cmd had — and here
+        # it mattered less only because find_spec already proves neuron is
+        # importable from THIS interpreter. Registry first, self as the fallback.
         python = sys.executable
-        if WIN:
-            slug = os.environ.get("NEURON_SLUG", "neuron")
-            local = os.environ.get("LOCALAPPDATA", "")
-            venv_py = os.path.join(local, "Programs", slug, ".venv", "Scripts", "python.exe")
-            if os.path.isfile(venv_py):
-                python = venv_py
+        try:
+            from gray_matter import gme
+            reg = gme.get_python("neuron")
+            if reg and os.path.isfile(reg):
+                python = reg
+        except (ImportError, OSError):
+            pass
         cmd = [python, "-m", "neuron.tunnel", "--port", str(port)]
     elif shutil.which("cloudflared"):
         cmd = ["cloudflared", "tunnel", "--url", f"http://{host}:{port}"]

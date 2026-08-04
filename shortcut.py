@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gray_matter.paths import gm_home
+
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
@@ -102,7 +104,11 @@ def _resolve_icon() -> str:
         ico = Path(gray_matter.__file__).parent / "assets" / "gray-matter.ico"
         if ico.is_file():
             # Copy to a persistent location out of the user's way
-            app_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "graymatter"
+            # gm_home(), not a hand-built LOCALAPPDATA join: that ignored GM_HOME
+            # and, off Windows where LOCALAPPDATA is unset, resolved to a RELATIVE
+            # `graymatter/` in whatever the cwd happened to be — the same
+            # stray-folder bug gme.user_base() already documents.
+            app_dir = gm_home()
             app_dir.mkdir(parents=True, exist_ok=True)
             dest = app_dir / "gray-matter.ico"
             if not dest.exists():

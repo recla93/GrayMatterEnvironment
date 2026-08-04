@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from gray_matter import installer, paths, uninstaller
@@ -87,7 +88,9 @@ def detect_state() -> dict:
     except Exception:  # noqa: BLE001
         orphans = []
     return {"installed": installed,
-            "gm_present": paths.app_dir().exists() or paths.manifest_path().exists(),
+            # The manifest, not a directory that existed only as a side effect of
+            # _install_gm creating it (see the note there).
+            "gm_present": paths.manifest_path().exists(),
             "clients": detected,
             "orphan_pids": orphans}
 
@@ -134,7 +137,10 @@ def _ensure_data(component: str, dry_run: bool) -> dict:
 
 
 def _install_gm(dry_run: bool) -> dict:
-    made = [paths.app_dir(), paths.logs_dir(), paths.gm_bridges().parent]
+    # app_dir() is gone: it was an empty `<gm_home>/app` that only ever existed
+    # because this line created it, and the uninstall panel then presented that
+    # empty folder to the user as "the code".
+    made = [paths.logs_dir(), paths.gm_bridges().parent]
     if not dry_run:
         for d in made:
             d.mkdir(parents=True, exist_ok=True)
@@ -418,8 +424,11 @@ def _remove_hook(client: str, path: str, dry_run: bool) -> dict:
 
 
 def _remove_code(dry_run: bool) -> dict:
-    targets = [paths.app_dir(), paths.logs_dir(), paths.config_file(),
-               paths.manifest_path(), paths.pids_path()]
+    # state.db and paths.json are GM's own control files in gm_home() and were in
+    # NO list — not code, not data — so every uninstall left them behind and the
+    # rmdir below could never succeed. app_dir() is gone (see _install_gm).
+    targets = [paths.logs_dir(), paths.config_file(), paths.manifest_path(),
+               paths.pids_path(), paths.gm_state(), paths.env_file()]
     if not dry_run:
         for t in targets:
             try:
@@ -429,16 +438,95 @@ def _remove_code(dry_run: bool) -> dict:
                     t.unlink(missing_ok=True)
             except OSError:
                 pass
-        try:  # gm_home itself, if now empty (bridges may survive as data)
-            paths.gm_home().rmdir()
-        except OSError:
-            pass
+        _sweep_gm_home()
     # `removed` on a dry-run would claim a deletion that never happened — the GUI
     # renders this list verbatim.
     return {"action": "remove_code", "ok": True,
             "removed": [] if dry_run else [str(t) for t in targets],
             "detail": ("[dry-run] would remove " + ", ".join(str(t) for t in targets)
                        if dry_run else "")}
+
+
+def _sweep_gm_home() -> None:
+    """Remove gm_home() once nothing the user chose to keep is left in it.
+
+    `rmdir` and not `rmtree` on purpose: whatever survives here survived because
+    the user answered "keep" (bridges.db is the realistic case), and the sweep
+    must not out-vote that. Called again after the venv goes, since that is the
+    last thing standing between a kept-nothing uninstall and an empty folder."""
+    try:
+        paths.gm_home().rmdir()
+    except OSError:
+        pass
+
+
+def _schedule_venv_delete(path: str) -> bool:
+    """Hand the leftovers to a detached shell that outlives us and retries.
+
+    The uninstall is normally run BY something inside the venv — the control
+    center, or `gray-matter uninstall` itself — and on Windows a loaded .pyd
+    cannot be unlinked, so the process asked to delete the venv is exactly the
+    one holding it open. No amount of retrying from in here fixes that: the
+    handles go away when we exit. So the deleter has to be a process that is not
+    us and does not live in that venv. Polls for ~5 minutes, then gives up.
+    """
+    home = str(paths.gm_home())
+    try:
+        if os.name == "nt":
+            # A .bat, not `cmd /c "<one long string>"`: passing the loop inline
+            # tripped cmd's quoting rules and died with "syntax of the file name
+            # is incorrect" (rc 123) while still exiting 0 from Python's view.
+            # A file has no quoting problem, loops properly, and deletes itself.
+            # `ping` is the sleep — `timeout` needs a console a detached process
+            # does not have.
+            bat = Path(tempfile.gettempdir()) / f"gm_rmvenv_{os.getpid()}.bat"
+            bat.write_text(
+                "@echo off\r\n"
+                f'set "T={path}"\r\n'
+                "for /l %%i in (1,1,60) do (\r\n"
+                '  if not exist "%T%" goto done\r\n'
+                '  rmdir /s /q "%T%" 2>nul\r\n'
+                "  ping -n 6 127.0.0.1 >nul\r\n"
+                ")\r\n"
+                ":done\r\n"
+                f'rmdir "{home}" 2>nul\r\n'      # empty parent, if nothing was kept
+                'del "%~f0"\r\n', encoding="ascii")
+            subprocess.Popen(["cmd", "/c", str(bat)],
+                             creationflags=0x00000008 | 0x00000200,  # DETACHED | NEW_GROUP
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        else:
+            script = (f'for i in $(seq 60); do [ -e "{path}" ] || break; '
+                      f'rm -rf "{path}" 2>/dev/null; sleep 5; done; '
+                      f'rmdir "{home}" 2>/dev/null || true')
+            subprocess.Popen(["sh", "-c", script], start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
+
+
+def _remove_venv(path: str, dry_run: bool) -> dict:
+    if dry_run:
+        return {"action": "remove_venv", "ok": True, "path": path,
+                "detail": f"[dry-run] would remove {path}"}
+    p = Path(path)
+    shutil.rmtree(p, ignore_errors=True)
+    if p.exists():
+        # Windows: a live server (or this very process) still maps its .pyd. The
+        # reap at the top of execute_uninstall covers the tracked PIDs; an AI
+        # client that respawned its stdio server is not tracked, and we cannot
+        # kill ourselves. Defer to a process that outlives us.
+        if _schedule_venv_delete(path):
+            return {"action": "remove_venv", "ok": True, "path": path,
+                    "detail": "in use — scheduled: removed once the app and your "
+                              "AI clients close (within ~5 min)"}
+        return {"action": "remove_venv", "ok": False, "path": path,
+                "detail": "could not fully remove — close your AI apps and re-run"}
+    _sweep_gm_home()
+    return {"action": "remove_venv", "ok": True, "path": path,
+            "detail": f"removed {path}"}
 
 
 def _register_gme(dry_run: bool) -> dict:
@@ -573,12 +661,18 @@ def execute_repair(wipe: list[str], *, dry_run: bool = False) -> list[dict]:
 
 
 def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
-                      dry_run: bool = False, ask=None) -> list[dict]:
+                      dry_run: bool = False, ask=None,
+                      remove_venv: "bool | None" = None) -> list[dict]:
     """Run `uninstaller.plan()` for real.
 
     Data policy stays interactive: `ask_data` prompts (via ``ask`` callable or
     stdin); ``assume_yes`` answers yes to every prompt; ``purge_data`` skips
     the question entirely (plan already emits remove_data).
+
+    ``remove_venv`` overrides the venv question: True removes it, False keeps it,
+    None asks (and keeps it in any non-interactive run). It is separate from
+    ``assume_yes`` because the venv is shared with the peers — see the ask_venv
+    branch below.
     """
     from gray_matter import clients as _clients
     manifest = paths.Manifest.load().data
@@ -590,8 +684,10 @@ def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
     orphans = [p for p in _tracked_pids() if _alive(p) and p != os.getpid()]
     if orphans:
         results.append(_reap(orphans, dry_run))
+    venv = paths.gm_venv()
     for act in uninstaller.plan(manifest, purge_data=purge_data,
-                                orphan_pids=[], data_paths=paths.data_paths()):
+                                orphan_pids=[], data_paths=paths.data_paths(),
+                                venv=venv, venv_peers=paths.venv_peers()):
         a = act["action"]
         if a == "reap":
             results.append(_reap(act["pids"], dry_run))
@@ -619,6 +715,27 @@ def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
                                 "name": act["name"], "detail": "kept"})
         elif a == "remove_data":
             results.append(_remove_data(act["name"], act["path"], dry_run))
+        elif a == "ask_venv":
+            size = paths.human_size(paths.dir_size(act["path"]))
+            who = (" (also runs " + ", ".join(act["peers"]) + ")") if act["peers"] else ""
+            # Unticked by default, deliberately: `assume_yes` is a batch flag for
+            # "don't block on prompts", and letting it tear down a shared venv
+            # would uninstall Neuron and NeuRAG as a side effect of `gray-matter
+            # uninstall --yes`. Removing it takes a real yes: an answered prompt
+            # or an explicit --venv.
+            if dry_run:
+                wanted = None
+            elif remove_venv is not None:
+                wanted = remove_venv
+            else:
+                wanted = (not assume_yes) and ask(
+                    f"Rimuovere anche il venv{who} — {size}? [{act['path']}]")
+            if wanted:
+                results.append(_remove_venv(act["path"], dry_run))
+            else:
+                detail = ("would ask" if dry_run else "kept") + f" — {size}{who}"
+                results.append({"action": "ask_venv", "ok": True,
+                                "path": act["path"], "detail": detail})
         else:
             results.append({"action": a, "ok": False, "detail": "unknown action"})
     return results

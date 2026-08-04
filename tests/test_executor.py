@@ -40,7 +40,7 @@ def test_install_creates_dirs_and_manifest(env):
     assert all(r["ok"] for r in res)
     assert paths.neuron_graphs().exists()
     assert paths.neurag_db().parent.exists()
-    assert paths.app_dir().exists()
+    assert paths.logs_dir().exists()
     assert paths.config_file().exists()
     m = json.loads(paths.manifest_path().read_text(encoding="utf-8"))
     assert m["components"]["gray_matter"]["registered"] is True
@@ -114,9 +114,63 @@ def test_uninstall_removes_hooks_code_and_asks_data(env):
     oc = json.loads((home / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
     assert not any("neuron-handshake" in p for p in oc.get("plugin", []))
     # code removed, memory KEPT (answered no)
-    assert not paths.app_dir().exists() and not paths.manifest_path().exists()
+    assert not paths.logs_dir().exists() and not paths.manifest_path().exists()
     assert (paths.neuron_graphs() / "g.json").exists()
     assert asked, "must ask before touching the memory"
+
+
+def _venv_install(env):
+    """Install with a fake venv recorded in the manifest, shared with Neuron."""
+    from gray_matter import paths
+    _run_install({"installed": ["neuron"], "gm_present": False, "clients": []})
+    venv = env / "fake-venv"
+    (venv / "Lib").mkdir(parents=True, exist_ok=True)   # re-installed per scenario
+    (venv / "Lib" / "big.pyd").write_bytes(b"x" * 2048)
+    m = paths.Manifest.load()
+    m.data["venv"] = str(venv)
+    m.save()
+    return venv
+
+
+def test_venv_is_offered_but_never_removed_by_assume_yes(env):
+    """--yes is a batch flag, not consent to uninstall the peers.
+
+    The venv is shared: removing it takes Neuron's and NeuRAG's runtime with it,
+    so it must survive every path except an explicit yes."""
+    from gray_matter import executor, paths
+    venv = _venv_install(env)
+    res = executor.execute_uninstall(assume_yes=True)
+    assert venv.exists(), "--yes must not tear down the shared venv"
+    row = [r for r in res if r["action"] == "ask_venv"]
+    assert row and "kept" in row[0]["detail"] and "neuron" in row[0]["detail"]
+
+    # purge_data is about the user's memory, not about the peers' runtime.
+    _venv_install(env)
+    executor.execute_uninstall(purge_data=True, assume_yes=True)
+    assert venv.exists()
+
+    # An explicit yes — and only that — removes it.
+    _venv_install(env)
+    assert paths.gm_venv() == venv
+    res = executor.execute_uninstall(remove_venv=True, ask=lambda q: False)
+    assert not venv.exists()
+    assert [r for r in res if r["action"] == "remove_venv"][0]["ok"]
+
+
+def test_locked_venv_is_deferred_not_reported_as_failure(env, monkeypatch):
+    """The uninstall usually runs FROM the venv it is deleting (GUI, or the CLI
+    itself), and Windows will not unlink a loaded .pyd. That is not an error —
+    it is handed to a detached process that outlives us."""
+    from gray_matter import executor
+    venv = _venv_install(env)
+    scheduled = []
+    monkeypatch.setattr(executor.shutil, "rmtree", lambda *a, **k: None)  # "locked"
+    monkeypatch.setattr(executor, "_schedule_venv_delete",
+                        lambda p: scheduled.append(p) or True)
+    res = executor.execute_uninstall(remove_venv=True, ask=lambda q: False)
+    row = [r for r in res if r["action"] == "remove_venv"][0]
+    assert scheduled == [str(venv)]
+    assert row["ok"] and "scheduled" in row["detail"]
 
 
 def test_uninstall_purge_wipes_data_without_asking(env):
@@ -135,7 +189,7 @@ def test_uninstall_dry_run_never_asks_nor_touches(env):
     res = executor.execute_uninstall(
         dry_run=True, ask=lambda q: pytest.fail("dry-run must not prompt"))
     assert all(r["ok"] for r in res)
-    assert paths.app_dir().exists() and paths.manifest_path().exists()
+    assert paths.logs_dir().exists() and paths.manifest_path().exists()
 
 
 def test_deregister_scrubs_json_client(env):
