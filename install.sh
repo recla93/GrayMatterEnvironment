@@ -205,7 +205,13 @@ standalone_install() {
     select_embed_model
     # `exit 1` inside $( ) only kills the subshell - propagate it explicitly.
     PY=$(ensure_python) || exit 1
-    VENV="${NEURAG_HOME:-$HOME/.local/share/neurag}/.venv"
+    # Radice UNICA della suite anche in standalone — vedi la nota in install.ps1.
+    _rbase="${XDG_DATA_HOME:-$HOME/.local/share}"
+    NEURAG_DIR_HOME="${NEURAG_HOME:-$_rbase/GrayMatterEnvironment/neurag}"
+    if [ -d "$_rbase/neurag/.venv" ] && [ ! -d "$NEURAG_DIR_HOME/.venv" ]; then
+        NEURAG_DIR_HOME="$_rbase/neurag"
+    fi
+    VENV="$NEURAG_DIR_HOME/.venv"
     # INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
     # POSIX unlinks mapped files happily, so this is not the Windows lock, but a
     # stale server writing to the same store during an upgrade is its own hazard.
@@ -273,7 +279,8 @@ done
 # GM is the required gateway: if missing, fetch it. Safest source first. These
 # remote paths activate once Gray Matter is published (GitHub release / PyPI);
 # until then they fail cleanly and we print guidance below.
-GM_VERSION="${GM_VERSION:-1.1.2}"
+# Da bumpare a ogni release di GM — vedi la nota in install.ps1.
+GM_VERSION="${GM_VERSION:-1.4.0}"
 GM_REPO="${GM_REPO:-recla93/gray-matter}"
 GM_SHA256="${GM_SHA256:-}"          # optional: pin the release tarball checksum
 CACHE="${GM_CACHE:-$HERE/.gm-bootstrap}"

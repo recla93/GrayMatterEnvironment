@@ -294,7 +294,15 @@ function Install-Standalone {
     # Ask before the long pip phase, write after it (needs the venv's python).
     $Chosen = Select-EmbedModel
     $PyExe = Ensure-Python      # installs it from python.org if absent
-    $Home_ = if ($env:NEURAG_HOME) { $env:NEURAG_HOME } else { Join-Path $env:LOCALAPPDATA "neurag" }
+    # Stessa regola di neuron/install.ps1: anche lo standalone sta nella radice
+    # UNICA della suite, cosi' aggiungere Gray Matter dopo non richiede traslochi.
+    $RBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
+    $Home_ = if ($env:NEURAG_HOME) { $env:NEURAG_HOME }
+             else { Join-Path (Join-Path $RBase "GrayMatterEnvironment") "neurag" }
+    $RLegacy = Join-Path $RBase "neurag"
+    if ((Test-Path (Join-Path $RLegacy ".venv")) -and -not (Test-Path (Join-Path $Home_ ".venv"))) {
+        $Home_ = $RLegacy
+    }
     $Venv = Join-Path $Home_ ".venv"
     # INSTALLER-UX §5.3 — kill what runs from this venv BEFORE pip writes to it.
     # A loaded .pyd cannot be replaced on Windows: pip dies with
@@ -416,7 +424,11 @@ foreach ($gm in @((Join-Path $Here "gray_matter"), (Join-Path (Split-Path -Paren
 
 # GM is the required gateway: if missing, fetch it. Safest source first. These
 # remote paths activate once Gray Matter is published (GitHub release / PyPI).
-$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.1.2" }
+# Da bumpare a ogni release di GM (RELEASE-CHECKLIST): una costante stantia qui
+# scarica una GM vecchia accanto a un NeuRAG corrente — la stessa deriva che in
+# Neuron aveva lasciato 1.1.2 mentre GM era a 1.4.0. La CI di NeuRAG la controlla
+# contro l'ultimo tag pubblicato, come quella di Neuron.
+$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.4.0" }
 $GmRepo    = if ($env:GM_REPO)    { $env:GM_REPO }    else { "recla93/gray-matter" }
 $GmSha256  = $env:GM_SHA256          # optional: pin the release zip checksum
 $Cache     = if ($env:GM_CACHE)   { $env:GM_CACHE }  else { Join-Path $Here ".gm-bootstrap" }

@@ -43,6 +43,24 @@ jobs:
       - working-directory: neurag
         run: python -m pytest tests/ -q
 
+      # Il bootstrap in install.ps1/install.sh scarica `v$GM_VERSION` di un ALTRO
+      # repo quando GM non e' in locale. Niente teneva allineata quella costante:
+      # in Neuron era rimasta a 1.1.2 mentre GM era a 1.4.0, e qui era identica.
+      # Una release non puo' piu' spedirla stantia in silenzio.
+      - name: GM_VERSION matches Gray Matter's latest release
+        shell: bash
+        working-directory: neurag
+        run: |
+          set -eu
+          ps1=$(sed -n 's/^\$GmVersion = .*else { "\(.*\)" }.*/\1/p' install.ps1)
+          sh=$(sed -n 's/^GM_VERSION="\${GM_VERSION:-\(.*\)}"/\1/p' install.sh)
+          latest=$(git ls-remote --tags --refs https://github.com/recla93/gray-matter.git 'v*' \
+                   | sed 's#.*refs/tags/v##' | sort -V | tail -1)
+          echo "install.ps1=$ps1  install.sh=$sh  gray-matter latest=$latest"
+          [ "$ps1" = "$sh" ] || { echo "::error::install.ps1 ($ps1) e install.sh ($sh) non concordano su GM_VERSION"; exit 1; }
+          [ -n "$latest" ] || { echo "::error::non riesco a leggere i tag di gray-matter"; exit 1; }
+          [ "$ps1" = "$latest" ] || { echo "::error::GM_VERSION e' $ps1 ma l'ultima release di Gray Matter e' $latest — bumpalo in install.ps1 e install.sh"; exit 1; }
+
   # --- 1. Compile pyturso for Windows (no win_amd64 on PyPI → we build it) ---
   build-pyturso-win:
     needs: test                      # red tests, no release

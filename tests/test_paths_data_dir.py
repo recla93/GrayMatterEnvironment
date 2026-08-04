@@ -29,10 +29,21 @@ def test_env_override_always_wins(clean, monkeypatch, tmp_path):
     assert paths.data_dir() == tmp_path / "custom"
 
 
-def test_clean_machine_uses_the_per_os_base(clean, tmp_path):
-    """Nothing on disk yet → the new, per-OS location."""
-    expected = (tmp_path / "AppData" / "Local" if os.name == "nt" else tmp_path / "xdg") / "neurag"
-    assert paths.data_dir() == expected
+def test_clean_machine_uses_the_suite_root(clean, tmp_path):
+    """Niente su disco → la radice UNICA della suite, accanto a Neuron, a GM e
+    ai json dei path: `<base>/GrayMatterEnvironment/neurag`."""
+    base = tmp_path / "AppData" / "Local" if os.name == "nt" else tmp_path / "xdg"
+    assert paths.data_dir() == base / "GrayMatterEnvironment" / "neurag"
+
+
+def test_a_pre_suite_vault_is_never_abandoned(clean, tmp_path):
+    """Il vault piatto sotto la base dell'OS (prima della radice unica) resta
+    leggibile finche' non lo si trasloca esplicitamente."""
+    base = tmp_path / "AppData" / "Local" if os.name == "nt" else tmp_path / "xdg"
+    flat = base / "neurag"
+    flat.mkdir(parents=True)
+    (flat / "knowledge.db").write_text("vault", encoding="utf-8")
+    assert paths.data_dir() == flat
 
 
 def test_an_existing_legacy_vault_is_never_abandoned(clean, tmp_path):

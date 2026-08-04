@@ -16,13 +16,23 @@ import time
 from pathlib import Path
 
 
-def _user_base() -> Path:
-    """Base dati per-OS. Regola IDENTICA a `neuron/config.py:user_data_dir()` e
-    a `gray_matter/paths.py:_user_base()`: è ciò che fa atterrare i tre tool
-    sotto UNA sola radice per utente."""
+SUITE_DIR = "GrayMatterEnvironment"
+
+
+def _os_base() -> Path:
+    """Base dati per-OS. Regola IDENTICA a `neuron/config.py:_os_base()` e a
+    `gray_matter/paths.py:_os_base()`."""
     if os.name == "nt":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home())
     return Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+
+
+def _user_base() -> Path:
+    """La radice UNICA della suite: `<base>/GrayMatterEnvironment`.
+
+    È ciò che fa atterrare i tre tool sotto una sola cartella per utente,
+    insieme ai json dei path: prima erano quattro radici scollegate."""
+    return _os_base() / SUITE_DIR
 
 
 def legacy_data_dir() -> Path:
@@ -49,9 +59,13 @@ def data_dir() -> Path:
     env = os.environ.get("NEURAG_HOME")
     if env:
         return Path(env)
-    current, legacy = _user_base() / "neurag", legacy_data_dir()
-    if current != legacy and legacy.exists() and not current.exists():
-        return legacy
+    current = _user_base() / "neurag"
+    # Due posizioni storiche, nell'ordine in cui sono esistite: la piatta sotto
+    # la base dell'OS (pre-suite) e quella POSIX di sempre. La prima che esiste
+    # vince, se la nuova non c'e' ancora.
+    for legacy in (_os_base() / "neurag", legacy_data_dir()):
+        if current != legacy and legacy.exists() and not current.exists():
+            return legacy
     return current
 
 
