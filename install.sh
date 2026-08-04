@@ -93,7 +93,17 @@ for _d in "$HERE" "$NEURON_DIR" "$NEURAG_DIR"; do
     [ -n "$_d" ] && [ -d "$_d/vendor" ] && FINDLINKS="$FINDLINKS --find-links $_d/vendor"
 done
 
-VENV="${GM_HOME:-$HOME/.local/share/gray-matter}/.venv"
+# Il venv sta sotto gm_home() (paths.py: <base>/graymatter) come tutto il resto di
+# GM: era l'UNICA cosa in `<base>/gray-matter/`, due cartelle quasi omonime per lo
+# stesso prodotto. GM_HOME è la BASE, come in paths.py — qui era letto come la
+# cartella gray-matter stessa, quindi la stessa variabile spediva venv e config in
+# posti scollegati; e XDG_DATA_HOME veniva ignorato solo qui.
+# Un install ESISTENTE non viene migrato (un venv non è spostabile, e i client MCP
+# registrati puntano al vecchio interprete): resta valido dov'è e converge al
+# prossimo --clear.
+GM_BASE="${GM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}"
+VENV="$GM_BASE/graymatter/.venv"
+[ -d "$GM_BASE/gray-matter/.venv" ] && [ ! -d "$VENV" ] && VENV="$GM_BASE/gray-matter/.venv"
 # INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
 # POSIX unlinks mapped files happily, so this is not the Windows lock that makes
 # pip fail there; the hazard here is a stale server writing to the same store
@@ -167,9 +177,14 @@ install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
     fi
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling $2 (forced)..." || echo "Installing $2 ($1)..."
     stop_venv_procs                 # same respawn window as install.ps1
+    # Peers share GM's venv and install after it, so a peer with looser pins can
+    # pull a shared dep past GM's cap (an old Neuron with an uncapped
+    # `mcp>=1.28` dragged in mcp 2.x and broke GM's server import). pip only
+    # warns and exits 0 — feed the peer's own caps, and see the pip check below.
+    CONS=""; [ -f "$1/constraints.txt" ] && CONS="-c $1/constraints.txt"
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS $FORCE_ARGS "$1" \
-        || "$VPY" -m pip install $FORCE_ARGS "$1" \
+    "$VPY" -m pip install $FINDLINKS $CONS $FORCE_ARGS "$1" \
+        || "$VPY" -m pip install $CONS $FORCE_ARGS "$1" \
         || echo "  WARNING: $2 install failed — continuing."
 }
 
@@ -301,8 +316,12 @@ gm_select_embed_model() {
 }
 gm_save_embed_model() {   # $1 = venv python
     # Never fatal (set -e is on): the model is refetched lazily on first use.
-    "$1" -c "from neuron.config import set_user_env
-print(set_user_env(NS_EMBED_MODEL='$GM_MODEL', NS_EMBED_DIM='$GM_DIM'))" >/dev/null 2>&1 || {
+    # Via environment, non interpolato nel sorgente: un nome modello con un
+    # apostrofo chiudeva la stringa Python e la scelta spariva dietro il
+    # generico "not saved" (stessa correzione in install.ps1).
+    GM_EMBED_NAME="$GM_MODEL" GM_EMBED_DIM="$GM_DIM" "$1" -c "import os
+from neuron.config import set_user_env
+print(set_user_env(NS_EMBED_MODEL=os.environ['GM_EMBED_NAME'], NS_EMBED_DIM=os.environ['GM_EMBED_DIM']))" >/dev/null 2>&1 || {
         echo "  (embedding model choice not saved - default stays active)"; return 0; }
     echo ""
     echo "  Downloading the embedding model ($GM_SIZE, one-time)."
@@ -327,6 +346,10 @@ fi
 if [ -n "${GM_CLIENT:-}" ]; then CLIENT_SEL="$GM_CLIENT"
 elif [ -t 0 ]; then CLIENT_SEL="ask"
 else CLIENT_SEL="detected"; fi
+# Dice a `cli install` che il padrone dell'ultima parola è questo script: il suo
+# "Done. Restart your AI apps." finiva in MEZZO all'output (peer, modello, icona)
+# e un log in cui un passo dopo falliva si leggeva come "finito, poi esploso".
+export GM_INSTALLER=1
 "$VPY" -m gray_matter.cli install --client "$CLIENT_SEL" \
     || "$VPY" -m gray_matter.cli register --gateway --client "$CLIENT_SEL" || true
 
@@ -355,6 +378,16 @@ if [ -d "$HOME/Desktop" ]; then
 fi
 
 echo ""
+# A peer install can leave the shared venv internally inconsistent (pip prints
+# "dependency resolver ... conflicts" and still exits 0), and the banner below
+# then declares success over a venv whose servers crash on import.
+if ! PIP_CHECK=$("$VPY" -m pip check 2>&1); then
+    echo ""
+    echo "  [!] The venv has conflicting dependencies - servers may fail to start:"
+    echo "$PIP_CHECK" | sed 's/^/      /'
+    echo "      Fix: update the offending source to a version with matching pins and re-run."
+fi
+
 # An explicit, affirmative terminator: callers could not tell "finished
 # successfully" from "still working" or "died quietly".
 GM_VER=$("$VPY" -m gray_matter.cli --version 2>/dev/null | tail -1)

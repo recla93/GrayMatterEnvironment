@@ -72,16 +72,36 @@ function Get-FindLinks([string[]]$dirs) {
 $Find = Get-FindLinks @($Here, $NeuronDir, $NeuragDir)
 
 # Find Python 3.10+ — prefer python on PATH (avoids MSIX redirect), then py launcher.
+# Returns the version as 3xx, or 0 for "not a usable interpreter". `[int]$v` used
+# to run unguarded on whatever the candidate printed, and under EAP=Stop a cast
+# failure is FATAL: a candidate that emits anything non-numeric on stdout — the
+# Windows Store App Execution Alias, a conda/pyenv shim banner, any wrapper that
+# greets before it answers — killed the installer with a raw .NET conversion
+# error. On the exact machine this code path exists for (nothing installed yet),
+# instead of the intended "Python 3.10+ not found → let me install it".
+# Same shape neuron/install.ps1's Test-PythonOk already used; GM, the entry point
+# a new user actually runs, was the one still doing it by hand.
+function Get-PythonVersion($exe, $rest) {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = & $exe @rest -c "import sys;print(sys.version_info[0]*100+sys.version_info[1])"
+        if ($LASTEXITCODE -ne 0) { return 0 }
+        $last = "$($out | Select-Object -Last 1)".Trim()   # ignore a banner above it
+        if ($last -notmatch '^\d+$') { return 0 }
+        return [int]$last
+    } catch {
+        return 0
+    } finally { $ErrorActionPreference = $prevEap }
+}
+
 $PyExe = $null; $PyArgs = @()
 foreach ($cand in @(@("python"), @("py","-3.14"), @("py","-3.13"), @("py","-3.12"),
                     @("py","-3.11"), @("py","-3.10"))) {
     $exe = $cand[0]
     if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
     $rest = @(); if ($cand.Count -gt 1) { $rest = $cand[1..($cand.Count-1)] }
-    try {
-        $v = & $exe @rest -c "import sys;print(sys.version_info[0]*100+sys.version_info[1])"
-    } catch { continue }
-    if ($v -and [int]$v -ge 310) { $PyExe = $exe; $PyArgs = $rest; break }
+    if ((Get-PythonVersion $exe $rest) -ge 310) { $PyExe = $exe; $PyArgs = $rest; break }
 }
 # Click-and-go bootstrap. Nota: lo stub Windows Store ("python" che apre lo
 # Store) fallisce il version-check sopra, quindi arriva qui = trattato come
@@ -92,17 +112,36 @@ if (-not $PyExe) {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "Installing Python 3.12 via winget (official python.org build)..."
         winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+        $wingetRc = $LASTEXITCODE
         # winget aggiorna il PATH ma non in QUESTO processo: usa il py launcher
         # dal percorso standard, o rilancia lo script.
         $pyLauncher = Join-Path $env:WINDIR "py.exe"
-        foreach ($cand in @(@("py","-3.12"), @($pyLauncher,"-3.12"), @("py","-3"))) {
+        # ...and the per-user install location: winget's PrependPath does not
+        # affect THIS process, and if the py launcher was not part of the package
+        # there is nothing on PATH to find. neuron/install.ps1 already looked here;
+        # without it a successful winget install still ended in "please RE-RUN".
+        $userPy = @()
+        foreach ($n in @("Python314", "Python313", "Python312", "Python311", "Python310")) {
+            $userPy += ,@((Join-Path $env:LOCALAPPDATA "Programs\Python\$n\python.exe"))
+        }
+        foreach ($cand in (@(@("py","-3.12"), @($pyLauncher,"-3.12"), @("py","-3")) + $userPy)) {
             $exe = $cand[0]
             if (-not (Get-Command $exe -ErrorAction SilentlyContinue) -and -not (Test-Path $exe)) { continue }
             $rest = @(); if ($cand.Count -gt 1) { $rest = $cand[1..($cand.Count-1)] }
-            try { $v = & $exe @rest -c "import sys;print(sys.version_info[0]*100+sys.version_info[1])" } catch { continue }
-            if ($v -and [int]$v -ge 310) { $PyExe = $exe; $PyArgs = $rest; break }
+            if ((Get-PythonVersion $exe $rest) -ge 310) { $PyExe = $exe; $PyArgs = $rest; break }
         }
         if (-not $PyExe) {
+            # winget's exit code was ignored, so a FAILED install (no network,
+            # package unavailable, winget too old) still printed "Python
+            # installed - please RE-RUN" — and re-running loops on that same
+            # message forever without ever saying what went wrong. Only claim
+            # success when winget actually reported it.
+            if ($wingetRc -ne 0) {
+                Write-Host "winget could not install Python (exit $wingetRc)."
+                Write-Host "Opening python.org - install Python 3.12 (check 'Add to PATH'), then re-run."
+                Start-Process "https://www.python.org/downloads/"
+                exit 1
+            }
             Write-Host "Python installed - please RE-RUN this installer (new PATH needs a fresh shell)."
             exit 0
         }
@@ -162,7 +201,26 @@ function Stop-VenvProcesses([string]$VenvPath) {
     }
 }
 
-$Venv = Join-Path $env:LOCALAPPDATA "gray-matter\.venv"
+# The venv lives under gm_home() (paths.py: <base>\graymatter) like every other
+# thing GM owns. It used to be the ONE item in `<base>\gray-matter\`: two nearly
+# identical folder names for the same product, which is the first thing every
+# tester asks about. $env:GM_HOME is the BASE here, exactly as in paths.py —
+# install.sh used to read it as the gray-matter dir itself, so the same variable
+# put the venv and the config in unrelated places.
+# An EXISTING install is not migrated: a venv is not movable (pyvenv.cfg and the
+# Scripts shims carry absolute paths) and the registered MCP clients point at the
+# old interpreter. It stays valid where it is and converges on the next -Clear.
+# Il fallback su USERPROFILE non è teorico: con LOCALAPPDATA vuoto (servizio,
+# scheduled task, env ripulito) `Join-Path ""` NON restituisce un path relativo,
+# solleva — e sotto EAP=Stop l'installer muore lì, prima di dire qualsiasi cosa.
+# È lo stesso buco che gme.user_base() documenta di aver già tappato in Python.
+$GmBase = if ($env:GM_HOME) { $env:GM_HOME }
+          elseif ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
+          elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE "AppData\Local" }
+          else { throw "Né GM_HOME né LOCALAPPDATA né USERPROFILE sono impostati: non so dove installare." }
+$Venv       = Join-Path $GmBase "graymatter\.venv"
+$LegacyVenv = Join-Path $GmBase "gray-matter\.venv"
+if ((Test-Path $LegacyVenv) -and -not (Test-Path $Venv)) { $Venv = $LegacyVenv }
 Stop-VenvProcesses $Venv
 # -Clear: throw the venv away and rebuild. A "clean" option existed before, but
 # only as a letter in an interactive prompt — and -Force skipped that prompt, so
@@ -316,6 +374,14 @@ if ($gmVer) {
 # install GM + the calling peer, then detect and ask about other siblings.
 function Install-Peer([string]$dir, [string]$label) {
     $pkg = (Split-Path -Leaf $dir).ToLower()
+    # Peers land in the SAME venv as GM and are installed after it, so a peer
+    # with looser pins can pull a shared dep past GM's cap (an old Neuron with
+    # an uncapped `mcp>=1.28` dragged in mcp 2.x and broke GM's server import).
+    # pip only warns about that and exits 0 — feed the peer's own caps when it
+    # ships them, and see the pip check before the final banner.
+    $Cons = @()
+    $cf = Join-Path $dir "constraints.txt"
+    if (Test-Path $cf) { $Cons = @("-c", $cf) }
     $peerVer = Test-AlreadyInstalled $pkg $dir
     if ($peerVer) {
         $choice = Prompt-InstallChoice $label $peerVer
@@ -331,8 +397,8 @@ function Install-Peer([string]$dir, [string]$label) {
         return
     }
     Write-Host "Installing $label ($dir)..."
-    & $VPy -m pip install @Find @ForceArgs $dir
-    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @ForceArgs $dir }
+    & $VPy -m pip install @Find @Cons @ForceArgs $dir
+    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Cons @ForceArgs $dir }
     if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $label install failed - continuing." }
 }
 
@@ -498,8 +564,14 @@ function Save-GmEmbedModel([string]$Vpy, $Model) {
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & $Vpy -c "from neuron.config import set_user_env
-print(set_user_env(NS_EMBED_MODEL='$($Model.name)', NS_EMBED_DIM='$($Model.dim)'))"
+        # Through the environment, not string-interpolated into the source: an
+        # -EmbedModel with an apostrophe in it used to close the Python literal
+        # and the choice was silently lost behind the generic "not saved" line.
+        $env:GM_EMBED_NAME = $Model.name
+        $env:GM_EMBED_DIM  = "$($Model.dim)"
+        & $Vpy -c "import os
+from neuron.config import set_user_env
+print(set_user_env(NS_EMBED_MODEL=os.environ['GM_EMBED_NAME'], NS_EMBED_DIM=os.environ['GM_EMBED_DIM']))"
         if ($LASTEXITCODE -ne 0) { Write-Host "  (embedding model choice not saved - default stays active)"; return }
         Write-Host "`n  Downloading the embedding model ($($Model.size), one-time)."
         Write-Host "  Large models take several minutes - this is NOT frozen."
@@ -513,6 +585,28 @@ print('EMBED_MODEL_READY')"
         else { Write-Host "  [!] download failed - Neuron retries on first use (install continues)." }
     } catch {
         Write-Host "  [!] embedding step skipped: $($_.Exception.Message)"
+    } finally { $ErrorActionPreference = $prevEap }
+}
+
+# Tells `cli install` that this script owns the final word, so its own
+# "Done. Restart your AI apps." does not land in the middle of our output.
+$env:GM_INSTALLER = "1"
+
+# `try { & native } catch { }` does NOT swallow a subprocess's stderr: the
+# best-effort steps below stayed silent about failing while printing a full
+# Python traceback into the log, right before the OK banner. Run them quietly and
+# say, in one line, what was skipped and why.
+function Invoke-BestEffort([string]$label, [scriptblock]$cmd) {
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try {
+        # Capture (not stream) so a failure can be reported as ONE line instead
+        # of a traceback; on success the output is passed through unchanged,
+        # since those lines are the confirmation the user is reading for.
+        $out = & $cmd 2>&1
+        if ($LASTEXITCODE -eq 0) { $out | ForEach-Object { Write-Host "$_" } }
+        else { Write-Host "  [!] $label skipped: $($out | Select-Object -Last 1)" }
+    } catch {
+        Write-Host "  [!] $label skipped: $($_.Exception.Message)"
     } finally { $ErrorActionPreference = $prevEap }
 }
 
@@ -531,16 +625,16 @@ if ($NeuronDir) {
 
 # Registro path sorgente (SoC): ogni componente registra il PROPRIO sorgente nel
 # proprio registro; GM li scopre chiedendo ai peer. Si riscrive a ogni install.
-try { & $VPy -m gray_matter.cli record-env --gm $Here } catch { }
-if ($NeuronDir) { try { & $VPy -m neuron record-paths --source $NeuronDir } catch { } }
-if ($NeuragDir) { try { & $VPy -m neurag.cli record-paths --source $NeuragDir } catch { } }
+Invoke-BestEffort "source path record (gray-matter)" { & $VPy -m gray_matter.cli record-env --gm $Here }
+if ($NeuronDir) { Invoke-BestEffort "source path record (Neuron)" { & $VPy -m neuron record-paths --source $NeuronDir } }
+if ($NeuragDir) { Invoke-BestEffort "source path record (NeuRAG)" { & $VPy -m neurag.cli record-paths --source $NeuragDir } }
 
 # --- GME Registry ---
 # `cli install` above already registers every tool (installer.plan emits
 # register_gme). Repeated here as the safety net for its `catch { cli register }`
 # path, which writes no manifest and no registry: one line, same single writer,
 # so the two can never drift the way six shell copies did.
-try { & $VPy -m gray_matter.gme register $Here } catch { }
+Invoke-BestEffort "GME registry" { & $VPy -m gray_matter.gme register $Here }
 
 # Desktop shortcut to the control center — a REAL Windows .lnk (with icon), not a
 # raw .cmd. Targets pythonw.exe so there is no console flash; falls back to the
@@ -552,7 +646,7 @@ if ($Desk) {
     if (-not (Test-Path $VPyw)) { $VPyw = $VPy }
 
     # App dir (persist the icon there, out of the user's way).
-    $AppDir = Join-Path $env:LOCALAPPDATA "graymatter"
+    $AppDir = Join-Path $GmBase "graymatter"   # = paths.gm_home(), GM_HOME included
     if (-not (Test-Path $AppDir)) { New-Item -ItemType Directory -Force -Path $AppDir | Out-Null }
 
     # Use the bundled GM.ico (pre-rendered, no conversion needed).
@@ -585,6 +679,20 @@ if ($Desk) {
             -Value "@`"$VPy`" -m gray_matter.cli gui" -Encoding ASCII
     }
 }
+
+# A peer install can leave the shared venv internally inconsistent (pip prints
+# "dependency resolver ... conflicts" and still exits 0), and the banner below
+# then declares success over a venv whose servers crash on import. Say it here,
+# where the user is still reading, instead of at the next MCP startup.
+$prevEap3 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+$pipCheck = & $VPy -m pip check     # no 2>&1: PS 5.1 wraps native stderr in ErrorRecords
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "  [!] The venv has conflicting dependencies - servers may fail to start:"
+    $pipCheck | ForEach-Object { Write-Host "      $_" }
+    Write-Host "      Fix: update the offending source to a version with matching pins and re-run."
+}
+$ErrorActionPreference = $prevEap3
 
 # An explicit, affirmative terminator: callers (and the user) could not tell
 # "finished successfully" from "still working" or "died quietly".

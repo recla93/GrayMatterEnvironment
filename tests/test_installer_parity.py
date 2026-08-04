@@ -417,3 +417,35 @@ def test_no_native_stderr_redirect_in_powershell(project):
         if re.search(r"&\s+[\$\(]", line) and "2>$null" in line:
             offenders.append(f"riga {n}: {line.strip()[:70]}")
     assert not offenders, "redirezioni native fatali:\n" + "\n".join(offenders)
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_interpreter_output_is_never_cast_unguarded(project):
+    """Il probe di versione non deve poter UCCIDERE l'installer.
+
+    `[int]$v` sull'output di un candidato Python era senza rete: sotto
+    ErrorActionPreference=Stop un cast fallito è FATALE, e su una macchina
+    pulita — l'unica per cui quel ramo esiste — basta che il candidato stampi
+    qualcosa di non numerico (l'App Execution Alias dello Store, un banner
+    conda/pyenv, un wrapper che saluta prima di rispondere) per far morire
+    l'installer con un errore .NET grezzo invece di "Python non trovato, lo
+    installo io". neuron/neurag validavano già con una regex; gray_matter, cioè
+    il punto d'ingresso che un utente nuovo lancia davvero, no.
+    """
+    lines = _read(project, ".ps1").splitlines()
+    offenders = []
+    for n, line in enumerate(lines, 1):
+        if line.lstrip().startswith("#"):
+            continue
+        # Un cast a [int]/[Version] di una VARIABILE va protetto da un controllo
+        # di forma: sulla riga stessa o nelle 3 sopra (il guard tipico è
+        # `if ($x -notmatch '^\d+$') { return 0 }`). `Sort-Object { [Version]$_ }`
+        # su una lista già filtrata da una regex passa per la stessa regola.
+        if not re.search(r"\[(int|Version)\]\s*[(\"']?\$", line):
+            continue
+        window = "\n".join(lines[max(0, n - 4):n])
+        if "-match" in window or "-notmatch" in window:
+            continue
+        offenders.append(f"riga {n}: {line.strip()[:70]}")
+    assert not offenders, (
+        "cast non protetto sull'output dell'interprete:\n" + "\n".join(offenders))
