@@ -1,6 +1,6 @@
 [project]
 name = "gray-matter"
-version = "1.4.0"
+version = "1.4.1"
 description = "Gray-Matter: MCP orchestrator/proxy that fronts Neuron + NeuRAG"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }

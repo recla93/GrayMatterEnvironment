@@ -1,5 +1,45 @@
 ﻿# Changelog — Gray Matter
 
+## 1.4.1 (2026-08-05)
+- **`doctor` controlla i puntatori sul disco, senza bisogno di un server vivo.**
+  Faceva `_send_ipc` come prima cosa e usciva con "Gray-Matter not running":
+  si arrendeva esattamente quando c'era da diagnosticare. Cinque check, uno per
+  guasto trovato davvero dopo la migrazione alla radice GME — registro,
+  interprete della entry SessionStart, hook deployato contro sorgente, comandi
+  registrati nei client, etichetta contro codice. Nessuno di questi rompe un
+  import, ed e' il motivo per cui nessuna suite li vedeva.
+- **Chiedi al codice, non alla targa.** Un install andato a meta' lascia il
+  dist-info nuovo sui file vecchi: da li' pip risponde "already satisfied" e
+  l'installer dice "already installed - skipping" su codice che non e' quello.
+  Misurato su un'installazione reale: tre pacchetti con la versione giusta e
+  72 / 64 / 486 file diversi dal sorgente. `install_drift()` confronta i FILE,
+  una implementazione sola condivisa da `install.ps1` e `install.sh`.
+- **Menu d'installazione che dice cosa fa.** Setup (cosa c'e' installato) e
+  Code (quanti file differiscono) in cima, piu' `[D]eps` — ripara le sole
+  dipendenze, il caso vero "venv da riparare" — e `[W]ipe`, reset totale che
+  DELEGA a `execute_uninstall(purge_data=True)` e chiede di digitare WIPE.
+  Una reinstallazione chiesta ora forza davvero: senza, pip non copiava nulla.
+- **Il registro GME declassa a `missing`.** `register_installed()` promuoveva
+  soltanto: un tool rimosso restava `installed` per sempre e l'hook continuava
+  ad annunciarlo. Si tocca solo cio' che dichiara questo venv — un peer nel suo
+  venv non e' affar nostro.
+- **Deploy Codex** (mirror del plugin cowork + enable in `config.toml`, con
+  prune degli stantii) e **scrub** che rimuove anche la cache: scrubbare il
+  blocco lasciando il mirror teneva il modello a chiamare tool inesistenti.
+- **Scritture sui config utente**: backup, `ensure_ascii=False` e replace
+  atomico ovunque, non solo in `_register_json`; verify-after-write con
+  rollback che controlla anche gli `evict`; root non-oggetto gestita con un
+  errore pulito invece di un crash.
+- **`register_flow` aggiorna il manifest**: l'installer lo scriveva ma `cli
+  register`/GUI passano di li' e lo lasciavano stantio, cosi' un uninstall
+  deregistrava un solo client e orfanizzava gli altri.
+- **`bridges.py` usa `paths.gm_bridges()`**: il path hardcoded divergeva, e lo
+  store vero non veniva mai offerto al wipe ne' rimosso all'uninstall.
+- **L'uninstall rimuove il `.env` cloud**: il token Turso restava su disco.
+- **`GM_YES`** e' confrontato con `"1"`: in PowerShell la stringa `"0"` e' TRUE,
+  quindi `-not $env:GM_YES` silenziava i prompt a chi metteva `GM_YES=0` per
+  averli.
+
 ## 1.4.0 (2026-08-03)
 - **Blackboard: lo stato condiviso dell'ecosistema.** `state_set` /
   `state_get` / `state_delta` — key-value con TTL e versioni su `state.db`
