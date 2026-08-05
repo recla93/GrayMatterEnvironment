@@ -9,4 +9,4 @@ The bridge to Neuron is by convention, not by dependency: Neuron clients that de
 both MCP servers can route get_context queries to neurag knowledge_query.
 """
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"

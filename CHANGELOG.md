@@ -1,5 +1,28 @@
 # Changelog — NeuRAG
 
+## 1.3.3 (2026-08-05)
+- **L'handshake non e' mai partito sulle installazioni col layout nuovo.** Il
+  SessionStart hook cercava il registro GME un livello sopra a dove vive
+  (`GrayMatterEnvironment/` invece di `GrayMatterEnvironment/registry/`):
+  `installed_slugs()` tornava sempre vuoto e l'hook usciva in silenzio.
+  Copie byte-identiche a quelle di Neuron, come impone `test_handshake.py`.
+- **Il mirror del plugin per Codex ora lo ABILITA.** Il deployer standalone
+  copiava il plugin nel cache di Codex ma non scriveva
+  `[plugins."neuron-guard@claude-cowork"] enabled = true`: un plugin deployato
+  che Codex non avrebbe mai caricato. E la rilevazione passa da "la cache
+  esiste" a "~/.codex esiste", creando la sottocartella — prima GM deployava e
+  lo standalone saltava sulla stessa macchina.
+- **L'entry di `opencode.json` non si duplica piu'.** GM la scriveva
+  `plugins/x.mjs` e lo standalone `./plugins/x.mjs`, confrontando la stringa
+  intera: installato GM e poi un peer, il file si ritrovava due entry per lo
+  stesso plugin. Ora si riconosce dal nome file.
+- **L'installer chiede al codice, non alla targa.** A parita' di versione pip
+  risponde "already satisfied" e non copia niente; e la versione e'
+  un'etichetta che un install andato a meta' rende falsa. Deriva rilevata,
+  refresh forzato.
+- **`claude mcp add` non lascia piu' in vita la entry vecchia**, che puo'
+  puntare a un venv stantio: si rimuove e si riscrive.
+
 ## 1.3.2 (2026-08-05)
 - **Il ranking vettoriale in SQL non ha mai girato.** `_vector_candidates`
   chiamava `vector_distance_cos(f32blob(embedding), f32blob(?))`, e `f32blob`
