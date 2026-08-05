@@ -75,7 +75,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 # prima DENTRO il repo ($HERE), poi come sibling ($ROOT, checkout multi-repo).
 # La cartella si IDENTIFICA dal pyproject, non dal nome. Confrontare il nome
 # esatto rendeva INVISIBILE, in silenzio, ogni peer scaricato come zip: GitHub
-# estrae in Neuron-master, neurag-main, gray-matter-main; uno zip di release in
+# estrae in Neuron-main, neurag-main, gray-matter-main; uno zip di release in
 # neurag-1.3.1. È così che una full-suite finiva con Neuron installato e NeuRAG
 # no, senza un messaggio, perché "peer assente" è uno stato legittimo.
 project_name() {  # $1 = dir → stampa il nome del pacchetto dichiarato

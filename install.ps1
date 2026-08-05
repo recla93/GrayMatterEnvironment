@@ -54,7 +54,7 @@ function Get-RepairArgs([switch]$Always) {
 #
 # La cartella si IDENTIFICA dal pyproject, non dal nome. Confrontare il nome
 # esatto ("neuron"/"Neuron") rendeva INVISIBILE, in silenzio, ogni peer
-# scaricato come zip: GitHub estrae in `Neuron-master`, `neurag-main`,
+# scaricato come zip: GitHub estrae in `Neuron-main`, `neurag-main`,
 # `gray-matter-main`, e uno zip di release in `neurag-1.3.1`. È esattamente così
 # che un'installazione full-suite finiva con Neuron installato e NeuRAG no —
 # senza un solo messaggio, perché "peer assente" è uno stato legittimo.
