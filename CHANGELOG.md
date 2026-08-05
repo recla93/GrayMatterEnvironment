@@ -1,5 +1,33 @@
 # Changelog — NeuRAG
 
+## 1.3.2 (2026-08-05)
+- **Il ranking vettoriale in SQL non ha mai girato.** `_vector_candidates`
+  chiamava `vector_distance_cos(f32blob(embedding), f32blob(?))`, e `f32blob`
+  non esiste in nessun build libSQL/pyturso (verificato su pyturso 0.6.1:
+  `Parse error: no such function: f32blob`). Ogni ricerca sollevava, l'`except`
+  la inghiottiva con un `pass`, e il ranking passava al cosine Python. Il
+  wrapper era di troppo: `vector_distance_cos` accetta già il blob. Stesso bug
+  trovato e corretto in Neuron (`fix/vector-sql-tier`), stessa origine: il
+  porting a mano fra i due file, dove la forma sopravvive e il dettaglio no.
+- **Il risultato non cambia, cambia solo chi lo calcola.** Verificato su 5
+  query con embedding reali: il ranking SQL e quello Python coincidono
+  esattamente. Era una perdita di prestazioni, non di correttezza — a
+  differenza di Neuron, dove il fallback Python saltava del tutto il seed.
+- **`_vector_sql_ok`**: latch di processo su "no such function". Tenuto
+  separato da `_vector_sql`, che dice quale *tier* è aperto: spegnere quello
+  manderebbe `_ensure_turso` a cercare una wheel pyturso da reinstallare. Gli
+  errori transitori (lock) non fanno latch. NeuRAG **non** aveva il secondo
+  problema di Neuron: qui l'`except` non chiudeva nessuna connessione, quindi
+  non c'era la riapertura costosa al giro dopo.
+- **`test_sql_vector_path_matches_python_cosine` passava a vuoto.** Confrontava
+  il path SQL col path Python mentre il primo cadeva nel secondo: Python contro
+  Python. Ora asserisce che il ramo SQL sia arrivato in fondo, più tre casi
+  nuovi (query eseguita davvero, latch su funzione mancante, nessun latch su
+  lock). Mutation check: rimettendo `f32blob` due test falliscono.
+- **bench/queries.json v5**: q5 (`f32blob`) si sposta da `db.py` a
+  `tests/test_vector_sql.py`, unico file dove la stringa sopravvive. Regola
+  meccanica, ricalcolata da disco come in v4.
+
 ## 1.3.1 (2026-08-03)
 - **NeuRAG ha una CI.** Non ne aveva: 369 test che nessuna automazione ha mai
   eseguito, e un `release.yml` che pubblicava su un tag senza chiedere niente a

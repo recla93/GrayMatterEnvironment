@@ -1552,6 +1552,12 @@ class KnowledgeGraph:
 
     LAYER_ACTIVE, LAYER_DORMANT, LAYER_DEEP = 2, 3, 4
 
+    # `_vector_sql` says which TIER we opened; this says whether that tier's
+    # `vector_distance_cos` actually runs. Kept apart on purpose: `_ensure_turso`
+    # reads `_vector_sql` as "are we on Turso", and flipping that one off here
+    # would send it looking for a pyturso wheel to reinstall.
+    _vector_sql_ok = True
+
     # Cut points, as constants in the shape of Neuron's RANK_WEIGHTS (§8.1):
     # they need real corpus data and they WILL move, so they are one dict to
     # tune rather than numbers buried in a query.
@@ -2242,18 +2248,27 @@ class KnowledgeGraph:
         params: list = [self._pack_vec(qv)]
         if scope:
             where += f" AND node_id IN ({','.join('?' * len(scope))})"
-        if getattr(self, "_vector_sql", False):
+        if getattr(self, "_vector_sql", False) and self._vector_sql_ok:
             try:
                 sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, "
-                       "1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS score "
+                       "1.0 - vector_distance_cos(embedding, ?) AS score "
                        f"FROM chunks WHERE {where} ORDER BY score DESC LIMIT ?")
                 rows = self._conn.execute(
                     sql, (*params, *(scope or []), top_n)).fetchall()
                 if rows:
                     return [_scored(d, d["score"], "cosine")
                             for d in (dict(r) for r in rows)]
-            except Exception:  # noqa: BLE001 — engine senza f32blob → path Python
-                pass
+            except Exception as e:  # noqa: BLE001 — qualunque errore → path Python
+                if "no such function" in str(e).lower():
+                    # Permanente per questo processo, non transitorio (lock,
+                    # handle): smettere di ritentarla è l'unica cosa sensata, e
+                    # il latch fa uscire l'avviso una volta sola invece che a
+                    # ogni ricerca. Gli altri errori restano muti come prima.
+                    self._vector_sql_ok = False
+                    import sys as _sys
+                    print(f"neurag: engine senza vector_distance_cos ({e}) — il "
+                          "ranking vettoriale usa il cosine Python per questo "
+                          "processo", file=_sys.stderr)
         # ponytail: O(N) blob scan + Python cosine. Only the sqlite3 tier lands
         # here; on Turso the SQL path above is used. Fine to ~10k chunks.
         sql = f"SELECT * FROM chunks WHERE {where.replace(' AND node_id', ' AND node_id')}"
