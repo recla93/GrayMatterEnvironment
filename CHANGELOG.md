@@ -1,5 +1,35 @@
 # Changelog — Neuron
 
+## 6.4.2 (2026-08-05)
+- **L'handshake non e' mai partito sulle installazioni col layout nuovo.** Il
+  SessionStart hook rispecchia `gray_matter.gme.gme_root()` senza importarlo,
+  e il mirror era rimasto al layout PIATTO di prima che il registro scendesse
+  in `registry/`: `installed_slugs()` globbava una cartella di sole
+  sottocartelle, tornava vuoto, `owner()` dava None e l'hook usciva muto.
+  Verificato su una macchina reale: 0 caratteri di handshake con i tre tool
+  installati e registrati. Ogni altro test passava `installed` a mano, quindi
+  `installed_slugs()` non era mai stato confrontato con un registro vero.
+- **Il tool `auto` sollevava NameError a ogni chiamata.** Il blocco che emette
+  `episode_lost` stava nel return di `_tool_auto`, ma `_episode_report` e' un
+  locale di `_tool_store_turn`: l'espressione veniva valutata sempre. Nessun
+  test chiamava `auto`. L'emissione ora vive dove il report esiste, cosi'
+  `store_turn` dichiara davvero troncamenti e sfratti come promette lo schema.
+- **Le entry SessionStart che puntano a un interprete sparito vengono
+  riscritte.** Dopo lo spostamento alla radice GME il venv ha cambiato posto,
+  ma il comando registrato no, ed entrambi i deployer vedevano "c'e' gia'" e
+  non aggiornavano: lo stesso "gia' presente = non toccare" di `claude mcp add`.
+- **L'installer chiede al codice, non alla targa.** A parita' di versione pip
+  risponde "already satisfied" e non copia niente: un fix spedito senza bump
+  non arrivava a chi reinstallava, e un install andato a meta' lascia il
+  dist-info nuovo sui file vecchi (misurato: 64 file diversi a versione
+  identica). Deriva rilevata, refresh forzato.
+- **Link cross-context.** Nascevano da `add_link`: o self-link scartati in
+  silenzio, o edge intra-graph verso un nodo di un altro context. Ora sono
+  drift link, che `drift_links()` riporta nelle query profonde.
+- **La suite non scrive piu' nella memoria reale.** `NS_GRAPHS_DIR` e' risolto
+  una volta sola nel registry, all'import di `neuron.server`: il fixture
+  arrivava sempre dopo, e una passata di test spostava lo store dell'utente.
+
 ## 6.4.1 (2026-08-05)
 - **Il tier SQL vettoriale non ha mai girato.** La query usava `f32blob(...)`,
   funzione che nessun engine libSQL/pyturso espone: ogni chiamata sollevava
