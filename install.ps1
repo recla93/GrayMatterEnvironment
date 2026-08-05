@@ -35,9 +35,38 @@ function Test-HasMCP {
     & $Vpy -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('mcp') else 1)"
     return ($LASTEXITCODE -eq 0)
 }
-function Get-RepairArgs {
-    if ($Force -and (Test-HasMCP)) { return @("--force-reinstall", "--no-deps") }
+function Get-RepairArgs([switch]$Always) {
+    if (($Force -or $Always) -and (Test-HasMCP)) { return @("--force-reinstall", "--no-deps") }
     return @()
+}
+# La versione e' un'ETICHETTA e puo' mentire: un install andato a meta' lascia il
+# dist-info nuovo sui file vecchi, e da li' pip risponde "already satisfied" per
+# sempre — un fix spedito senza bump non arriva a chi reinstalla. Visto dal vivo:
+# 72 file diversi dal sorgente a versione identica. Si chiede al CODICE. Il
+# confronto completo lo fa gray_matter quando c'e' (una implementazione sola,
+# condivisa con install.sh); standalone si ripiega su etichetta-contro-codice.
+function Test-CodeMatches([string]$module, [string]$srcDir) {
+    $probe = Join-Path $env:TEMP "gm_drift_$PID.py"
+    @"
+import sys
+mod, src = sys.argv[1], sys.argv[2]
+try:
+    from gray_matter.executor import install_drift
+    sys.exit(0 if install_drift(mod, src)['state'] == 'same' else 1)
+except ImportError:
+    pass
+try:
+    import importlib, importlib.metadata as md
+    label = md.version(mod.replace('_', '-'))
+    body = getattr(importlib.import_module(mod), '__version__', '')
+    sys.exit(0 if (not label or not body or label == body) else 1)
+except Exception:
+    sys.exit(0)
+"@ | Set-Content $probe -Encoding ASCII
+    & $Vpy -I "$probe" $module $srcDir
+    $ok = ($LASTEXITCODE -eq 0)
+    Remove-Item -Force $probe -ErrorAction SilentlyContinue
+    return $ok
 }
 if ($env:GM_OPTIN -eq "0") { $WantGm = $false; $Mode = "standalone" }
 # -Yes = "don't ask me anything": one gate for EVERY prompt below. Needed by any
@@ -380,8 +409,10 @@ function Install-Standalone {
     $Vpy = Join-Path $Venv "Scripts\python.exe"
     & $Vpy -m pip install --upgrade pip | Out-Null
     if ($Force) { Write-Host "Repair: reinstalling NeuRAG (forced)..." }
+    $Drifted = (-not $Force) -and (-not (Test-CodeMatches "neurag" $Here))
+    if ($Drifted) { Write-Host "NeuRAG: the installed code is NOT this source - forcing a refresh." }
     $Vendor = Join-Path $Here "vendor"
-    $Repair = Get-RepairArgs
+    $Repair = if ($Drifted) { Get-RepairArgs -Always } else { Get-RepairArgs }
     if (Test-Path $Vendor) { & $Vpy -m pip install --find-links $Vendor @Repair $Here }
     else { & $Vpy -m pip install @Repair $Here }
     if ($LASTEXITCODE -ne 0) {

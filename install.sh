@@ -246,6 +246,34 @@ standalone_install() {
              "$VPY" -m "$_mod" "$@"; fi
     }
     "$VPY" -m pip install --upgrade pip >/dev/null 2>&1 || true
+    # Senza repair_args pip risponde "already satisfied" a parita' di versione e
+    # non copia niente: un fix spedito senza bump non arriva a chi reinstalla.
+    # E la versione e' un'ETICHETTA che puo' mentire (dist-info nuovo sui file
+    # vecchi: visto dal vivo, 72 file diversi a versione identica). Si chiede al
+    # CODICE. Il confronto vero lo fa gray_matter quando c'e'; standalone si
+    # ripiega su etichetta-contro-codice, che e' la parte che morde.
+    code_matches() {  # $1 = modulo, $2 = dir sorgente
+        "$VPY" - "$1" "$2" <<'PY' 2>/dev/null
+import sys
+mod, src = sys.argv[1], sys.argv[2]
+try:
+    from gray_matter.executor import install_drift
+    sys.exit(0 if install_drift(mod, src)["state"] == "same" else 1)
+except ImportError:
+    pass
+try:
+    import importlib, importlib.metadata as md
+    label = md.version(mod.replace("_", "-"))
+    body = getattr(importlib.import_module(mod), "__version__", "")
+    sys.exit(0 if (not label or not body or label == body) else 1)
+except Exception:
+    sys.exit(0)
+PY
+    }
+    if [ "$FORCE" != "1" ] && ! code_matches neurag "$HERE"; then
+        echo "NeuRAG: il codice installato NON e' questo sorgente — refresh forzato."
+        FORCE=1
+    fi
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling NeuRAG (forced)..."
     FL=""; [ -d "$HERE/vendor" ] && FL="--find-links $HERE/vendor"
     # shellcheck disable=SC2086
