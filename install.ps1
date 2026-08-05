@@ -246,8 +246,17 @@ $Venv = Join-Path $GmBase "graymatter\.venv"
 # spostabile (pyvenv.cfg e gli script hanno path assoluti, e i client MCP
 # puntano al suo interprete): se ce n'e' gia' uno lo si continua a usare, e
 # converge alla posizione nuova al primo -Clear.
+# Si eredita solo un venv SANO. Bastava che la cartella esistesse, e un residuo
+# rotto — .venv presente ma senza pyvenv.cfg, cioe' una cancellazione a meta' —
+# veniva preferito alla creazione di uno nuovo. Da li' in poi OGNI chiamata
+# all'interprete moriva con "failed to locate pyvenv.cfg" e l'installer tirava
+# dritto fino a dichiarare INSTALL COMPLETE. Visto su una macchina vera.
+function Test-VenvUsable([string]$p) {
+    if (-not (Test-Path (Join-Path $p "pyvenv.cfg"))) { return $false }
+    return (Test-Path (Join-Path $p "Scripts\python.exe"))
+}
 foreach ($old in @((Join-Path $OsBase "graymatter\.venv"), (Join-Path $OsBase "gray-matter\.venv"))) {
-    if ((Test-Path $old) -and -not (Test-Path $Venv)) { $Venv = $old; break }
+    if ((Test-VenvUsable $old) -and -not (Test-VenvUsable $Venv)) { $Venv = $old; break }
 }
 Stop-VenvProcesses $Venv
 # -Clear: throw the venv away and rebuild. A "clean" option existed before, but
@@ -693,7 +702,21 @@ function Invoke-BestEffort([string]$label, [scriptblock]$cmd) {
         # since those lines are the confirmation the user is reading for.
         $out = & $cmd 2>&1
         if ($LASTEXITCODE -eq 0) { $out | ForEach-Object { Write-Host "$_" } }
-        else { Write-Host "  [!] $label skipped: $($out | Select-Object -Last 1)" }
+        else {
+            # Interpolare un ErrorRecord da' "System.Management.Automation.
+            # RemoteException", cioe' il NOME DEL TIPO al posto del messaggio: e'
+            # quello che il log del collega mostrava quattro volte di fila,
+            # nascondendo l'errore vero (un venv senza pyvenv.cfg). Si estrae il
+            # testo reale e si prende l'ultima riga NON vuota.
+            $msg = @($out | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                    if ($_.Exception -and $_.Exception.Message) { $_.Exception.Message }
+                    else { $_.ToString() }
+                } else { "$_" }
+            } | Where-Object { "$_".Trim() } | Select-Object -Last 1)
+            if (-not $msg) { $msg = "exit $LASTEXITCODE, nessun messaggio" }
+            Write-Host "  [!] $label skipped: $msg"
+        }
     } catch {
         Write-Host "  [!] $label skipped: $($_.Exception.Message)"
     } finally { $ErrorActionPreference = $prevEap }
@@ -792,9 +815,17 @@ $prevEap3 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 $pipCheck = & $VPy -m pip check     # no 2>&1: PS 5.1 wraps native stderr in ErrorRecords
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
-    Write-Host "  [!] The venv has conflicting dependencies - servers may fail to start:"
-    $pipCheck | ForEach-Object { Write-Host "      $_" }
-    Write-Host "      Fix: update the offending source to a version with matching pins and re-run."
+    if (-not ($pipCheck | Where-Object { "$_".Trim() })) {
+        # `pip check` fallito SENZA dire niente = non e' un conflitto, e'
+        # l'interprete che non parte. Stampare "conflicting dependencies" con
+        # l'elenco vuoto mandava a cercare il problema sbagliato.
+        Write-Host "  [!] Il venv non e' utilizzabile: $VPy non risponde."
+        Write-Host "      Rilancia con -Clear per ricostruirlo da zero."
+    } else {
+        Write-Host "  [!] The venv has conflicting dependencies - servers may fail to start:"
+        $pipCheck | ForEach-Object { Write-Host "      $_" }
+        Write-Host "      Fix: update the offending source to a version with matching pins and re-run."
+    }
 }
 $ErrorActionPreference = $prevEap3
 
@@ -807,8 +838,21 @@ try {
     $ErrorActionPreference = $prevEap2
 } catch { }
 if (-not "$GmVer".Trim()) { $GmVer = "?" }
+# Se la versione non si legge, l'interprete non parte: NIENTE e' installato, per
+# quanto ne sappiamo. Il banner diceva comunque "[OK] INSTALL COMPLETE - Gray
+# Matter ?", e un log del campo mostrava esattamente quello sopra quattro
+# "failed to locate pyvenv.cfg". Un terminatore affermativo che non sa
+# distinguere riuscito da morto e' peggio di nessun terminatore.
 Write-Host ""
 Write-Host "  ============================================================"
+if ($GmVer -eq "?") {
+    Write-Host "  [X] INSTALL FALLITA - Gray Matter non e' avviabile"
+    Write-Host "  ============================================================"
+    Write-Host "      $VPy non risponde (venv incompleto o corrotto)."
+    Write-Host "      Rilancia con -Clear per ricostruire il venv da zero:"
+    Write-Host "        powershell -ExecutionPolicy Bypass -File install.ps1 -Clear"
+    exit 1
+}
 Write-Host "  [OK] INSTALL COMPLETE - Gray Matter $GmVer"
 Write-Host "  ============================================================"
 if ($NeuronDir) { Write-Host "  Neuron:  installed" }

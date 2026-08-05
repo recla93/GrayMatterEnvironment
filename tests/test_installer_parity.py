@@ -449,3 +449,31 @@ def test_interpreter_output_is_never_cast_unguarded(project):
         offenders.append(f"riga {n}: {line.strip()[:70]}")
     assert not offenders, (
         "cast non protetto sull'output dell'interprete:\n" + "\n".join(offenders))
+
+
+def test_gm_never_declares_success_when_the_interpreter_is_dead():
+    """Il terminatore affermativo deve saper distinguere riuscito da morto.
+
+    Un log dal campo mostrava "[OK] INSTALL COMPLETE - Gray Matter ?" sopra
+    quattro "failed to locate pyvenv.cfg": il venv non partiva, quindi NIENTE
+    era installato, e l'installer usciva 0 dicendo il contrario.
+    """
+    src = _read("gray_matter", ".ps1")
+    assert "INSTALL FALLITA" in src, "manca il ramo di fallimento"
+    fail_i = src.index("INSTALL FALLITA")
+    # rindex: "INSTALL COMPLETE" compare anche nei commenti in testa al file,
+    # quello che conta e' il banner vero, in fondo.
+    ok_i = src.rindex("INSTALL COMPLETE")
+    assert fail_i < ok_i, "il controllo deve precedere il banner di successo"
+    # e deve uscire non-zero, o chi lo chiama non se ne accorge
+    assert "exit 1" in src[fail_i:ok_i]
+
+
+def test_only_a_healthy_venv_is_inherited():
+    """Bastava che la cartella .venv esistesse: un residuo senza pyvenv.cfg
+    veniva preferito alla creazione di uno nuovo."""
+    src = _read("gray_matter", ".ps1")
+    assert "function Test-VenvUsable" in src
+    i = src.index("foreach ($old in")
+    assert "Test-VenvUsable $old" in src[i:i + 300], \
+        "il fallback sceglie ancora su Test-Path invece che sulla salute"
