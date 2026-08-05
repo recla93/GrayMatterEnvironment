@@ -116,6 +116,31 @@ def test_lookups_respect_status():
     assert gme.get_version("neuron") == "6.1.2"
 
 
+_GONE = [{"key": "neuron", "label": "Neuron", "module": "no_such_module_xyz",
+          "cli": "no_such_module_xyz.cli"}]      # catalogo con un modulo assente
+
+
+def test_register_demotes_what_this_venv_no_longer_has(_gme_in_tmp, monkeypatch):
+    """`register_installed` promuoveva soltanto: un tool sparito dal venv restava
+    `installed` per sempre e il SessionStart hook continuava ad annunciarlo."""
+    import sys as _sys
+    gme.write_tool(_tool("neuron", venv=_sys.prefix, python=_sys.executable))
+    monkeypatch.setattr("gray_matter.catalog.ENVIRONMENTS", _GONE)
+
+    gme.register_installed()
+    assert gme.read_tool("neuron")["status"] == "missing"
+
+
+def test_register_leaves_a_peer_that_lives_in_its_own_venv_alone(_gme_in_tmp, monkeypatch):
+    """Un peer standalone non e' importabile da QUI e non e' affar nostro:
+    declassarlo spegnerebbe l'handshake di un'installazione sana."""
+    gme.write_tool(_tool("neuron", venv="/opt/neuron/.venv"))
+    monkeypatch.setattr("gray_matter.catalog.ENVIRONMENTS", _GONE)
+
+    gme.register_installed()
+    assert gme.read_tool("neuron")["status"] == "installed"
+
+
 def test_mark_missing_on_unknown_key_is_noop():
     gme.mark_missing("ghost")                    # must not raise
     assert gme.read_tool("ghost") is None

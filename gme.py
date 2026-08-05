@@ -303,6 +303,26 @@ def mark_missing(key: str) -> None:
         write_tool(data)
 
 
+def _demote_if_ours(key: str) -> None:
+    """Segna ``missing`` una entry che dichiara QUESTO venv ma non è più
+    importabile qui.
+
+    Senza questo, `register_installed` promuoveva soltanto: un tool rimosso dal
+    venv restava ``installed`` per sempre, e il SessionStart hook continuava ad
+    annunciare al modello tool che non rispondono più — la stessa classe di bug
+    che `test_gateway_without_neuron_does_not_announce_memory` esiste per
+    impedire.
+
+    Il confronto sul venv è la parte che non si può saltare: un peer installato
+    in un venv PROPRIO (standalone) non è importabile da qui e non deve essere
+    declassato da noi — è di un altro installer, come dice
+    `register_installed`. Si tocca solo ciò che dichiara di essere nostro.
+    """
+    data = read_tool(key)
+    if data and data.get("status") == "installed" and data.get("venv") == sys.prefix:
+        mark_missing(key)
+
+
 def register_installed(source: str = "") -> list[str]:
     """Register every trio tool importable from THIS interpreter. Returns the keys.
 
@@ -335,8 +355,10 @@ def register_installed(source: str = "") -> list[str]:
     for env in ENVIRONMENTS:
         try:
             if find_spec(env["module"]) is None:
+                _demote_if_ours(env["key"])
                 continue
         except BaseException:      # noqa: BLE001 — a broken package is "not installed"
+            _demote_if_ours(env["key"])
             continue
         write_tool({
             "key": env["key"],
