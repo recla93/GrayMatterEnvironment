@@ -28,6 +28,29 @@ jobs:
   check:
     runs-on: windows-latest
     steps:
+      # PERCHE' IL REF DEI SIBLING SI RISOLVE
+      # Un cambiamento puo' attraversare i tre repo — l'handshake vive in tutti
+      # e tre, e il registro GME e' letto da un mirror che sta nei peer. Presi
+      # sempre dal loro DEFAULT, i sibling facevano confrontare al guard una
+      # meta' nuova e una meta' vecchia, e una modifica coerente risultava rossa
+      # (successo davvero: 3 test rossi su un branch verde in locale). Se esiste
+      # un branch omonimo di la', e' quello che va provato insieme a questo.
+      # Ref vuoto = branch di default, cioe' il comportamento di prima.
+      - name: Resolve the sibling ref
+        id: peers
+        shell: bash
+        run: |
+          BR="${{ github.head_ref || github.ref_name }}"
+          resolve() {   # $1 = repo su GitHub, $2 = chiave di output
+            if git ls-remote --exit-code --heads "https://github.com/recla93/$1.git" "$BR" >/dev/null 2>&1; then
+              echo "$2=$BR" >> "$GITHUB_OUTPUT"; echo "  $1 -> $BR"
+            else
+              echo "$2=" >> "$GITHUB_OUTPUT"; echo "  $1 -> (default)"
+            fi
+          }
+          resolve Neuron neuron
+          resolve NeuRAG neurag
+
       - uses: actions/checkout@v4
         with:
           path: gray_matter
@@ -35,11 +58,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: recla93/Neuron
+          ref: ${{ steps.peers.outputs.neuron }}
           path: neuron
 
       - uses: actions/checkout@v4
         with:
           repository: recla93/NeuRAG
+          ref: ${{ steps.peers.outputs.neurag }}
           path: neurag
 
       - uses: actions/setup-python@v5
