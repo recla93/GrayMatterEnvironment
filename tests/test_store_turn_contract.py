@@ -109,6 +109,39 @@ def test_what_was_stored_comes_back_on_the_next_pre_turn(_isolated):
     assert "ada" in recall.lower(), f"il concetto salvato non riemerge: {recall}"
 
 
+def test_a_truncated_episode_is_declared_in_the_response(_isolated):
+    """La perdita la dichiara la risposta della SCRITTURA, non un log.
+
+    `add_episode` compila il report (testato in test_episodes.py) e lo schema
+    del tool promette che si torna indietro in `episode_lost`. Ma il blocco che
+    lo emetteva stava nel return di `_tool_auto`, dove quel nome non esiste: il
+    report era dead code qui e un NameError là. Il modello superava il cap senza
+    saperlo."""
+    from neuron.models import EPISODE_MAX_CHARS
+
+    clean = _call("store_turn", {
+        "topic": "episodi", "keywords": ["retry backoff"],
+        "episode": "scelto https su wss",
+    })
+    assert "episode_lost" not in clean, "niente perso, niente da dichiarare"
+
+    over = _call("store_turn", {
+        "topic": "episodi", "keywords": ["retry backoff"],
+        "episode": "x" * (EPISODE_MAX_CHARS + 17),
+    })
+    assert "episode_lost" in over, over
+    assert '"truncated": 17' in over, over
+
+
+def test_auto_answers_at_all(_isolated):
+    """`auto` non era chiamato da NESSUN test: ha girato con un NameError nel
+    return (`_episode_report`, locale di store_turn) senza che la suite se ne
+    accorgesse. Uno smoke test sul tool basta a impedire il bis."""
+    out = _call("auto", {"text": "oggi ho scelto https su wss per Turso"})
+    assert "error" not in out.lower(), out
+    assert "extraction" in out, out
+
+
 def test_defaults_are_applied_not_just_tolerated(_isolated):
     """Un turno senza domain non deve finire in un dominio vuoto: 'general' è
     un default vero, non un buco."""

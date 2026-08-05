@@ -1439,9 +1439,22 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     except Exception:  # noqa: BLE001
         pass
 
+    # T56: ciò che la scrittura ha perso lo dichiara la scrittura stessa —
+    # troncamento dell'episode e sfratto dei più vecchi oltre il cap. Il report
+    # di `add_episode` veniva compilato e mai emesso: il blocco stava nel return
+    # di `_tool_auto`, dove `_episode_report` NON esiste (ogni `auto` moriva di
+    # NameError). Va qui, dove il report è in scope. Assente se non si è perso
+    # niente.
+    _lost = {k: v for k, v in _episode_report.items() if k != "stored"}
+    _episode_note = (
+        f"\n! episode_lost: {json.dumps(_lost, ensure_ascii=False)} — raise "
+        f"NEURON_EPISODE_MAX_CHARS / NEURON_EPISODES_PER_NODE to keep it whole."
+        if _lost else "")
+
     return [TextContent(type="text", text=(
         f"Turn {turn} saved. Nodes: {len(g.nodes)}, Links: {len(g.links)}"
         + (f", pruned: {removed}" if removed else "")
+        + _episode_note
         # T65: surface the context dynamics — committed switch or pending signal
         + (f"\n⇄ context switched → '{_g.active}'" if _ctx_switched else
            (f"\n(domain signal: {_pend_dom} {_pend_n}/{CONTEXT_SWITCH_THRESHOLD} — "
@@ -1831,12 +1844,11 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
                 if tgt and sim > 0.3:
                     existing = g.get_node(kw)
                     if existing:
-                        g.add_link(Link(
-                            source=kw, target=ckw, link_type="analogy",
-                            weight="medium" if sim > 0.5 else "tangential",
-                            rationale=f"cross-domain ({alt_dom}, sim={sim:.2f})",
-                            created_turn=turn, last_active_turn=turn,
-                        ))
+                        # E3.1: cross-context link — target lives in alt_dom, so it
+                        # must be a drift link (target_context set), not an intra-
+                        # graph edge: `get_active_links` filters drift out and
+                        # `drift_links()` surfaces it on deep context queries.
+                        g.form_drift_link(kw, ckw, alt_dom, turn)
 
     salience_boost = INTENT_SALIENCE.get(extraction.intent, 1)
     for kw in extraction.keywords:
@@ -1877,18 +1889,15 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
                     domain=extraction.domain, sentiment=extraction.sentiment,
                     entities=extraction.entities, tags=extraction.tags,
                 ))
-                # cross-context dedup: link to identical keywords in other contexts
+                # cross-context dedup: link to identical keywords in other contexts.
+                # Same-keyword in another context = a drift link, not a self-link in
+                # this graph (`add_link` drops self-links, so this used to be a no-op).
                 for alt_name, alt_g in list(_g._graphs.items()):
                     if alt_name == _g.active:
                         continue
                     alt_nd = alt_g.get_node(kw)
                     if alt_nd:
-                        g.add_link(Link(
-                            source=kw, target=kw, link_type="analogy",
-                            weight="strong",
-                            rationale=f"cross-context dedup ({_g.active} <-> {alt_name})",
-                            created_turn=turn, last_active_turn=turn,
-                        ))
+                        g.form_drift_link(kw, kw, alt_name, turn)
 
     for lk in new_links:
         src = g.get_node(lk.source)
@@ -1937,13 +1946,6 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
         "nodes_total": len(g.nodes),
         "links_total": len(g.links),
         "context_window": context_window,
-        # Ciò che la scrittura ha perso, dichiarato nella risposta della
-        # scrittura stessa: troncamento dell'episode e sfratto dei più vecchi
-        # oltre il cap. Assente quando non si è perso niente.
-        **({"episode_lost": {k: v for k, v in _episode_report.items()
-                             if k != "stored"}}
-           if _episode_report.get("truncated") or _episode_report.get("dropped_turns")
-           else {}),
     }, ensure_ascii=False, indent=2))]
 
 
