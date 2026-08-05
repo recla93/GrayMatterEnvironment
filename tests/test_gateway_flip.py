@@ -26,6 +26,19 @@ def test_register_json_gateway_evicts_neuron(tmp_path):
     assert (tmp_path / "claude_desktop_config.json.bak").exists()
 
 
+def test_register_json_non_dict_root_returns_error_not_crash(tmp_path):
+    """JSON valido ma root non-oggetto: un tempo esplodeva (setdefault su str/list),
+    ora error pulito e file lasciato intatto."""
+    spec = {"label": "Test", "style": "args"} | {"keys": ["mcpServers"]}
+    for i, bad in enumerate(["string", ["list"], 42, True, None]):
+        cfg = tmp_path / f"cfg_{i}.json"
+        raw = json.dumps(bad)
+        cfg.write_text(raw, encoding="utf-8")
+        r = clients._register_json(spec, str(cfg), ["gray-matter"], "py")
+        assert r["ok"] is False and r["action"] == "error", r
+        assert cfg.read_text(encoding="utf-8") == raw   # non toccato
+
+
 def test_ipc_listener_exits_when_port_taken(monkeypatch):
     pytest.importorskip("mcp")  # imports gray_matter.server; needs real MCP (local/CI)
     from gray_matter import server

@@ -30,8 +30,21 @@ $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $Here
 # In repair mode force pip to reinstall the package code even if the version is
-# unchanged; --no-deps keeps it fast (heavy deps like fastembed/pyturso stay).
-$ForceArgs = @(); if ($Force) { $ForceArgs = @("--force-reinstall", "--no-deps") }
+# unchanged; --no-deps keeps it fast (heavy deps like fastembed/pyturso stay) —
+# but ONLY once the deps are already in the venv. On a fresh/cleaned venv
+# (first install, -Clear, "clean" repair) --no-deps ships an unusable install:
+# mcp fails to import at first run. mcp is the one hard shared dep, so its
+# presence is the gate. The probe runs at call time, not here: between this
+# block and the install sites the venv may be rebuilt (clean branch), and the
+# answer must reflect the CURRENT venv.
+function Test-HasMCP {
+    & $VPy -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('mcp') else 1)"
+    return ($LASTEXITCODE -eq 0)
+}
+function Get-RepairArgs {
+    if ($Force -and (Test-HasMCP)) { return @("--force-reinstall", "--no-deps") }
+    return @()
+}
 # Il repo GM (zip GitHub) bundle-a i tool come sottocartelle: cerca prima
 # DENTRO il repo ($Here), poi come sibling ($Root, checkout multi-repo).
 #
@@ -313,8 +326,12 @@ $VPy = Join-Path $Venv "Scripts\python.exe"
 # Needed by any caller without a usable stdin (CI, scheduled task, a GUI that
 # redirects streams). UserInteractive cannot carry this — it describes the
 # session, not the console, so it stays TRUE exactly when Read-Host would hang.
+# GM_YES is compared to "1", never tested for truthiness: in PowerShell the
+# string "0" is TRUE (only "" is false), so `-not $env:GM_YES` silenced the
+# prompts for whoever set GM_YES=0 to ask for them. Same contract as the sh
+# side (`[ "${GM_YES:-0}" = "1" ]`).
 $Ask = ([Environment]::UserInteractive -and -not $Force -and
-        -not $env:GM_YES -and ($args -notcontains "-Yes"))
+        ($env:GM_YES -ne "1") -and ($args -notcontains "-Yes"))
 # pip self-upgrade is non-critical: never let it abort the install.
 & $VPy -m pip install --upgrade pip --quiet | Out-Null
 
@@ -389,8 +406,9 @@ if ($gmVer) {
     }
     if ($choice -ne "skip") {
         Write-Host "Reinstalling Gray-Matter..."
-        & $VPy -m pip install --force-reinstall --no-deps $Here
-        if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --force-reinstall --no-deps --no-cache-dir $Here }
+        $Repair = Get-RepairArgs
+        & $VPy -m pip install @Repair $Here
+        if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1 }
         & $VPy -c "import sys;sys.stderr=sys.stdout;import gray_matter"
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter module not found after install"; exit 1 }
@@ -400,8 +418,9 @@ if ($gmVer) {
     }
 } else {
     Write-Host "Installing Gray-Matter..."
-    & $VPy -m pip install @ForceArgs $Here
-    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @ForceArgs $Here }
+    $Repair = Get-RepairArgs
+    & $VPy -m pip install @Repair $Here
+    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1 }
     & $VPy -c "import sys;sys.stderr=sys.stdout;import gray_matter"
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter module not found after install"; exit 1 }
@@ -424,9 +443,28 @@ function Install-Peer([string]$dir, [string]$label) {
         $choice = Prompt-InstallChoice $label $peerVer
         Stop-VenvProcesses $Venv        # same respawn window as above
         if ($choice -ne "skip") {
+            if ($choice -eq "clean") {
+                Write-Host "Removing venv and reinstalling from scratch..."
+                Remove-Item -Recurse -Force $Venv -ErrorAction SilentlyContinue
+                if (Test-Path $Venv) { Write-Host "ERROR: could not remove $Venv — close your AI apps (they respawn the servers) and re-run."; exit 1 }
+                & $PyExe @PyArgs -m venv $Venv
+                if (-not (Test-Path (Join-Path $Venv "Scripts\python.exe"))) { & $PyExe @PyArgs -m virtualenv $Venv }
+                $VPy = Join-Path $Venv "Scripts\python.exe"
+                & $VPy -m pip install --upgrade pip | Out-Null
+                # The peers sit in the same venv as GM, so a clean rebuild takes
+                # the gateway down with it - put it back before the peer.
+                $Repair = Get-RepairArgs
+                & $VPy -m pip install @Repair $Here
+                if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
+                if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: gray-matter reinstall failed after venv rebuild."; return }
+            }
             Write-Host "Reinstalling $label..."
-            & $VPy -m pip install --force-reinstall --no-deps @Find $dir
-            if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --force-reinstall --no-deps $dir }
+            # Same gate as the fresh-install branch: force-reinstall only when
+            # mcp is present, never hardcoded (a fresh venv has none, and an
+            # uncapped peer would then drag shared deps past GM's cap).
+            $Repair = Get-RepairArgs
+            & $VPy -m pip install @Find @Repair $dir
+            if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Repair $dir }
             if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $label reinstall failed - continuing." }
         } else {
             Write-Host "Keeping $label $peerVer."
@@ -434,8 +472,9 @@ function Install-Peer([string]$dir, [string]$label) {
         return
     }
     Write-Host "Installing $label ($dir)..."
-    & $VPy -m pip install @Find @Cons @ForceArgs $dir
-    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Cons @ForceArgs $dir }
+    $Repair = Get-RepairArgs
+    & $VPy -m pip install @Find @Cons @Repair $dir
+    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Cons @Repair $dir }
     if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $label install failed - continuing." }
 }
 

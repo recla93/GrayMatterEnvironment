@@ -29,8 +29,9 @@ for a in "$@"; do case "$a" in
     -f|--force) FORCE=1 ;;
     -c|--clear) CLEAR=1; FORCE=1 ;;
 esac; done
-FORCE_ARGS=""
-[ "$FORCE" = "1" ] && FORCE_ARGS="--force-reinstall --no-deps"
+# --no-deps only safe once the shared deps are in the venv (see install.ps1).
+has_mcp() { "$VPY" -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('mcp') else 1)" 2>/dev/null; }
+repair_args() { if [ "$FORCE" = "1" ] && has_mcp; then echo "--force-reinstall --no-deps"; fi; }
 ask() {
     [ "$ASSUME_YES" = "1" ] && return 0
     [ -t 0 ] || return 1
@@ -185,8 +186,8 @@ else
     # vendor wheel must not block a source install). Plan C: EXIT — GM is the required
     # gateway, nothing works without it.
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS $FORCE_ARGS "$HERE" \
-        || "$VPY" -m pip install $FORCE_ARGS "$HERE" \
+    "$VPY" -m pip install $FINDLINKS $(repair_args) "$HERE" \
+        || "$VPY" -m pip install $(repair_args) "$HERE" \
         || { echo "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1; }
 fi
 
@@ -206,8 +207,8 @@ install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
     # warns and exits 0 — feed the peer's own caps, and see the pip check below.
     CONS=""; [ -f "$1/constraints.txt" ] && CONS="-c $1/constraints.txt"
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS $CONS $FORCE_ARGS "$1" \
-        || "$VPY" -m pip install $CONS $FORCE_ARGS "$1" \
+    "$VPY" -m pip install $FINDLINKS $CONS $(repair_args) "$1" \
+        || "$VPY" -m pip install $CONS $(repair_args) "$1" \
         || echo "  WARNING: $2 install failed — continuing."
 }
 
@@ -360,6 +361,15 @@ if ! "$VPY" -c "import fastembed" >/dev/null 2>&1; then
         || echo "  fastembed not available — lexical ranking only (still functional)."
 fi
 
+# Best-effort GUI nativa: pywebview. Senza, la GUI degrada al browser — che
+# funziona ma vive appesa a una console (chiusa quella, GUI morta). Con la
+# finestra nativa il control center è autosufficiente.
+if ! "$VPY" -c "import webview" >/dev/null 2>&1; then
+    echo "Enabling the native GUI window (best-effort)..."
+    "$VPY" -m pip install "pywebview>=5.0" \
+        || echo "  pywebview not available — the control center will open in the browser."
+fi
+
 # Gateway model (INSTALLER-UX): register ONLY gray-matter, deploy hooks, manifest.
 echo "Installing the gateway (register + hooks + manifest)..."
 # Embedding model — asked HERE because the full-suite path installs Neuron
@@ -483,9 +493,18 @@ fi
 # An explicit, affirmative terminator: callers could not tell "finished
 # successfully" from "still working" or "died quietly".
 GM_VER=$("$VPY" -m gray_matter.cli --version 2>/dev/null | tail -1)
-[ -n "$GM_VER" ] || GM_VER="?"
 echo ""
 echo "  ============================================================"
+# Se la versione non si legge, l'interprete non parte: niente e' installato, per
+# quanto ne sappiamo. Un terminatore affermativo che non distingue riuscito da
+# morto e' peggio di nessun terminatore (stessa guardia di install.ps1).
+if [ -z "$GM_VER" ]; then
+    echo "  [X] INSTALL FAILED - Gray Matter is not runnable"
+    echo "  ============================================================"
+    echo "      $VPY does not respond (incomplete or corrupt venv)."
+    echo "      Re-run the installer to rebuild the venv from scratch."
+    exit 1
+fi
 echo "  [OK] INSTALL COMPLETE - Gray Matter $GM_VER"
 echo "  ============================================================"
 [ -n "$NEURON_DIR" ] && echo "  Neuron:  installed"

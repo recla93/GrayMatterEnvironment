@@ -31,6 +31,20 @@ def cf(monkeypatch, tmp_path):
     return setup
 
 
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """I test che chiamano clients.register() devono isolare i path REALI:
+    senza mockare USERPROFILE/APPDATA i registri toccano i config della
+    macchina (verificato: 7 config corrotti con '/fake/python'). Stesso
+    fixture di test_client_register_is_a_merge.py."""
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "Local"))
+    return tmp_path
+
+
 def test_registered_account_is_the_only_persistent_setup(cf):
     st = cf(True, True)
     assert st["mode"] == "named"
@@ -66,7 +80,7 @@ def test_missing_cloudflared_says_how_to_install_it(cf):
     assert chatgpt.register()["action"] == "manual"
 
 
-def test_it_is_a_known_client_but_never_automatic(monkeypatch):
+def test_it_is_a_known_client_but_never_automatic(monkeypatch, home):
     """Accendere un tunnel PUBBLICO non e' una cosa da fare da sola dentro un
     "registra nei client rilevati": va chiesto per nome."""
     from gray_matter import clients as C
@@ -83,7 +97,7 @@ def test_it_is_a_known_client_but_never_automatic(monkeypatch):
     assert seen == []
 
 
-def test_asked_by_name_it_answers(monkeypatch):
+def test_asked_by_name_it_answers(monkeypatch, home):
     from gray_matter import clients as C
     importlib.reload(C)
     res = C.register(only=["chatgpt"], gateway=True, py="/fake/python")

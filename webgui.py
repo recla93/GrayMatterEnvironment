@@ -892,7 +892,10 @@ class Api:
             "env_var": "TURSO_DATABASE_URL",
         }
 
-        neurag_url = os.environ.get("NEURAG_TURSO_DATABASE_URL") or os.environ.get("TURSO_DATABASE_URL", "")
+        # NeuRAG reads ONLY NEURAG_TURSO_DATABASE_URL (neurag/db.py:45) - falling
+        # back to Neuron's TURSO_DATABASE_URL would report the wrong DB as
+        # "configured". Only the token may be shared (org/group token, db.py:46).
+        neurag_url = os.environ.get("NEURAG_TURSO_DATABASE_URL", "")
         neurag_token = os.environ.get("NEURAG_TURSO_AUTH_TOKEN") or os.environ.get("TURSO_AUTH_TOKEN", "")
         dbs["neurag"] = {
             "configured": bool(neurag_url and neurag_token),
@@ -1129,8 +1132,13 @@ def _build_server(api: Api):
 
         def do_POST(self):
             name = self.path.rsplit("/", 1)[-1]
+            # Guard BEFORE getattr: the attribute lookup must not run on arbitrary
+            # input (non-/api/ paths, names that start with "_").
+            if not self.path.startswith("/api/") or name.startswith("_"):
+                self._send(404, b'{"error":"unknown"}', "application/json")
+                return
             fn = getattr(api, name, None)
-            if not self.path.startswith("/api/") or fn is None or name.startswith("_"):
+            if fn is None:
                 self._send(404, b'{"error":"unknown"}', "application/json")
                 return
             length = int(self.headers.get("Content-Length") or 0)

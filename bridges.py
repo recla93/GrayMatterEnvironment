@@ -277,7 +277,11 @@ def _db_path() -> Path:
     if p:
         pp = Path(p)
         return pp if pp.suffix == ".db" else pp.with_suffix(".db")
-    return Path.home() / ".local" / "share" / "gray_matter" / "bridges.db"
+    # SSOT: `paths.gm_bridges()` — the same path repair/uninstall target. The old
+    # hardcoded ~/.local/share/gray_matter/bridges.db drifted from it, so the real
+    # store was never offered for wipe nor removed at uninstall.
+    from gray_matter import paths
+    return paths.gm_bridges()
 
 
 _SCHEMA = """

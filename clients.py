@@ -233,6 +233,12 @@ def _register_json(spec: dict, path: str, servers: list[str], py: str,
         snippet = {s: _entry(spec["style"], py, SERVERS[s]) for s in servers}
         return {"client": spec["label"], "ok": False, "action": "manual",
                 "detail": path, "snippet": json.dumps(snippet, indent=2)}
+    if not isinstance(data, dict):
+        # JSON valido ma root non-oggetto (stringa/lista/numero): setdefault()
+        # esploderebbe su 'str'/'list' invece di segnalare. Il loop sotto gestisce
+        # i livelli annidati non-dict; il root serve questo check qui.
+        return {"client": spec["label"], "ok": False, "action": "error",
+                "detail": f"config root is not a JSON object: {path}"}
     node = data
     for k in keys_for(spec, path):
         node = node.setdefault(k, {})
@@ -245,11 +251,38 @@ def _register_json(spec: dict, path: str, servers: list[str], py: str,
         node.pop(s, None)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        if os.path.exists(path):
+        existed = os.path.exists(path)
+        if existed:
             Path(path + ".bak").write_text(raw, encoding="utf-8")   # backup first
-        Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # ensure_ascii=False: paths with accented characters must stay readable,
+        # not escape into \uXXXX sequences a client may refuse to resolve.
+        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
         return {"client": spec["label"], "ok": False, "action": "error", "detail": str(exc)}
+    # Verify-after-write + rollback: a truncated write must not leave the
+    # client's config unreadable (same pattern as neuron/neurag clients).
+    try:
+        reread = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        reread = None
+    node = reread if isinstance(reread, dict) else None
+    for k in keys_for(spec, path):
+        node = node.get(k) if isinstance(node, dict) else None
+    # The eviction is half of the gateway flip: a config that kept the old peer
+    # entries alongside gray-matter is as wrong as one missing gray-matter.
+    if not (isinstance(node, dict) and all(s in node for s in servers)
+            and not any(s in node for s in evict)):
+        if existed and os.path.exists(path + ".bak"):
+            shutil.copyfile(path + ".bak", path)
+        elif not existed:
+            # No .bak to restore from - the file is ours, and a half-written
+            # config is worse than the absent one the client already handles.
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return {"client": spec["label"], "ok": False, "action": "error",
+                "detail": "write verification failed - rolled back: " + path}
     return {"client": spec["label"], "ok": True, "action": "registered", "detail": path}
 
 
@@ -475,7 +508,29 @@ def register_flow(*, gateway: bool, only: "list[str] | None",
         # Round-trip of go-standalone: returning to the gateway takes every tool
         # back under management and evicts the direct entries.
         clear_unmanaged()
-    return register(servers, gateway=gateway, only=only, py=py)
+    results = register(servers, gateway=gateway, only=only, py=py)
+    _sync_manifest_clients(results)
+    return results
+
+
+def _sync_manifest_clients(results: list[dict]) -> None:
+    """Record where gray-matter is actually registered so uninstall can undo it.
+
+    The installer writes the manifest, but `cli register`/GUI live on
+    ``register_flow`` and used to leave ``clients`` stale — an uninstall would
+    then deregister only the last-installed client and orphan the rest. Union
+    with what is already there: ``only`` may address a subset, dropping the
+    previous entries would re-orphan them.
+    """
+    label_to_key = {spec["label"]: key for key, spec in CLIENTS.items()}
+    ok_keys = {label_to_key[r["client"]] for r in results
+               if r.get("ok") and r["client"] in label_to_key}
+    if not ok_keys:
+        return
+    from gray_matter import paths
+    m = paths.Manifest.load()
+    m.set_clients(sorted(set(m.data.get("clients") or []) | set(ok_keys)))
+    m.save()
 
 
 def deregister(servers: "list[str] | None" = None) -> list[dict]:
@@ -490,9 +545,11 @@ def deregister(servers: "list[str] | None" = None) -> list[dict]:
             continue
         if spec.get("cli") and shutil.which("claude"):
             for s in targets:
+                argv = _claude_argv("mcp", "remove", "--scope", "user", s)
+                if argv is None:
+                    continue
                 try:
-                    subprocess.run(["claude", "mcp", "remove", "--scope", "user", s],
-                                   capture_output=True, text=True, timeout=60,
+                    subprocess.run(argv, capture_output=True, text=True, timeout=60,
                                    creationflags=_NO_WINDOW)
                 except Exception:  # noqa: BLE001
                     pass

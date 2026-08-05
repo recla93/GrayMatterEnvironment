@@ -23,6 +23,9 @@ HOOK_ASSETS = {
     "claude-code": "claude-code-hook/neuron_sessionstart_hook.py",
     "cowork": "cowork-plugin/neuron-guard",
     "opencode": "opencode-plugin/neuron-handshake.mjs",
+    # codex consuma lo STESSO plugin cowork (formato .claude-plugin), non un
+    # plugin nativo: lo copia nel suo cache e lo abilita in config.toml.
+    "codex": "cowork-plugin/neuron-guard",
 }
 
 
