@@ -83,6 +83,42 @@ def test_wiring_is_happy_with_a_freshly_deployed_hook(env):
     assert w["hook_entry"]["ok"], w["hook_entry"]
 
 
+class _FakeDist:
+    def __init__(self, name, version):
+        self.name = name
+        self.version = version
+
+
+def test_wiring_catches_a_label_that_lies_about_the_code(env, monkeypatch):
+    """Un install andato a meta' lascia il dist-info NUOVO sopra i file VECCHI.
+
+    Da li' in poi tutto cio' che si fida della versione — pip ("already
+    satisfied"), `Install-Peer` ("Keeping X"), `catalog._version` — vede
+    aggiornato cio' che non lo e', e i fix non arrivano piu'. Visto dal vivo:
+    neuron con `__version__` 6.4.0 sotto un dist-info 6.4.1."""
+    import importlib.metadata as md
+    import neuron
+    monkeypatch.setattr(md, "distributions",
+                        lambda: [_FakeDist("neuron", "9.9.9")])
+    monkeypatch.setattr(neuron, "__version__", "0.0.1", raising=False)
+
+    r = _wiring(env)["versions"]
+    assert r["ok"] is False
+    assert "dist-info 9.9.9" in r["detail"] and "codice 0.0.1" in r["detail"], r
+
+
+def test_wiring_catches_two_dist_info_for_the_same_package(env, monkeypatch):
+    """Due dist-info per lo stesso pacchetto = disinstallazione mai completata:
+    quale versione risponda dipende dall'ordine di scansione."""
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "distributions",
+                        lambda: [_FakeDist("neuron", "6.4.0"),
+                                 _FakeDist("neuron", "6.4.1")])
+
+    r = _wiring(env)["versions"]
+    assert r["ok"] is False and "2 dist-info" in r["detail"], r
+
+
 def test_wiring_catches_the_registry_mirror_drifting(env, monkeypatch):
     """Il controllo che avrebbe risparmiato la caccia: GM e l'hook devono
     guardare la stessa cartella. L'hook rispecchia `gme_root()` senza importarlo,

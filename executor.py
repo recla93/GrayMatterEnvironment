@@ -212,7 +212,114 @@ def check_wiring() -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         rec("mcp_entries", False, f"non verificabile: {exc}")
 
+    # 5. L'etichetta deve corrispondere al CORPO. Un'installazione andata a
+    #    meta' (file lock di un server vivo durante l'install, e il
+    #    "WARNING: install failed - continuing" che se la mangia) lascia il
+    #    dist-info nuovo sopra i file vecchi. Da li' in poi tutto cio' che si
+    #    fida della versione — pip ("already satisfied"), `Install-Peer`
+    #    ("Keeping X"), `catalog._version` — vede aggiornato cio' che non lo e',
+    #    e i fix non arrivano piu' a nessuno. Verificato: neuron 6.4.0 sotto un
+    #    dist-info 6.4.1, con due dist-info per lo stesso pacchetto.
+    try:
+        import importlib
+        import importlib.metadata as _md
+        from gray_matter.catalog import ENVIRONMENTS
+
+        problems = []
+        for env in ENVIRONMENTS:
+            dist = env["module"].replace("_", "-")
+            # `d.name`, non `d.metadata["Name"]`: su 3.14 il getitem implicito
+            # di Message emette una DeprecationWarning a ogni run.
+            found = [d for d in _md.distributions()
+                     if (getattr(d, "name", "") or "").lower() == dist]
+            if not found:
+                continue
+            if len(found) > 1:
+                vs = sorted({d.version for d in found})
+                problems.append(f"{dist}: {len(found)} dist-info ({', '.join(vs)})")
+                continue
+            declared = found[0].version
+            try:
+                body = getattr(importlib.import_module(env["module"]), "__version__", "")
+            except Exception:  # noqa: BLE001 — pacchetto rotto: lo dice il check 4
+                continue
+            if body and declared and body != declared:
+                problems.append(f"{dist}: dist-info {declared}, codice {body}")
+        if problems:
+            rec("versions", False, "; ".join(problems),
+                "pip install --force-reinstall --no-deps <sorgente>  (a client AI chiusi)")
+        else:
+            rec("versions", True, "etichetta e codice coincidono")
+    except Exception as exc:  # noqa: BLE001
+        rec("versions", False, f"non verificabile: {exc}")
+
     return out
+
+
+def install_drift(module: str, source_dir) -> dict:
+    """Il codice INSTALLATO e' lo stesso del sorgente? Confronta i file, non le
+    versioni.
+
+    La versione e' un'etichetta, e un'etichetta puo' mentire: un install andato
+    a meta' lascia il dist-info nuovo sui file vecchi, e da li' in poi pip dice
+    "already satisfied" e l'installer dice "Keeping X" su codice che non e'
+    quello. L'unica risposta onesta alla domanda "devo reinstallare?" e' il
+    confronto dei byte.
+
+    Ritorna ``{state, files, detail}`` con state in absent|same|differ.
+    Una implementazione sola, chiamata da install.ps1 E install.sh: la stessa
+    regola scritta in due linguaggi e' esattamente cio' che va alla deriva.
+    """
+    import importlib
+    src = Path(source_dir)
+    try:
+        mod = importlib.import_module(module)
+        installed = Path(mod.__file__).parent
+    except Exception as exc:  # noqa: BLE001
+        return {"state": "absent", "files": 0, "detail": f"non importabile ({exc})"}
+    # Sorgente: layout src/ (neuron) o piatto (neurag, gray_matter).
+    for cand in (src / "src" / module, src / module, src):
+        if (cand / "__init__.py").exists():
+            src_pkg = cand
+            break
+    else:
+        return {"state": "absent", "files": 0, "detail": f"sorgente non trovato in {src}"}
+    if src_pkg.resolve() == installed.resolve():
+        return {"state": "same", "files": 0, "detail": "installazione editable (stesso albero)"}
+    differ = 0
+    for f in src_pkg.rglob("*"):
+        if not f.is_file() or "__pycache__" in f.parts or f.suffix == ".pyc":
+            continue
+        other = installed / f.relative_to(src_pkg)
+        try:
+            if not other.exists() or other.read_bytes() != f.read_bytes():
+                differ += 1
+        except OSError:
+            differ += 1
+    if differ:
+        return {"state": "differ", "files": differ,
+                "detail": f"{differ} file diversi dal sorgente"}
+    return {"state": "same", "files": 0, "detail": "identico al sorgente"}
+
+
+def setup_summary() -> str:
+    """Quale installazione c'e' adesso, in una riga — perche' un menu che chiede
+    "reinstallo?" senza ricordare COSA e' installato costringe a indovinare."""
+    try:
+        from gray_matter import gme
+        have = {t.get("key") for t in gme.list_tools()
+                if t.get("status") == "installed"}
+    except Exception:  # noqa: BLE001
+        return "installazione non determinabile"
+    if not have:
+        return "nessun tool registrato"
+    names = {"gray-matter": "GM", "neuron": "Neuron", "neurag": "NeuRAG"}
+    label = " + ".join(names[k] for k in ("gray-matter", "neuron", "neurag") if k in have)
+    if have == set(names):
+        return f"full suite ({label})"
+    if "gray-matter" in have:
+        return f"gateway ({label})"
+    return f"standalone ({label})"
 
 
 def _shipped_hook():

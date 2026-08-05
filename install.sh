@@ -31,7 +31,10 @@ for a in "$@"; do case "$a" in
 esac; done
 # --no-deps only safe once the shared deps are in the venv (see install.ps1).
 has_mcp() { "$VPY" -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('mcp') else 1)" 2>/dev/null; }
-repair_args() { if [ "$FORCE" = "1" ] && has_mcp; then echo "--force-reinstall --no-deps"; fi; }
+# $1 opzionale: forza a prescindere da FORCE (un peer che va rinfrescato per
+# conto suo). Il gate su mcp resta comunque: --no-deps su un venv senza deps
+# consegna un install morto.
+repair_args() { _f="${1:-$FORCE}"; if [ "$_f" = "1" ] && has_mcp; then echo "--force-reinstall --no-deps"; fi; }
 ask() {
     [ "$ASSUME_YES" = "1" ] && return 0
     [ -t 0 ] || return 1
@@ -178,8 +181,39 @@ already_installed() {  # $1 = pkg pip, $2 = dir sorgente
     [ "$i" = "$v" ]
 }
 
+# La versione e' un'ETICHETTA, e un'etichetta puo' mentire: un install andato a
+# meta' lascia il dist-info nuovo sui file vecchi, e da li' in poi `pip` dice
+# "already satisfied" e questo confronto dice "gia' installato" — per sempre.
+# Visto dal vivo: neuron con 72 file diversi dal sorgente e versione identica.
+# Quindi si chiede al CODICE, non alla targa. Il confronto vero lo fa
+# gray_matter.executor.install_drift (una implementazione sola, la stessa che
+# usa install.ps1); senza GM si ripiega su etichetta-contro-codice.
+code_matches() {  # $1 = modulo, $2 = dir sorgente
+    "$VPY" - "$1" "$2" <<'PY' 2>/dev/null
+import sys
+mod, src = sys.argv[1], sys.argv[2]
+try:
+    from gray_matter.executor import install_drift
+    sys.exit(0 if install_drift(mod, src)["state"] == "same" else 1)
+except ImportError:
+    pass
+try:
+    import importlib, importlib.metadata as md
+    label = md.version(mod.replace("_", "-"))
+    body = getattr(importlib.import_module(mod), "__version__", "")
+    sys.exit(0 if (not label or not body or label == body) else 1)
+except Exception:
+    sys.exit(0)
+PY
+}
+
+if already_installed gray-matter "$HERE" && ! code_matches gray_matter "$HERE"; then
+    echo "Gray-Matter: stessa versione ma il codice installato NON e' questo sorgente — refresh forzato."
+    FORCE=1
+fi
+
 if [ "$FORCE" != "1" ] && already_installed gray-matter "$HERE"; then
-    echo "Gray-Matter $(src_ver "$HERE") already installed — skipping."
+    echo "Gray-Matter $(src_ver "$HERE") already installed and identical to this source — skipping."
 else
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling Gray-Matter (forced)..." || echo "Installing Gray-Matter..."
     # Plan A: with vendored wheels. Plan B: retry without --find-links (a stale/absent
@@ -195,11 +229,22 @@ fi
 # install GM + the calling peer, then detect and ask about other siblings.
 install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
     pkg=$(basename "$1" | tr '[:upper:]' '[:lower:]')
-    if [ "$FORCE" != "1" ] && already_installed "$pkg" "$1"; then
-        echo "$2 $(src_ver "$1") already installed — skipping."
+    # Stessa regola del gateway: la versione e' un'etichetta, il codice e' il
+    # codice. Un peer con la versione giusta e i file vecchi passava di qui
+    # come "already installed" e ci restava per sempre — e' cosi' che e' nato
+    # un neuron con 72 file diversi dal sorgente. PEER_FORCE, non FORCE: e'
+    # locale a questo peer e non deve alterare il resto dell'installazione.
+    PEER_FORCE="$FORCE"
+    if [ "$PEER_FORCE" != "1" ] && already_installed "$pkg" "$1" \
+       && ! code_matches "$pkg" "$1"; then
+        echo "$2: stessa versione ma il codice installato NON e' questo sorgente — refresh forzato."
+        PEER_FORCE=1
+    fi
+    if [ "$PEER_FORCE" != "1" ] && already_installed "$pkg" "$1"; then
+        echo "$2 $(src_ver "$1") already installed and identical to this source — skipping."
         return 0
     fi
-    [ "$FORCE" = "1" ] && echo "Repair: reinstalling $2 (forced)..." || echo "Installing $2 ($1)..."
+    [ "$PEER_FORCE" = "1" ] && echo "Repair: reinstalling $2 (forced)..." || echo "Installing $2 ($1)..."
     stop_venv_procs                 # same respawn window as install.ps1
     # Peers share GM's venv and install after it, so a peer with looser pins can
     # pull a shared dep past GM's cap (an old Neuron with an uncapped
@@ -207,8 +252,8 @@ install_peer() {  # $1 = dir sorgente, $2 = nome per i messaggi
     # warns and exits 0 — feed the peer's own caps, and see the pip check below.
     CONS=""; [ -f "$1/constraints.txt" ] && CONS="-c $1/constraints.txt"
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS $CONS $(repair_args) "$1" \
-        || "$VPY" -m pip install $CONS $(repair_args) "$1" \
+    "$VPY" -m pip install $FINDLINKS $CONS $(repair_args "$PEER_FORCE") "$1" \
+        || "$VPY" -m pip install $CONS $(repair_args "$PEER_FORCE") "$1" \
         || echo "  WARNING: $2 install failed — continuing."
 }
 

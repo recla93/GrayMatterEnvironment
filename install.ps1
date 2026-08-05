@@ -41,8 +41,12 @@ function Test-HasMCP {
     & $VPy -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('mcp') else 1)"
     return ($LASTEXITCODE -eq 0)
 }
-function Get-RepairArgs {
-    if ($Force -and (Test-HasMCP)) { return @("--force-reinstall", "--no-deps") }
+function Get-RepairArgs([switch]$Always) {
+    # -Always: l'utente ha CHIESTO di reinstallare. Senza forzare, pip risponde
+    # "already satisfied" a parita' di versione e non copia niente — che e'
+    # esattamente come un codice vecchio sopravvive a un reinstall. Il gate su
+    # mcp resta: --no-deps su un venv senza deps consegna un install morto.
+    if (($Force -or $Always) -and (Test-HasMCP)) { return @("--force-reinstall", "--no-deps") }
     return @()
 }
 # Il repo GM (zip GitHub) bundle-a i tool come sottocartelle: cerca prima
@@ -365,29 +369,116 @@ except Exception:
     if ($inst -and $inst.Trim() -eq $src) { return $inst.Trim() }
     return $null
 }
-# Returns: "skip", "reinstall", or "clean". Non-interactive => "skip".
-function Prompt-InstallChoice([string]$label, [string]$ver) {
+# "Stessa versione" NON vuol dire "stesso codice": un install andato a meta'
+# lascia il dist-info nuovo sui file vecchi, e da li' in poi pip risponde
+# "already satisfied" per sempre. Visto dal vivo: neuron con 72 file diversi dal
+# sorgente e la versione dichiarata identica. Quindi si confrontano i FILE.
+# Il confronto completo lo fa gray_matter (UNA implementazione, la stessa che
+# usa install.sh); senza GM si ripiega sull'etichetta-contro-codice, che e' la
+# parte che morde davvero e non richiede nessuna dipendenza.
+function Get-CodeDrift([string]$module, [string]$srcDir) {
+    $probe = Join-Path $env:TEMP "gm_drift_$PID.py"
+    @"
+import sys
+mod, src = sys.argv[1], sys.argv[2]
+try:
+    from gray_matter.executor import install_drift
+    r = install_drift(mod, src)
+    sys.stdout.write(r['state'] + '|' + r['detail'])
+except Exception:
+    try:
+        import importlib, importlib.metadata as md
+        label = md.version(mod.replace('_', '-'))
+        body = getattr(importlib.import_module(mod), '__version__', '')
+        if label and body and label != body:
+            sys.stdout.write('differ|dist-info %s, code %s' % (label, body))
+        else:
+            sys.stdout.write('unknown|file comparison unavailable')
+    except Exception:
+        sys.stdout.write('unknown|')
+"@ | Set-Content $probe -Encoding ASCII
+    $out = & $VPy -I "$probe" $module $srcDir
+    Remove-Item -Force $probe -ErrorAction SilentlyContinue
+    if (-not $out) { return @{ state = "unknown"; detail = "" } }
+    $parts = ("$out".Trim() -split '\|', 2)
+    return @{ state = $parts[0]; detail = $(if ($parts.Count -gt 1) { $parts[1] } else { "" }) }
+}
+
+function Get-SetupSummary {
+    $probe = Join-Path $env:TEMP "gm_setup_$PID.py"
+    @"
+import sys
+try:
+    from gray_matter.executor import setup_summary
+    sys.stdout.write(setup_summary())
+except Exception:
+    pass
+"@ | Set-Content $probe -Encoding ASCII
+    $out = & $VPy -I "$probe"
+    Remove-Item -Force $probe -ErrorAction SilentlyContinue
+    return "$out".Trim()
+}
+
+# Returns: "skip", "reinstall", "deps", "clean" or "wipe". Non-interactive =>
+# "skip", TRANNE quando il codice installato non e' quello del sorgente: li' lo
+# "skip" non e' una scelta dell'utente ma un default, e un default non deve
+# tenere in vita codice vecchio.
+# $module/$srcDir vanno passati: questa funzione serve sia il gateway sia i peer,
+# e chiedere sempre la deriva di gray_matter mostrerebbe al peer il dato di un
+# altro pacchetto.
+function Prompt-InstallChoice([string]$label, [string]$ver, [string]$module, [string]$srcDir) {
+    $drift = Get-CodeDrift $module $srcDir
     if ($Force) { return "reinstall" }
+    # Codice diverso a parita' di versione: non lo si puo' chiedere come se
+    # fosse una reinstallazione a vuoto, ed e' esattamente il caso in cui
+    # "Skip" (il default) e' la risposta sbagliata.
     Write-Host "`n$label $ver is already installed."
-    Write-Host "  [R]einstall - reinstall (same version, fresh copy)"
-    Write-Host "  [C]lean    - remove venv and reinstall from scratch"
-    Write-Host "  [S]kip     - keep current installation"
+    $setup = Get-SetupSummary
+    if ($setup)          { Write-Host "  Setup: $setup" }
+    if ($drift.detail)   { Write-Host "  Code:  $($drift.detail)" }
+    if ($drift.state -eq "differ") {
+        Write-Host "  -> the installed code is NOT this source: [R] is the one you want."
+    }
+    Write-Host ""
+    Write-Host "  [R]einstall - refresh the code. Data, settings and registrations KEPT"
+    Write-Host "  [D]eps      - repair the venv dependencies only, tools untouched"
+    Write-Host "  [C]lean     - delete the venv and rebuild it, then reinstall. Data KEPT"
+    Write-Host "  [W]ipe      - FULL RESET: also deletes memory, knowledge and settings"
+    Write-Host "  [S]kip      - keep the current installation"
     # No console (GUI installer: CreateNoWindow, stdin not redirected) => Read-Host
     # throws, and ErrorActionPreference=Stop would abort the whole install. The
     # UserInteractive gate is deliberately NOT back (it was wrong: it is true in
     # that very case); catching the failure delivers the documented "skip".
     try { $ans = Read-Host "Choice" }
-    catch { Write-Host "  (no console for the prompt - keeping the current install)"; return "skip" }
+    catch {
+        if ($drift.state -eq "differ") {
+            Write-Host "  (no console for the prompt - but the installed code is stale: refreshing)"
+            return "reinstall"
+        }
+        Write-Host "  (no console for the prompt - keeping the current install)"
+        return "skip"
+    }
     switch -Regex ($ans) {
         '^(r|reinstall)$' { return "reinstall" }
+        '^(d|deps)$'      { return "deps" }
         '^(c|clean)$'     { return "clean" }
+        '^(w|wipe)$'      {
+            # Cancellare la memoria dell'utente non puo' stare dietro a un
+            # tasto solo: si scrive la parola. Un [W] battuto per sbaglio al
+            # posto di [S] non deve costare il grafo.
+            Write-Host "  This deletes the semantic memory, the knowledge vault and every setting."
+            try { $c = Read-Host "  Type WIPE to confirm" } catch { $c = "" }
+            if ($c -ceq "WIPE") { return "wipe" }
+            Write-Host "  Not confirmed - keeping the current installation."
+            return "skip"
+        }
         default            { return "skip" }
     }
 }
 
 $gmVer = Test-AlreadyInstalled "gray-matter" $Here
 if ($gmVer) {
-    $choice = Prompt-InstallChoice "Gray-Matter" $gmVer
+    $choice = Prompt-InstallChoice "Gray-Matter" $gmVer "gray_matter" $Here
     # Stop AGAIN, after the prompt. The call at the top of the script is not
     # enough in the interactive flow (double-clicked install.cmd): while the user
     # reads the menu, the MCP client notices its stdio server died and respawns
@@ -395,6 +486,24 @@ if ($gmVer) {
     # "[WinError 5] Accesso negato". Non-interactive runs never showed this
     # because there is no pause between the kill and the write.
     Stop-VenvProcesses $Venv
+    if ($choice -eq "wipe") {
+        Write-Host "Full reset: removing data, settings and client registrations..."
+        # Si DELEGA all'uninstall gia' collaudato (guidato dal manifest):
+        # l'installer non cancella dati di suo. Lo impone anche
+        # `test_clear_never_touches_user_data`, e una seconda regola di
+        # cancellazione sarebbe l'ennesima copia da tenere allineata.
+        & $VPy -c "from gray_matter.executor import execute_uninstall; execute_uninstall(purge_data=True, assume_yes=True, remove_venv=False)"
+        if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: the reset did not complete - continuing with the reinstall." }
+        $choice = "clean"     # dopo il wipe il venv si ricostruisce comunque
+    }
+    if ($choice -eq "deps") {
+        # Senza --no-deps e senza --force-reinstall: pip lascia stare il codice
+        # (gia' soddisfatto) e installa solo cio' che manca. E' il caso vero di
+        # "venv da riparare" — mcp sparito, fastembed a meta'.
+        Write-Host "Repairing dependencies only (tools untouched)..."
+        & $VPy -m pip install $Here
+        if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: dependency repair failed." }
+    }
     if ($choice -eq "clean") {
         Write-Host "Removing venv and reinstalling from scratch..."
         Remove-Item -Recurse -Force $Venv -ErrorAction SilentlyContinue
@@ -404,9 +513,9 @@ if ($gmVer) {
         $VPy = Join-Path $Venv "Scripts\python.exe"
         & $VPy -m pip install --upgrade pip | Out-Null
     }
-    if ($choice -ne "skip") {
+    if ($choice -ne "skip" -and $choice -ne "deps") {
         Write-Host "Reinstalling Gray-Matter..."
-        $Repair = Get-RepairArgs
+        $Repair = Get-RepairArgs -Always
         & $VPy -m pip install @Repair $Here
         if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1 }
@@ -440,7 +549,7 @@ function Install-Peer([string]$dir, [string]$label) {
     if (Test-Path $cf) { $Cons = @("-c", $cf) }
     $peerVer = Test-AlreadyInstalled $pkg $dir
     if ($peerVer) {
-        $choice = Prompt-InstallChoice $label $peerVer
+        $choice = Prompt-InstallChoice $label $peerVer $pkg $dir
         Stop-VenvProcesses $Venv        # same respawn window as above
         if ($choice -ne "skip") {
             if ($choice -eq "clean") {
@@ -459,10 +568,14 @@ function Install-Peer([string]$dir, [string]$label) {
                 if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: gray-matter reinstall failed after venv rebuild."; return }
             }
             Write-Host "Reinstalling $label..."
-            # Same gate as the fresh-install branch: force-reinstall only when
-            # mcp is present, never hardcoded (a fresh venv has none, and an
-            # uncapped peer would then drag shared deps past GM's cap).
-            $Repair = Get-RepairArgs
+            # -Always: la reinstallazione e' stata CHIESTA. Senza forzare, pip
+            # risponde "already satisfied" a parita' di versione e non copia
+            # niente — ed e' proprio da qui che e' passato un neuron con 72 file
+            # vecchi sotto la versione giusta. Il gate su mcp resta dentro
+            # Get-RepairArgs: --no-deps su un venv senza deps consegna un
+            # install morto, e un peer non capato trascina le shared dep oltre
+            # il cap di GM.
+            $Repair = Get-RepairArgs -Always
             & $VPy -m pip install @Find @Repair $dir
             if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Repair $dir }
             if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $label reinstall failed - continuing." }
