@@ -480,7 +480,7 @@ foreach ($gm in @((Join-Path $Here "gray_matter"), (Join-Path (Split-Path -Paren
 # scarica una GM vecchia accanto a un NeuRAG corrente — la stessa deriva che in
 # Neuron aveva lasciato 1.1.2 mentre GM era a 1.4.0. La CI di NeuRAG la controlla
 # contro l'ultimo tag pubblicato, come quella di Neuron.
-$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.4.0" }
+$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.4.1" }
 $GmRepo    = if ($env:GM_REPO)    { $env:GM_REPO }    else { "recla93/gray-matter" }
 $GmSha256  = $env:GM_SHA256          # optional: pin the release zip checksum
 $Cache     = if ($env:GM_CACHE)   { $env:GM_CACHE }  else { Join-Path $Here ".gm-bootstrap" }
