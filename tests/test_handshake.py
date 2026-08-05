@@ -14,6 +14,7 @@ Two failures this pins, both of which shipped:
 """
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,28 @@ OWNER_CASES = [
 @pytest.mark.parametrize("installed,expected", OWNER_CASES)
 def test_exactly_one_owner(installed, expected):
     assert _hook().owner(installed) == expected
+
+
+def test_the_hook_finds_the_registry_gray_matter_actually_writes(monkeypatch, tmp_path):
+    """L'anello che mancava: ogni altro test passa `installed` a mano, quindi
+    `installed_slugs()` non veniva mai confrontato con un registro VERO.
+
+    Il hook rispecchia `gme.gme_root()` senza importarlo, e il mirror era rimasto
+    al layout piatto `<base>/GrayMatterEnvironment/*.json` quando il registro e'
+    sceso in `.../registry/`. Su una macchina reale con i tre tool installati
+    `installed_slugs()` tornava vuoto, `owner()` None, e l'handshake non e' mai
+    partito. Questo test lega le due implementazioni: chi sposta la regola in
+    gme.py rompe qui, non in produzione."""
+    from gray_matter import gme
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    gme.write_tool({"key": "neuron", "label": "Neuron", "module": "neuron",
+                    "status": "installed"})
+
+    assert gme.gme_root().is_dir(), "GM non ha scritto dove crede"
+    assert _hook().installed_slugs() == {"neuron"}, (
+        f"il hook guarda in {_hook()._gme_root()}, GM scrive in {gme.gme_root()}")
 
 
 @pytest.mark.parametrize("installed,expected", OWNER_CASES)
@@ -210,6 +233,121 @@ def test_deploy_is_idempotent_across_different_command_spellings(monkeypatch, tm
             for h in (e.get("hooks") or [])]
     ours = [c for c in cmds if "neuron_sessionstart_hook" in c]
     assert len(ours) == 1, f"deploy added a duplicate handshake: {ours}"
+
+
+def _fake_home(monkeypatch, tmp_path):
+    """I due deployer risolvono la home in modi diversi (`Path.home()` lo
+    standalone, `os.path.expanduser` GM): vanno mockati entrambi i canali."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(home))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    return home
+
+
+def test_opencode_entry_is_not_duplicated_by_the_other_installer(monkeypatch, tmp_path):
+    """Stesso bug del doppio handshake, sull'altro client.
+
+    GM scriveva `plugins/x.mjs` e lo standalone `./plugins/x.mjs`, e lo
+    standalone confrontava la stringa INTERA: installato GM e poi un peer,
+    `opencode.json` si ritrovava due entry per lo stesso file."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    asset = ASSET_DIRS["neuron"] / "opencode-plugin" / "neuron-handshake.mjs"
+
+    executor._deploy_opencode(asset, dry_run=False)          # prima GM
+    _deployer().deploy_opencode(ASSET_DIRS["neuron"], dry_run=False)   # poi lo standalone
+
+    cfgp = home / ".config" / "opencode" / "opencode.json"
+    plugins = json.loads(cfgp.read_text(encoding="utf-8-sig"))["plugin"]
+    ours = [p for p in plugins if "neuron-handshake" in p]
+    assert len(ours) == 1, f"i due installer hanno duplicato l'entry: {plugins}"
+
+
+def test_standalone_enables_the_plugin_in_codex_config(monkeypatch, tmp_path):
+    """Il mirror da solo e' inerte: Codex carica un plugin cowork solo se
+    elencato come abilitato. Lo standalone copiava e basta, quindi deployava un
+    plugin che non sarebbe mai stato caricato."""
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".codex").mkdir(parents=True)          # Codex presente, cache no
+
+    msg = _deployer().deploy_cowork(ASSET_DIRS["neuron"], dry_run=False)
+
+    assert "SKIPPED" not in msg, msg          # la cache mancante non e' un motivo per saltare
+    cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert '[plugins."neuron-guard@claude-cowork"]' in cfg, cfg
+    assert "enabled = true" in cfg, cfg
+    # idempotente: la seconda passata non duplica la sezione
+    _deployer().deploy_cowork(ASSET_DIRS["neuron"], dry_run=False)
+    cfg2 = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert cfg2.count('[plugins."neuron-guard@claude-cowork"]') == 1, cfg2
+
+
+@pytest.mark.parametrize("who", ["gm", "standalone"])
+def test_a_hook_entry_pointing_at_a_dead_interpreter_gets_rewritten(monkeypatch, tmp_path, who):
+    """Il terzo caso di "gia' presente = non toccare" (dopo `claude mcp add` e il
+    mirror del registro).
+
+    Quando l'install e' passato alla radice GME il venv ha cambiato posto, ma il
+    comando registrato in settings.json continuava a puntare al vecchio
+    interprete. Entrambi i deployer vedevano "c'e' gia'" e non aggiornavano
+    nulla: l'handshake era morto e nessun reinstall lo resuscitava. Verificato
+    su installazione reale."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    settings = home / ".claude" / "settings.json"
+    dead_py = str(tmp_path / "vecchio" / "venv" / "python.exe")   # non esiste
+    hook = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
+    settings.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matchers": ["startup"], "hooks": [
+            {"type": "command", "command": f'"{dead_py}" "{hook}"'}]}]}}),
+        encoding="utf-8")
+
+    if who == "gm":
+        executor._deploy_claude_code(
+            ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py",
+            dry_run=False)
+    else:
+        _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
+
+    body = json.loads(settings.read_text(encoding="utf-8-sig"))
+    cmds = [h.get("command", "") for e in body["hooks"]["SessionStart"]
+            for h in (e.get("hooks") or [])]
+    ours = [c for c in cmds if "neuron_sessionstart_hook" in c]
+    assert len(ours) == 1, f"riscrittura duplicata: {ours}"
+    assert dead_py not in ours[0], f"l'interprete morto e' rimasto: {ours[0]}"
+
+
+def test_a_working_entry_is_left_alone(monkeypatch, tmp_path):
+    """L'altro verso: una entry che gira non si tocca, o due deployer si
+    riscriverebbero a vicenda a ogni installazione."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    settings = home / ".claude" / "settings.json"
+    hook = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
+    good = f'"{sys.executable}" "{hook}"'          # interprete che esiste davvero
+    settings.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": good}]}]}}),
+        encoding="utf-8")
+
+    executor._deploy_claude_code(
+        ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py",
+        dry_run=False)
+    _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
+
+    body = json.loads(settings.read_text(encoding="utf-8-sig"))
+    cmds = [h.get("command", "") for e in body["hooks"]["SessionStart"]
+            for h in (e.get("hooks") or [])]
+    assert [c for c in cmds if "neuron_sessionstart_hook" in c] == [good]
 
 
 def test_deploy_never_rewrites_an_unparseable_settings_file(monkeypatch, tmp_path):

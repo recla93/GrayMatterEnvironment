@@ -33,6 +33,67 @@ def _run_install(state, **kw):
     return executor.execute_install(state, assets_root=ASSETS, **kw)
 
 
+def _wiring(env):
+    from gray_matter import executor
+    return {r["check"]: r for r in executor.check_wiring()}
+
+
+def test_wiring_reports_a_hook_entry_that_cannot_run(env):
+    """Il guasto vero visto in produzione: dopo la migrazione alla radice GME il
+    comando registrato puntava a un interprete sparito, e nulla se ne accorgeva —
+    `doctor` usciva subito con "not running" perche' chiedeva a un server che
+    per l'appunto non partiva."""
+    home = env / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    dead = str(env / "venv-sparito" / "python.exe")
+    (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command",
+         "command": f'"{dead}" "{home}/.claude/hooks/neuron_sessionstart_hook.py"'}]}]}}),
+        encoding="utf-8")
+
+    r = _wiring(env)["hook_entry"]
+    assert r["ok"] is False
+    assert "venv-sparito" in r["detail"], r
+    assert r["fix"], "un guasto senza rimedio stampato non aiuta nessuno"
+
+
+def test_wiring_reports_a_deployed_hook_older_than_the_source(env):
+    """Un deploy vecchio resta li' per sempre: l'hook stantio che parlava di
+    `mcp__neuron5__*` e' vissuto per mesi cosi'."""
+    home = env / "home"
+    dst = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text("# una copia vecchia\n", encoding="utf-8")
+
+    r = _wiring(env)["hook_file"]
+    assert r["ok"] is False and "diverso dal sorgente" in r["detail"], r
+
+
+def test_wiring_is_happy_with_a_freshly_deployed_hook(env):
+    """Il verso opposto: dopo un deploy vero i due controlli devono tacere, o
+    il doctor diventa rumore che si impara a ignorare."""
+    from gray_matter import executor
+    home = env / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    executor._deploy_claude_code(
+        ASSETS / "claude-code-hook" / "neuron_sessionstart_hook.py", dry_run=False)
+
+    w = _wiring(env)
+    assert w["hook_file"]["ok"], w["hook_file"]
+    assert w["hook_entry"]["ok"], w["hook_entry"]
+
+
+def test_wiring_catches_the_registry_mirror_drifting(env, monkeypatch):
+    """Il controllo che avrebbe risparmiato la caccia: GM e l'hook devono
+    guardare la stessa cartella. L'hook rispecchia `gme_root()` senza importarlo,
+    quindi e' la copia che va alla deriva."""
+    from gray_matter import executor, gme
+    monkeypatch.setattr(gme, "gme_root", lambda: env / "da-un-altra-parte")
+
+    r = _wiring(env)["registry"]
+    assert r["ok"] is False and "l'hook legge" in r["detail"], r
+
+
 def test_install_creates_dirs_and_manifest(env):
     from gray_matter import paths
     res = _run_install({"installed": ["neuron", "neurag"], "gm_present": False,
@@ -90,6 +151,26 @@ def test_deploy_hook_cowork_and_opencode(env):
     assert mjs.exists()
     cfg = json.loads((home / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
     assert any("neuron-handshake" in p for p in cfg["plugin"])
+
+
+def test_deploy_hook_codex(env):
+    """codex usa lo STESSO plugin cowork (formato .claude-plugin): mirror nel
+    cache codex + enable in config.toml, senza toccare le altre sezioni."""
+    home = env / "home"
+    res = _run_install({"installed": ["neuron"], "gm_present": True,
+                        "clients": ["codex"]})
+    hooks = {r["client"]: r for r in res if r["action"] == "deploy_hook"}
+    assert hooks["codex"]["ok"], hooks["codex"]
+    cache = home / ".codex" / "plugins" / "cache" / "claude-cowork" / "neuron-guard" / "0.1.0"
+    assert (cache / "hooks" / "hooks.json").exists()
+    assert (cache / ".claude-plugin" / "plugin.json").exists()
+    cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert '[plugins."neuron-guard@claude-cowork"]' in cfg
+    assert "enabled = true" in cfg
+    # idempotente: il secondo run non duplica il blocco
+    _run_install({"installed": ["neuron"], "gm_present": True, "clients": ["codex"]})
+    cfg2 = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert cfg2.count('[plugins."neuron-guard@claude-cowork"]') == 1
 
 
 def test_uninstall_removes_hooks_code_and_asks_data(env):
@@ -178,7 +259,7 @@ def test_uninstall_purge_wipes_data_without_asking(env):
     _run_install({"installed": ["neuron"], "gm_present": False, "clients": []})
     (paths.neuron_graphs() / "g.json").write_text("{}", encoding="utf-8")
     res = executor.execute_uninstall(
-        purge_data=True, ask=lambda q: pytest.fail("must not ask with purge_data"))
+        purge_data=True, remove_venv=False, ask=lambda q: pytest.fail("must not ask with purge_data"))
     assert all(r["ok"] for r in res)
     assert not paths.neuron_graphs().exists()
 

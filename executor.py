@@ -99,6 +99,133 @@ def detect_state() -> dict:
 # Shared effectful primitives
 # --------------------------------------------------------------------------
 
+def check_wiring() -> list[dict]:
+    """Read-only: i PUNTATORI scritti sul disco puntano ancora dove serve?
+
+    `detect_state()` guarda cosa e' installato; questo guarda se cio' che e'
+    installato e' ancora *collegato*. Sono i quattro controlli che, fatti a mano
+    dopo la migrazione alla radice GME, hanno trovato quattro guasti veri: il
+    registro cercato un livello sopra, un interprete sparito lasciato nella
+    entry SessionStart, un hook deployato piu' vecchio del sorgente, e le stesse
+    entry stantie nei config MCP. Nessuno di questi rompe un import, quindi
+    nessuna suite li vede: si vedono solo guardando il disco.
+
+    Ogni voce: ``{check, ok, detail, fix}``. Non tocca niente e non solleva mai.
+    """
+    out: list[dict] = []
+
+    def rec(check, ok, detail, fix=""):
+        out.append({"check": check, "ok": bool(ok), "detail": detail, "fix": fix})
+
+    # 1. Il registro: GM e l'hook devono guardare la STESSA cartella. E' un
+    #    mirror scritto a mano (l'hook non puo' importare gray_matter), quindi
+    #    e' la copia che va alla deriva quando la regola si sposta.
+    try:
+        from gray_matter import gme
+        root = gme.gme_root()
+        tools = sorted(t.get("key") for t in gme.list_tools() if t.get("key"))
+        hook_root = None
+        try:
+            hook_root = _shipped_hook()._gme_root()
+        except Exception:  # noqa: BLE001
+            pass
+        if hook_root is not None and Path(hook_root) != Path(root):
+            rec("registry", False,
+                f"GM scrive in {root}, l'hook legge {hook_root}",
+                "reinstalla l'hook: gray-matter repair")
+        elif not tools:
+            rec("registry", False, f"nessun tool registrato in {root}",
+                "gray-matter repair (riscrive il registro)")
+        else:
+            rec("registry", True, f"{root} -> {', '.join(tools)}")
+    except Exception as exc:  # noqa: BLE001
+        rec("registry", False, f"non leggibile: {exc}")
+
+    # 2. La entry SessionStart deve poter GIRARE: dopo la migrazione il venv ha
+    #    cambiato posto e il comando registrato puntava a un interprete sparito.
+    settings = _claude_dir() / "settings.json"
+    try:
+        cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
+        cmds = [h.get("command", "")
+                for g in (cfg.get("hooks", {}).get("SessionStart") or [])
+                if isinstance(g, dict)
+                for h in (g.get("hooks") or []) if isinstance(h, dict)]
+        ours = [c for c in cmds if "neuron_sessionstart_hook" in c]
+        broken = [c for c in ours if _entry_is_dead(c)]
+        if broken:
+            rec("hook_entry", False,
+                f"interprete inesistente: {_hook_interpreter(broken[0])}",
+                "gray-matter repair (riscrive la entry)")
+        elif not ours:
+            rec("hook_entry", False, "nessuna entry SessionStart registrata",
+                "gray-matter repair")
+        else:
+            rec("hook_entry", True, f"{len(ours)} entry, interprete presente")
+    except (json.JSONDecodeError, OSError) as exc:
+        rec("hook_entry", False, f"{settings} non leggibile: {exc}")
+
+    # 3. L'hook deployato deve essere il sorgente: un deploy vecchio resta li'
+    #    per sempre, e un hook stantio parla di tool che non esistono piu'.
+    try:
+        src = _find_clients_root() / "claude-code-hook" / "neuron_sessionstart_hook.py"
+        dst = _claude_dir() / "hooks" / "neuron_sessionstart_hook.py"
+        if not dst.exists():
+            rec("hook_file", False, f"non deployato: {dst}", "gray-matter repair")
+        elif src.exists() and src.read_bytes() != dst.read_bytes():
+            rec("hook_file", False, f"{dst} e' diverso dal sorgente",
+                "gray-matter repair (ri-deploya l'hook)")
+        else:
+            rec("hook_file", True, str(dst))
+    except OSError as exc:
+        rec("hook_file", False, f"non confrontabile: {exc}")
+
+    # 4. Stessa domanda per i config MCP: un client che invoca un interprete
+    #    sparito e' un server che non parte, in silenzio.
+    try:
+        from gray_matter import clients as _c
+        bad = []
+        for _key, spec in _c.CLIENTS.items():
+            path = _c._pick(spec["paths"]())
+            if not path or spec.get("format") == "toml":
+                continue
+            try:
+                node = json.loads(Path(path).read_text(encoding="utf-8-sig") or "{}")
+            except (json.JSONDecodeError, OSError):
+                continue
+            for k in _c.keys_for(spec, path):
+                node = node.get(k) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                continue
+            for slug in _c.SERVERS:
+                entry = node.get(slug)
+                if not isinstance(entry, dict):
+                    continue
+                cmd = entry.get("command")
+                exe = cmd[0] if isinstance(cmd, list) and cmd else cmd
+                if isinstance(exe, str) and os.path.isabs(exe) and not os.path.exists(exe):
+                    bad.append(f"{spec['label']}/{slug} -> {exe}")
+        if bad:
+            rec("mcp_entries", False, "; ".join(bad[:3]),
+                "gray-matter register (riscrive le entry)")
+        else:
+            rec("mcp_entries", True, "ogni interprete registrato esiste")
+    except Exception as exc:  # noqa: BLE001
+        rec("mcp_entries", False, f"non verificabile: {exc}")
+
+    return out
+
+
+def _shipped_hook():
+    """Il modulo hook COME SPEDITO, caricato da file: e' l'unico modo di
+    chiedergli dove crede di trovare il registro senza duplicarne la regola."""
+    import importlib.util
+    p = _find_clients_root() / "claude-code-hook" / "neuron_sessionstart_hook.py"
+    spec = importlib.util.spec_from_file_location("_gm_shipped_hook", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _reap(pids: list[int], dry_run: bool) -> dict:
     killed, failed = [], []
     for pid in pids:
@@ -162,6 +289,23 @@ def _opencode_dir() -> Path:
     return Path(os.path.expanduser("~")) / ".config" / "opencode"
 
 
+def _hook_interpreter(cmd: str) -> str:
+    """L'interprete di una command line: il primo token, quotato o no."""
+    cmd = (cmd or "").strip()
+    if cmd.startswith('"'):
+        return cmd[1:].split('"', 1)[0]
+    return cmd.split(" ", 1)[0]
+
+
+def _entry_is_dead(cmd: str) -> bool:
+    """La entry non puo' girare: il suo interprete ASSOLUTO non esiste piu'.
+
+    Un `python` nudo non si giudica (dipende dal PATH); un path assoluto si'.
+    """
+    exe = _hook_interpreter(cmd)
+    return bool(exe) and os.path.isabs(exe) and not os.path.exists(exe)
+
+
 def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
     """Copy the SessionStart hook + register it in ~/.claude/settings.json."""
     dest = _claude_dir() / "hooks" / src.name
@@ -170,18 +314,41 @@ def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
         shutil.copy2(src, dest)
         settings = _claude_dir() / "settings.json"
         try:
-            cfg = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
+            cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
         except (json.JSONDecodeError, OSError):
             return [str(dest)], "settings.json unreadable — register hook manually"
         groups = cfg.setdefault("hooks", {}).setdefault("SessionStart", [])
-        already = any("neuron_sessionstart_hook" in h.get("command", "")
-                      for g in groups for h in g.get("hooks", []))
-        if not already:
-            groups.append({"matchers": ["startup", "resume", "clear", "compact"],
-                           "hooks": [{"type": "command",
-                                      "command": f'"{sys.executable}" "{dest}"'}]})
-            settings.parent.mkdir(parents=True, exist_ok=True)
-            settings.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        # "matcher" singolare, come il resto del mondo: hooks.json del plugin, il
+        # deployer standalone, gli hook dell'utente. "matchers" (plurale, lista)
+        # esisteva solo qui.
+        fresh = {"matcher": "startup|resume|clear|compact",
+                 "hooks": [{"type": "command",
+                            "command": f'"{sys.executable}" "{dest}"'}]}
+        ours = [g for g in groups
+                if any("neuron_sessionstart_hook" in (h.get("command") or "")
+                       for h in (g.get("hooks") or []) if isinstance(h, dict))]
+        # Una entry NOSTRA che non puo' girare va RISCRITTA, non lasciata stare.
+        # "gia' presente = non toccare" e' come `claude mcp add` trattava le entry
+        # esistenti: dopo che l'install e' passato alla radice GME, il comando
+        # registrato puntava a un interprete che non esiste piu' e l'handshake
+        # non partiva piu' — per sempre, perche' nessun reinstall lo aggiornava.
+        # Verificato su installazione reale.
+        dead = [g for g in ours
+                if any(_entry_is_dead(h.get("command") or "")
+                       for h in (g.get("hooks") or []) if isinstance(h, dict))]
+        if dead:
+            for g in dead:
+                groups.remove(g)
+            groups.append(fresh)
+            note = "hook copied + stale SessionStart entry rewritten"
+        elif not ours:
+            groups.append(fresh)
+            note = "hook copied + SessionStart registered"
+        else:
+            return [str(dest)], "hook refreshed (SessionStart already registered)"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        _save_user_json(settings, cfg)
+        return [str(dest)], note
     return [str(dest)], "hook copied + SessionStart registered"
 
 
@@ -196,6 +363,20 @@ def _deploy_cowork(src: Path, dry_run: bool) -> tuple[list[str], str]:
     return [str(dest)], "plugin copied (enable it from Cowork if not active)"
 
 
+def _save_user_json(p: Path, data) -> None:
+    """Backup + atomic replace + ensure_ascii=False, per ogni config UTENTE che
+    riscriviamo. Stessa garanzia di `_save_json` in clients/deploy_hooks.py e
+    dell'hardening S2 su `_register_json`: qui mancava, e questo path riscrive
+    lo stesso genere di file (accenti escapati, nessun backup, scrittura non
+    atomica)."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.exists():
+        shutil.copyfile(p, p.with_suffix(p.suffix + ".bak"))
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+
+
 def _deploy_opencode(src: Path, dry_run: bool) -> tuple[list[str], str]:
     """Copy the .mjs plugin next to opencode.json + add it to `plugin` array."""
     dest = _opencode_dir() / "plugins" / src.name
@@ -208,17 +389,69 @@ def _deploy_opencode(src: Path, dry_run: bool) -> tuple[list[str], str]:
         except (json.JSONDecodeError, OSError):
             return [str(dest)], "opencode.json unreadable — add plugin manually"
         plugins = cfg.setdefault("plugin", [])
-        rel = f"plugins/{src.name}"
-        if not any(src.name in p for p in plugins):
+        # "./plugins/x": la stessa forma che scrive il deployer standalone
+        # (clients/deploy_hooks.py). Due forme per lo stesso file facevano
+        # appendere una seconda entry a chi installava GM e poi un peer.
+        rel = f"./plugins/{src.name}"
+        if not any(src.name in p for p in plugins if isinstance(p, str)):
             plugins.append(rel)
-            cfgp.parent.mkdir(parents=True, exist_ok=True)
-            cfgp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            _save_user_json(cfgp, cfg)
     return [str(dest)], "plugin copied + registered in opencode.json"
+
+
+def _deploy_codex(src: Path, dry_run: bool) -> tuple[list[str], str]:
+    """Mirror the neuron-guard cowork plugin into the Codex plugin cache and
+    enable it in ~/.codex/config.toml.
+
+    The plugin keeps its Claude-Cowork format (the same asset Cowork consumes) —
+    Codex loads cowork-format plugins from its cache but only when listed as
+    `[plugins."<name>@claude-cowork"] enabled = true`. The mirror prunes stale
+    files (removed in the source, removed in the cache) and the config.toml
+    edit is a section-targeted upsert: the rest of the user's config stays
+    byte-for-byte. config.toml is NOT returned as a removable path — uninstall
+    scrubs the block, it never deletes the file."""
+    codex_home = Path(os.path.expanduser("~")) / ".codex"
+    # Versione dal plugin, non hardcoded: al primo bump di plugin.json un
+    # "0.1.0" fisso avrebbe deployato in una cartella che nessuno legge
+    # (stesso helper in clients/deploy_hooks.py::_plugin_version).
+    try:
+        _meta = json.loads((src / ".claude-plugin" / "plugin.json")
+                           .read_text(encoding="utf-8-sig"))
+        _ver = str(_meta.get("version") or "") or "0.1.0"
+    except (OSError, json.JSONDecodeError, AttributeError):
+        _ver = "0.1.0"
+    cache = codex_home / "plugins" / "cache" / "claude-cowork" / src.name / _ver
+    cfg = codex_home / "config.toml"
+    if not dry_run:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        keep = set()
+        for f in src.rglob("*"):
+            if f.is_file():
+                rel = f.relative_to(src)
+                keep.add(rel)
+                out = cache / rel
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, out)
+        if cache.is_dir():
+            for f in list(cache.rglob("*")):
+                if f.is_file() and f.relative_to(cache) not in keep:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        from gray_matter import clients
+        section = f'plugins."{src.name}@claude-cowork"'
+        text = cfg.read_text(encoding="utf-8-sig") if cfg.exists() else ""
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(clients._toml_upsert_section(text, section, ["enabled = true"]),
+                       encoding="utf-8")
+    return [str(cache)], "plugin mirrored + enabled in config.toml"
 
 
 _DEPLOYERS = {"claude-code": _deploy_claude_code,
               "cowork": _deploy_cowork,
-              "opencode": _deploy_opencode}
+              "opencode": _deploy_opencode,
+              "codex": _deploy_codex}
 
 
 def _deploy_hook(client: str, asset: str, assets_root: Path, dry_run: bool) -> dict:
@@ -399,10 +632,33 @@ def _scrub_opencode_config(dry_run: bool) -> None:
     plugins = cfg.get("plugin")
     if not isinstance(plugins, list):
         return
-    kept = [p for p in plugins if "neuron-handshake" not in p]
+    kept = [p for p in plugins if not (isinstance(p, str) and "neuron-handshake" in p)]
     if kept != plugins and not dry_run:
         cfg["plugin"] = kept
-        cfgp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        _save_user_json(cfgp, cfg)
+
+
+def _scrub_codex_plugins(dry_run: bool) -> None:
+    """Drop our `[plugins."neuron-guard@claude-cowork"]` block from
+    ~/.codex/config.toml and the mirrored plugin cache — never the file,
+    never the user's other plugins."""
+    cfg = Path(os.path.expanduser("~")) / ".codex" / "config.toml"
+    try:
+        text = cfg.read_text(encoding="utf-8-sig")
+    except OSError:
+        text = None
+    import re
+    if text is not None:
+        pattern = re.compile(r"(?ms)^\[plugins\.\"neuron-guard@claude-cowork\"\]\s*?\n.*?(?=^\[|\Z)")
+        new_text = pattern.sub("", text)
+        if new_text != text and not dry_run:
+            cfg.write_text(new_text, encoding="utf-8")
+    # The Cowork plugin cache is OUR mirror (deploy_hooks.deploy_cowork):
+    # scrubbing the config block but leaving the cache would keep the model
+    # reaching for tools that no longer exist.
+    cache = Path(os.path.expanduser("~")) / ".codex" / "plugins" / "cache" / "claude-cowork" / "neuron-guard"
+    if cache.exists() and not dry_run:
+        shutil.rmtree(cache, ignore_errors=True)
 
 
 def _remove_hook(client: str, path: str, dry_run: bool) -> dict:
@@ -420,6 +676,8 @@ def _remove_hook(client: str, path: str, dry_run: bool) -> dict:
         _scrub_claude_settings(dry_run)
     elif client == "opencode":
         _scrub_opencode_config(dry_run)
+    elif client == "codex":
+        _scrub_codex_plugins(dry_run)
     return {"action": "remove_hook", "ok": ok, "client": client, "path": path}
 
 
@@ -427,8 +685,12 @@ def _remove_code(dry_run: bool) -> dict:
     # state.db and paths.json are GM's own control files in gm_home() and were in
     # NO list — not code, not data — so every uninstall left them behind and the
     # rmdir below could never succeed. app_dir() is gone (see _install_gm).
+    # The cloud `.env` (Turso token) lives in gm_home() too and was never a
+    # target either: uninstall left the credentials on disk.
+    from gray_matter import cloud
     targets = [paths.logs_dir(), paths.config_file(), paths.manifest_path(),
-               paths.pids_path(), paths.gm_state(), paths.env_file()]
+               paths.pids_path(), paths.gm_state(), paths.env_file(),
+               cloud.default_env_file()]
     if not dry_run:
         for t in targets:
             try:

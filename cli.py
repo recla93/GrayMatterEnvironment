@@ -225,7 +225,27 @@ def cmd_stats() -> None:
             print(f"  {k:22} {r[k]}")
 
 
+def _report_wiring() -> bool:
+    """I controlli che NON servono un server vivo. Vanno per primi proprio per
+    questo: `doctor` usciva con "not running" quando l'install era rotto, cioe'
+    esattamente quando c'era da diagnosticare. Torna True se tutto e' a posto."""
+    try:
+        from gray_matter.executor import check_wiring
+        rows = check_wiring()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  wiring: non verificabile ({exc})")
+        return True
+    bad = [r for r in rows if not r["ok"]]
+    for r in rows:
+        print(f"  [{'ok' if r['ok'] else '!!'}] {r['check']}: {r['detail']}")
+        if not r["ok"] and r["fix"]:
+            print(f"       -> {r['fix']}")
+    return not bad
+
+
 def cmd_doctor() -> None:
+    print("Wiring (install):")
+    _report_wiring()
     r = _send_ipc({"action": "doctor"})
     if "error" in r:
         print(f"Gray-Matter not running ({r['error']}).")
