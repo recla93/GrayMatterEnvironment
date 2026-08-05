@@ -48,6 +48,53 @@ def _save_json(p: Path, data) -> None:
     os.replace(tmp, p)
 
 
+def _dead_cmd(cmd: str) -> bool:
+    """La command line non puo' girare: interprete ASSOLUTO che non esiste."""
+    cmd = (cmd or "").strip()
+    exe = cmd[1:].split('"', 1)[0] if cmd.startswith('"') else cmd.split(" ", 1)[0]
+    return bool(exe) and os.path.isabs(exe) and not os.path.exists(exe)
+
+
+def _plugin_version(src: Path) -> str:
+    """La versione la dichiara il plugin, non il deployer: hardcodarla significa
+    che il primo bump di plugin.json deploya in una cartella che nessuno legge."""
+    meta = _load_json(src / ".claude-plugin" / "plugin.json")
+    v = (meta or {}).get("version") if isinstance(meta, dict) else None
+    return str(v) if v else "0.1.0"
+
+
+def _codex_enable(cfg: Path, plugin_name: str) -> bool:
+    """`[plugins."<nome>@claude-cowork"] enabled = true` in ~/.codex/config.toml.
+
+    Upsert sezionale: il resto del config dell'utente resta byte per byte, e il
+    file non viene mai creato da zero se Codex non l'ha mai scritto — si scrive
+    solo la nostra sezione. Torna False se non si e' potuto scrivere."""
+    import re
+    section = f'plugins."{plugin_name}@claude-cowork"'
+    block = f"[{section}]\nenabled = true\n"
+    try:
+        text = cfg.read_text(encoding="utf-8-sig") if cfg.exists() else ""
+    except OSError:
+        return False
+    pattern = re.compile(r"(?ms)^\[" + re.escape(section) + r"\]\s*?\n.*?(?=^\[|\Z)")
+    if pattern.search(text):
+        new_text = pattern.sub(lambda _m: block, text, count=1)   # lambda: i backslash Windows
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        new_text = text + ("\n" if text.strip() else "") + block
+    if new_text == text:
+        return True
+    try:
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        if cfg.exists():
+            shutil.copyfile(cfg, cfg.with_suffix(cfg.suffix + ".bak"))
+        cfg.write_text(new_text, encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
 def deploy_claude_code(root: Path, dry_run: bool) -> str:
     """Copy the hook and register it under hooks.SessionStart."""
     src = root / HOOK
@@ -76,21 +123,30 @@ def deploy_claude_code(root: Path, dry_run: bool) -> str:
     # `python "<hook>"`; comparing whole strings saw those as different and
     # appended a second entry -- the double handshake, back again, from the
     # very code meant to prevent it. Observed on a live machine.
-    already = any(
-        isinstance(e, dict)
-        and any(isinstance(h, dict) and src.name in (h.get("command") or "")
-                for h in (e.get("hooks") or []))
-        for e in starts
-    )
+    ours = [e for e in starts
+            if isinstance(e, dict)
+            and any(isinstance(h, dict) and src.name in (h.get("command") or "")
+                    for h in (e.get("hooks") or []))]
+    # Una entry NOSTRA che non puo' girare va RISCRITTA, non lasciata stare:
+    # "gia' presente = non toccare" ha tenuto in vita un comando che puntava a
+    # un interprete sparito quando l'install e' passato alla radice GME, e
+    # nessun reinstall lo aggiornava piu'. Un `python` nudo non si giudica
+    # (dipende dal PATH); un path assoluto inesistente si'.
+    dead = [e for e in ours
+            if any(_dead_cmd(h.get("command") or "")
+                   for h in (e.get("hooks") or []) if isinstance(h, dict))]
     if dry_run:
-        return f"[dry-run] would deploy {dst}" + ("" if already else " + SessionStart entry")
+        return f"[dry-run] would deploy {dst}" + ("" if (ours and not dead) else " + SessionStart entry")
     dst_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dst)
-    if not already:
+    if dead or not ours:
+        for e in dead:
+            starts.remove(e)
         starts.append({"matcher": _MATCHER,
                        "hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
         _save_json(settings, data)
-        return f"hook copied + SessionStart registered ({dst})"
+        return (f"hook copied + stale SessionStart entry rewritten ({dst})" if dead
+                else f"hook copied + SessionStart registered ({dst})")
     return f"hook refreshed ({dst})"
 
 
@@ -111,7 +167,11 @@ def deploy_opencode(root: Path, dry_run: bool) -> str:
         return f"[dry-run] would deploy {dst}"
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(root / OPENCODE, dst)
-    if rel not in plugins:
+    # Riconoscere l'entry dal NOME FILE, non dalla stringa esatta: GM la scrive
+    # senza "./" (gray_matter/executor.py) e un match esatto non la vedeva, così
+    # un'installazione GM seguita da una standalone appendeva un secondo
+    # elemento per lo stesso plugin.
+    if not any(dst.name in p for p in plugins if isinstance(p, str)):
         plugins.append(rel)
         _save_json(cfg, data)
         return f"plugin copied + registered ({dst})"
@@ -129,12 +189,18 @@ def deploy_cowork(root: Path, dry_run: bool) -> str:
     src = root / COWORK
     if not src.is_dir():
         return "SKIPPED: cowork plugin assets missing"
-    base = Path.home() / ".codex" / "plugins" / "cache" / "claude-cowork"
-    if not base.is_dir():
-        return "SKIPPED: Cowork/Codex plugin cache not present"
-    dst = base / "neuron-guard" / "0.1.0"
+    codex_home = Path.home() / ".codex"
+    # La presenza di ~/.codex e' la RILEVAZIONE (qui i deployer girano tutti,
+    # senza la lista client di GM). La sottocartella cache invece si crea: su
+    # una macchina con Codex ma senza cache ancora creata GM deployava e noi
+    # saltavamo, stessa macchina ed esito diverso.
+    if not codex_home.is_dir():
+        return "SKIPPED: Cowork/Codex not present"
+    base = codex_home / "plugins" / "cache" / "claude-cowork"
+    dst = base / src.name / _plugin_version(src)
     if dry_run:
         return f"[dry-run] would mirror {dst}"
+    dst.parent.mkdir(parents=True, exist_ok=True)
     keep = set()
     for f in src.rglob("*"):
         if f.is_file():
@@ -152,7 +218,14 @@ def deploy_cowork(root: Path, dry_run: bool) -> str:
                     removed += 1
                 except OSError:
                     pass
-    return f"plugin mirrored ({dst})" + (f", {removed} stale file(s) removed" if removed else "")
+    # Il mirror da solo non basta: Codex carica un plugin cowork solo se e'
+    # elencato come abilitato in config.toml. Senza questo passo lo standalone
+    # deployava un plugin che nessuno avrebbe mai caricato (GM lo fa in
+    # gray_matter/executor.py::_deploy_codex).
+    enabled = _codex_enable(codex_home / "config.toml", src.name)
+    return (f"plugin mirrored ({dst})"
+            + (f", {removed} stale file(s) removed" if removed else "")
+            + ("" if enabled else ", WARNING: config.toml not writable, plugin not enabled"))
 
 
 def main(argv) -> int:
