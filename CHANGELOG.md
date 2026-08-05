@@ -1,5 +1,28 @@
 # Changelog — Neuron
 
+## 6.4.1 (2026-08-05)
+- **Il tier SQL vettoriale non ha mai girato.** La query usava `f32blob(...)`,
+  funzione che nessun engine libSQL/pyturso espone: ogni chiamata sollevava
+  "no such function", l'`except` la inghiottiva con un `log.debug` e tutto
+  finiva nel fallback Python. `vector_distance_cos` accetta già il blob, il
+  wrapper era di troppo — in `_search_embeddings` e in `_refine_domain`.
+- **Conseguenza vera, oltre alla latenza: il seed non veniva mai cercato.** Il
+  fallback Python itera solo `graph.nodes`, cioè il grafo in memoria; il seed
+  `base_knowledge.db` è consultato *solo* dal tier SQL. Con il tier morto, le
+  139 keyword del seed erano peso morto e `_refine_domain` ripiegava sui grafi
+  caricati invece che sulla tassonomia dei domini del seed.
+- **`_vector_sql_ok`**: latch di processo su "no such function". È una
+  incapacità permanente (sqlite3 puro, o il guard L2 che degrada un handle
+  pyturso bloccato), e ritentarla ogni volta costava la query fallita *più* la
+  riapertura del seed che `_drop_seed_connection` forzava al giro dopo — 2.8 MB
+  riaperti per un errore che si sarebbe ripresentato identico. Gli errori
+  transitori (lock, handle corrotto) mantengono il drop-and-retry di prima.
+- **Misure** (5 ricerche/turno = 4 `_auto_link` + 1 `_context_window`), grafo
+  al cap di 500 nodi: 124 ms → 27 ms per turno, e il costo diventa piatto
+  rispetto alla dimensione del grafo. Con il seed conteso da un altro processo
+  (server MCP vivo + una seconda sessione) il percorso rotto costava ~1.5 s per
+  turno: il retry-loop del guard L2 su ogni riapertura.
+
 ## 6.4.0 (2026-08-03)
 - **Quattro modalità di retrieval, zero tool nuovi.** La modalità è *stato*,
   non superficie: `semantic` (default, invariato), `focus` (pesa i nodi vicini

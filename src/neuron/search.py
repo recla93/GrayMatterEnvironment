@@ -135,6 +135,27 @@ def _drop_seed_connection(path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _permanent_vector_failure(exc: Exception) -> bool:
+    """True if `exc` says the engine has NO vector_distance_cos at all.
+
+    That's permanent for this process (plain sqlite3, or a pyturso build without
+    it), so the SQL tier is latched off: retrying it every call costs the failed
+    query *plus* the seed reconnect that `_drop_seed_connection` forces on the
+    next one. Transient errors (locks, corrupt handle) are NOT latched — they
+    keep the existing drop-and-retry behaviour.
+    """
+    if "no such function" not in str(exc).lower():
+        return False
+    s = _S()
+    if s._vector_sql_ok:
+        s._vector_sql_ok = False
+        log.warning(
+            "Engine has no vector_distance_cos (%s) — vector search falls back "
+            "to the Python cosine loop for this process.", exc,
+        )
+    return True
+
+
 def _search_embeddings(
     query_keywords: list[str],
     top_n: int = 8,
@@ -152,7 +173,7 @@ def _search_embeddings(
 
     SIM_THRESHOLD = 0.3
 
-    if s.TURSO_ENGINE:
+    if s.TURSO_ENGINE and s._vector_sql_ok:
         seed_path = getattr(s._g, '_seed_path', None)
         db_paths = []
         if s._seed_usable(seed_path):
@@ -169,7 +190,7 @@ def _search_embeddings(
                 conn = s._seed_connection(db) if is_seed else s._db.connect_local(db)
                 rows = conn.execute(
                     "SELECT keyword, sim FROM ("
-                    "  SELECT keyword, 1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS sim "
+                    "  SELECT keyword, 1.0 - vector_distance_cos(embedding, ?) AS sim "
                     "  FROM node_vectors"
                     ") WHERE sim > ? ORDER BY sim DESC LIMIT ?",
                     (query_blob, SIM_THRESHOLD, top_n),
@@ -181,6 +202,8 @@ def _search_embeddings(
                     if kw not in merged or v > merged[kw]:
                         merged[kw] = v
             except Exception as e:
+                if _permanent_vector_failure(e):
+                    continue
                 if is_seed:
                     s._drop_seed_connection(db)
                 # Any DB/engine error must fall through to the Python path.
@@ -243,13 +266,13 @@ def _refine_domain(keywords: list[str]) -> tuple["str | None", list[str]]:
 
     rows: list[tuple[str, float]] = []
 
-    if s.TURSO_ENGINE:
+    if s.TURSO_ENGINE and s._vector_sql_ok:
         seed_path = getattr(s._g, '_seed_path', None)
         if s._seed_usable(seed_path):
             try:
                 conn = s._seed_connection(seed_path)   # cached: immutable seed DB
                 rows = conn.execute("""
-                    SELECT n.domain, 1.0 - vector_distance_cos(f32blob(nv.embedding), f32blob(?)) AS sim
+                    SELECT n.domain, 1.0 - vector_distance_cos(nv.embedding, ?) AS sim
                     FROM node_vectors nv
                     JOIN nodes n ON n.keyword = nv.keyword
                     WHERE n.domain != 'general'
@@ -257,7 +280,8 @@ def _refine_domain(keywords: list[str]) -> tuple["str | None", list[str]]:
                 """, (query_blob,)).fetchall()
             except Exception as e:
                 log.debug("seed vector search failed (using Python fallback): %s", e)
-                s._drop_seed_connection(seed_path)
+                if not _permanent_vector_failure(e):
+                    s._drop_seed_connection(seed_path)
 
     # Fallback: Python loop over loaded graphs — TRUE cosine, same scale as Turso.
     if not rows:

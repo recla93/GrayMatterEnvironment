@@ -229,6 +229,13 @@ _seed_conn_cache: "dict[str, Any]" = {}
 # so a hit counts only if the cached ref still points at the SAME live object.
 _turn_search_cache: dict[tuple, tuple["weakref.ref", list[tuple[str, float]]]] = {}
 
+# Does the open engine actually provide vector_distance_cos? Flipped off on the
+# first "no such function" — a PERMANENT incapability (plain sqlite3, or the L2
+# guard degrading a locked pyturso handle), not a transient error. Without this
+# latch every search re-pays the failed query AND the seed reconnect it triggers
+# (measured: ~310 ms per call when another process holds base_knowledge.db).
+_vector_sql_ok = True
+
 # The moved search/embedding functions, re-exported so `from neuron.server
 # import X` and every `_srv.X` monkeypatch keep working unchanged (ADR-006).
 from neuron.search import (  # noqa: E402
