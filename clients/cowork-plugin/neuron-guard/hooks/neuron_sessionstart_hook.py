@@ -67,7 +67,17 @@ _PRIORITY = ("gray-matter", "neuron", "neurag")
 
 
 def _gme_root() -> Path:
-    """Mirror of gray_matter.gme.user_base() -- deliberately NOT imported."""
+    """Mirror of gray_matter.gme.gme_root() -- deliberately NOT imported.
+
+    I JSON dei tool stanno in ``<base>/GrayMatterEnvironment/registry``: il
+    registro e' sceso di un livello quando GrayMatterEnvironment/ e' diventata
+    la radice unica della suite (ci vivono anche neuron/, neurag/, graymatter/).
+    Questo mirror era rimasto al layout PIATTO di prima, quindi `installed_slugs`
+    globbava una cartella di sole sottocartelle e tornava sempre vuoto: owner()
+    = None e l'handshake non e' mai partito su nessuna macchina col layout
+    nuovo. Verificato su installazione reale. Come in gme_root(), un registro
+    ESISTENTE vince: si accetta ancora il piatto per le installazioni vecchie.
+    """
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA", "")
     else:
@@ -75,7 +85,13 @@ def _gme_root() -> Path:
             os.path.expanduser("~"), ".local", "share")
     if not base:                       # scrubbed env -> never a relative path
         base = os.path.expanduser("~")
-    return Path(base) / "GrayMatterEnvironment"
+    suite = Path(base) / "GrayMatterEnvironment"
+    current = suite / "registry"
+    if current.is_dir():
+        return current
+    if suite.is_dir() and any(suite.glob("*.json")):
+        return suite               # registro piatto pre-suite
+    return current
 
 
 def installed_slugs() -> set:
