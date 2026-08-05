@@ -12,19 +12,22 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 # 0) Parse flags. Default: install with GM (gateway mode). --no-gm = standalone.
-WANT_GM=1; FORCE=0; CLEAR=0; MODE="gateway"; EMBED_MODEL=""
+WANT_GM=1; FORCE=0; CLEAR=0; MODE="gateway"; EMBED_MODEL=""; ASSUME_YES=0
 _next_is_model=0
 for a in "$@"; do
     if [ "$_next_is_model" = "1" ]; then EMBED_MODEL="$a"; _next_is_model=0; continue; fi
     case "$a" in
     --no-gm) WANT_GM=0; MODE="standalone" ;;
+    -y|--yes) ASSUME_YES=1 ;;
     -f|--force) FORCE=1 ;;
     -c|--clear) CLEAR=1; FORCE=1 ;;   # clear is a stronger force
     --embed-model) _next_is_model=1 ;;
     --embed-model=*) EMBED_MODEL="${a#--embed-model=}" ;;
 esac; done
-FORCE_ARGS=""
-[ "$FORCE" = "1" ] && FORCE_ARGS="--force-reinstall --no-deps"
+[ "${GM_YES:-0}" = "1" ] && ASSUME_YES=1   # same contract as install.ps1
+# --no-deps only safe once the shared deps are in the venv (see install.ps1).
+has_mcp() { "$VPY" -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('mcp') else 1)" 2>/dev/null; }
+repair_args() { if [ "$FORCE" = "1" ] && has_mcp; then echo "--force-reinstall --no-deps"; fi; }
 [ "${GM_OPTIN:-1}" = "0" ] && WANT_GM=0 && MODE="standalone"
 
 # Picking [N] is NOT the same question as "standalone forever": NeuRAG can run
@@ -42,7 +45,7 @@ read_neurag_only_mode() {
 }
 # Mode selector: click-and-go (Enter = full suite) or explicit --no-gm.
 # Only shows in interactive terminals; non-interactive defaults to gateway.
-if [ "$WANT_GM" = "1" ] && [ -t 0 ] && [ "$FORCE" != "1" ]; then
+if [ "$WANT_GM" = "1" ] && [ -t 0 ] && [ "$FORCE" != "1" ] && [ "$ASSUME_YES" != "1" ]; then
     echo ""
     echo "  Installation mode:"
     echo "    [F] Full suite — GM + Neuron + NeuRAG (recommended)"
@@ -147,7 +150,7 @@ select_embed_model() {
         done
         CHOSEN_MODEL="$EMBED_MODEL"; CHOSEN_DIM=0; CHOSEN_SIZE="?"; return
     fi
-    if [ ! -t 0 ] || [ "$FORCE" = "1" ]; then _set_chosen "$EM_1"; return; fi
+    if [ ! -t 0 ] || [ "$FORCE" = "1" ] || [ "$ASSUME_YES" = "1" ]; then _set_chosen "$EM_1"; return; fi
     echo ""
     echo "  Embedding model for the vault (downloaded once):"
     i=1
@@ -180,8 +183,9 @@ save_embed_model() {  # $1 = venv python
         _dim=$("$_vpy" -c "from fastembed import TextEmbedding
 print(next((m['dim'] for m in TextEmbedding.list_supported_models() if m['model']=='$CHOSEN_MODEL'), 384))" 2>/dev/null || echo 384)
     fi
-    "$_vpy" -c "from neurag import settings
-settings.set('embed_model', '$CHOSEN_MODEL')
+    NS_EMBED_NAME_SAVE="$CHOSEN_MODEL" "$_vpy" -c "import os
+from neurag import settings
+settings.set('embed_model', os.environ['NS_EMBED_NAME_SAVE'])
 settings.set('embed_dim', $_dim)" || {
         echo "  WARNING: could not save the model choice - the default stays active."; return 0; }
     echo ""
@@ -232,11 +236,20 @@ standalone_install() {
     [ -d "$VENV" ] || "$PY" -m venv "$VENV" 2>/dev/null || true
     venv_healthy "$VENV" || { echo "ERROR: could not create a working venv at $VENV - check disk space and permissions"; exit 1; }
     VPY="$VENV/bin/python"
+    # Console-script fallback: a pip install that missed the entry point would
+    # otherwise fail right here. Degrade to `python -m`, same as Invoke-Tool in
+    # install.ps1.
+    invoke_tool() {  # $1=exe, $2=module, rest=args
+        _exe="$1"; _mod="$2"; shift 2
+        if [ -x "$VENV/bin/$_exe" ]; then "$VENV/bin/$_exe" "$@"
+        else echo "  ($_exe not found in the venv - using python -m $_mod)"
+             "$VPY" -m "$_mod" "$@"; fi
+    }
     "$VPY" -m pip install --upgrade pip >/dev/null 2>&1 || true
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling NeuRAG (forced)..."
     FL=""; [ -d "$HERE/vendor" ] && FL="--find-links $HERE/vendor"
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FL $FORCE_ARGS "$HERE" || "$VPY" -m pip install $FORCE_ARGS "$HERE" \
+    "$VPY" -m pip install $FL $(repair_args) "$HERE" || "$VPY" -m pip install $(repair_args) "$HERE" \
         || { echo "ERROR: NeuRAG install failed — check network, or try: pip install --upgrade pip"; exit 1; }
     save_embed_model "$VPY"
     # Handshake assets (standalone has no GM to deploy them). Idempotent.
@@ -244,9 +257,9 @@ standalone_install() {
     [ -n "$_hooks" ] && [ -f "$_hooks" ] && "$VPY" "$_hooks" || true
     # Let the user choose WHERE this registers (see install.ps1).
     # Not a tty => "detected", which never touches an absent client.
-    if [ -t 0 ]; then CLIENT_SEL="ask"; else CLIENT_SEL="detected"; fi
-    "$VENV/bin/neurag" register --client "$CLIENT_SEL" || true
-    "$VENV/bin/neurag" doctor 2>/dev/null || true
+    if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then CLIENT_SEL="ask"; else CLIENT_SEL="detected"; fi
+    invoke_tool neurag neurag register --client "$CLIENT_SEL" || true
+    invoke_tool neurag neurag doctor 2>/dev/null || true
     
     # --- GME Registry ---
     # One line instead of ~35 of hand-written JSON: gray_matter/gme.py is the
@@ -257,7 +270,7 @@ standalone_install() {
     
     # Desktop icon "NeuRAG" → apre il control center (bootstrappa GM al 1° click).
     "$VPY" -m neurag.cli gui --shortcut-only 2>/dev/null || true
-    NEURAG_VER=$("$VENV/bin/neurag" --version 2>/dev/null || echo "?")
+    NEURAG_VER=$(invoke_tool neurag neurag --version 2>/dev/null || echo "?")
     # An explicit, affirmative terminator: without it callers could not tell
     # "finished successfully" from "still working" or "died quietly".
     echo ""

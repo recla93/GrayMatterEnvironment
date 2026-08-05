@@ -408,10 +408,19 @@ def register_claude_code_via_cli(slug: str, python_exe: str,
         r = run(argv, capture_output=True, text=True, timeout=60)
         if getattr(r, "returncode", 1) == 0:
             return True
-        # già registrato = idempotente, non un errore
         tail = ((getattr(r, "stderr", "") or getattr(r, "stdout", "") or "")
                 .strip().splitlines() or ["?"])[-1]
-        return "already exists" in tail.lower()
+        # `claude mcp add` rifiuta le entry già presenti: trattarlo come
+        # successo idempotente lasciava la entry VECCHIA, che può puntare a un
+        # venv stantio. Si rimuove e si riscrive (keep-in-sync: stesso fix in
+        # gray_matter/clients.py, 2026-07-21).
+        if "already exists" in tail.lower():
+            rm = _claude_argv("mcp", "remove", "--scope", "user", slug)
+            if rm is not None:
+                run(rm, capture_output=True, text=True, timeout=60)
+                r = run(argv, capture_output=True, text=True, timeout=60)
+                return getattr(r, "returncode", 1) == 0
+        return False
     except Exception as e:  # noqa: BLE001
         log.debug("`claude mcp add` fallita: %s", e)
         return False

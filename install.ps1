@@ -27,13 +27,27 @@ $Fwd = @(); foreach ($a in $args) {
 if ($Clear) { $Force = $true }          # clear is a stronger force
 if ($Force) { $Fwd += "-Force" }
 if ($Clear) { $Fwd += "-Clear" }        # forwarded: GM owns the shared venv
-$ForceArgs = @(); if ($Force) { $ForceArgs = @("--force-reinstall", "--no-deps") }
+# --no-deps is only safe in repair mode once the shared deps are already in the
+# venv. On a fresh venv (first install, -Clear, "clean" repair) the deps are
+# missing and --no-deps ships an unusable install: mcp fails to import at first
+# run. mcp is the one hard shared dep, so its presence is the gate.
+function Test-HasMCP {
+    & $Vpy -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('mcp') else 1)"
+    return ($LASTEXITCODE -eq 0)
+}
+function Get-RepairArgs {
+    if ($Force -and (Test-HasMCP)) { return @("--force-reinstall", "--no-deps") }
+    return @()
+}
 if ($env:GM_OPTIN -eq "0") { $WantGm = $false; $Mode = "standalone" }
 # -Yes = "don't ask me anything": one gate for EVERY prompt below. Needed by any
 # caller without a usable stdin — CI, a scheduled task, a parent process that
 # redirects streams. UserInteractive cannot carry this: it describes the session,
 # not the console, so it stays TRUE exactly when Read-Host would hang forever.
-$Ask = ([Environment]::UserInteractive -and -not $Force -and ($args -notcontains "-Yes"))
+# GM_YES compared to "1", never truthiness-tested: in PowerShell the string "0"
+# is TRUE, so `-not $env:GM_YES` silenced the prompts for whoever set GM_YES=0
+# to ask for them (the sh side reads `[ "${GM_YES:-0}" = "1" ]`).
+$Ask = ([Environment]::UserInteractive -and -not $Force -and ($env:GM_YES -ne "1") -and ($args -notcontains "-Yes"))
 
 # Mode selector: click-and-go (Enter = full suite) or explicit --no-gm.
 # Only shows in interactive sessions; non-interactive defaults to gateway.
@@ -229,8 +243,13 @@ print(next((m['dim'] for m in TextEmbedding.list_supported_models() if m['model'
         } catch { $probe = "" } finally { $ErrorActionPreference = $prevProbeEap }
         $dim = if ("$probe".Trim() -match '^\d+$') { [int]"$probe".Trim() } else { 384 }
     }
-    & $Vpy -c "from neurag import settings
-settings.set('embed_model', '$($Model.name)')
+    # Through the environment, not string-interpolated into the source: a model
+    # name with an apostrophe used to close the Python literal and the choice was
+    # silently lost (same fix as gray_matter/install.ps1).
+    $env:NS_EMBED_NAME_SAVE = $Model.name
+    & $Vpy -c "import os
+from neurag import settings
+settings.set('embed_model', os.environ['NS_EMBED_NAME_SAVE'])
 settings.set('embed_dim', $dim)
 print('saved')"
     if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: could not save the model choice - the default stays active."; return }
@@ -362,17 +381,17 @@ function Install-Standalone {
     & $Vpy -m pip install --upgrade pip | Out-Null
     if ($Force) { Write-Host "Repair: reinstalling NeuRAG (forced)..." }
     $Vendor = Join-Path $Here "vendor"
-    if (Test-Path $Vendor) { & $Vpy -m pip install --find-links $Vendor @ForceArgs $Here }
-    else { & $Vpy -m pip install @ForceArgs $Here }
+    $Repair = Get-RepairArgs
+    if (Test-Path $Vendor) { & $Vpy -m pip install --find-links $Vendor @Repair $Here }
+    else { & $Vpy -m pip install @Repair $Here }
     if ($LASTEXITCODE -ne 0) {
-        & $Vpy -m pip install @ForceArgs $Here
+        & $Vpy -m pip install @Repair $Here
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: NeuRAG install failed — check network, or try: pip install --upgrade pip"; exit 1 }
     }
     Save-EmbedModel $Vpy $Chosen
     # Handshake assets (see neuron/install.ps1 for the why). Idempotent.
     try {
-        $HookSrc = Join-Path $Venv "Lib\site-packages
-eurag\clients\deploy_hooks.py"
+        $HookSrc = Join-Path $Venv "Lib\site-packages\neurag\clients\deploy_hooks.py"
         if (Test-Path $HookSrc) { & $Vpy $HookSrc }
     } catch { Write-Host "  (handshake assets not deployed: $($_.Exception.Message))" }
     # Let the user choose WHERE this registers. "ask" prompts (detected
@@ -418,7 +437,9 @@ foreach ($gm in @((Join-Path $Here "gray_matter"), (Join-Path (Split-Path -Paren
     if (Test-Path $inst) {
         $env:GM_PEER_DIR = $Here
         & powershell -ExecutionPolicy Bypass -File $inst @Fwd
-        exit $LASTEXITCODE
+        if ($LASTEXITCODE -eq 0) { exit 0 }
+        Write-Host "WARNING: GM installer failed (exit $LASTEXITCODE), continuing with the fallback paths."
+        break
     }
 }
 
@@ -455,7 +476,8 @@ if (Test-Path $Zip) {
         if (Test-Path $inst) {
             $env:GM_PEER_DIR = $Here
             & powershell -ExecutionPolicy Bypass -File $inst @Fwd
-            exit $LASTEXITCODE
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "WARNING: GM installer failed (exit $LASTEXITCODE), continuing with the fallback paths."
         }
     }
 }
