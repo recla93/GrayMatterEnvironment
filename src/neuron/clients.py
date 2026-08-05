@@ -421,6 +421,20 @@ def _claude_cli() -> str | None:
     return shutil.which("claude")
 
 
+def _claude_argv(*args) -> "list[str] | None":
+    """Argv per la CLI `claude`, funzionante ANCHE su Windows: `claude` è uno
+    shim .cmd (npm) e CreateProcess non esegue i .cmd → wrapper `cmd /c`.
+    (keep-in-sync: stesso fix in neurag/clients.py e gray_matter/clients.py,
+    2026-07-21.)"""
+    exe = _claude_cli()
+    if not exe:
+        return None
+    argv = [exe, *args]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        argv = ["cmd", "/c", *argv]
+    return argv
+
+
 # Windows: nascondi la console dei child (claude CLI) — se lanciato da GUI/pythonw
 # lampeggiava un CMD. Il flag va nel runner DI DEFAULT, non nei call-site: un
 # runner iniettato dai test non deve ricevere `creationflags` a forza.
@@ -438,11 +452,27 @@ def register_claude_code_via_cli(slug: str, python_exe: str,
     """B3: `claude mcp add --scope user <slug> <python> -- -m neuron`.
     Returns True when the CLI reported success."""
     run = runner or _default_run
+    argv = _claude_argv("mcp", "add", "--scope", "user",
+                        slug, python_exe, "--", "-m", "neuron")
+    if argv is None:
+        return False
     try:
-        r = run([_claude_cli() or "claude", "mcp", "add", "--scope", "user",
-                 slug, python_exe, "--", "-m", "neuron"],
-                capture_output=True, text=True, timeout=60)
-        return getattr(r, "returncode", 1) == 0
+        r = run(argv, capture_output=True, text=True, timeout=60)
+        if getattr(r, "returncode", 1) == 0:
+            return True
+        tail = ((getattr(r, "stderr", "") or getattr(r, "stdout", "") or "")
+                .strip().splitlines() or ["?"])[-1]
+        # `claude mcp add` rifiuta le entry già presenti: trattarlo come
+        # successo idempotente lasciava la entry VECCHIA, che può puntare a un
+        # venv stantio. Si rimuove e si riscrive (keep-in-sync: stesso fix in
+        # gray_matter/clients.py, 2026-07-21).
+        if "already exists" in tail.lower():
+            rm = _claude_argv("mcp", "remove", "--scope", "user", slug)
+            if rm is not None:
+                run(rm, capture_output=True, text=True, timeout=60)
+                r = run(argv, capture_output=True, text=True, timeout=60)
+                return getattr(r, "returncode", 1) == 0
+        return False
     except Exception as e:
         log.debug("`claude mcp add` failed: %s", e)
         return False

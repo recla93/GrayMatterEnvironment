@@ -234,7 +234,11 @@ def _consolidate_cli(argv) -> int:
     args = ap.parse_args(argv)
 
     from neuron.server import _g  # registry con l'embedder già registrato
-    contexts = [args.context] if args.context else [c["context"] for c in _g.list_contexts()]
+    from neuron import manage
+    # `list_contexts()` only sees lazy-loaded graphs (a fresh process has just
+    # "default"), so enumerate on disk like `manage` does — otherwise contexts
+    # created via `switch` are silently skipped ("default: all" in --help).
+    contexts = [args.context] if args.context else manage._contexts()
     if not contexts:
         print("No context to consolidate.")
         return 0
