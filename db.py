@@ -2166,7 +2166,16 @@ class KnowledgeGraph:
         if diversify and len(results) > top_n:
             results = self._mmr(query, results, top_n)
         final = [_without_vector(r) for r in results[:top_n]]
-        if touch and final:
+        # A borrowed vault reads and refuses writes (`_ReadOnlyConnection`), and
+        # reinforcement is a side effect of answering, not part of it: the rows
+        # are already ranked one line up. Without this early-out the write raised
+        # `VaultUnavailable`, `call_tool` turned it into the answer, and a search
+        # that had SUCCEEDED came back as an error message with its results
+        # thrown away. Same shape as `_init_schema`, and the same bug it fixed:
+        # a healthy vault made unusable by a write nobody needed. Writes still
+        # have their route (`_run_via_gm`); salience simply stops being recorded
+        # on the borrowed tier, which `status()` already reports via `engine`.
+        if touch and final and not self._read_only:
             hit_nodes = {r["node_id"] for r in final}
             self.touch_nodes(hit_nodes)
             self.cache_add(hit_nodes)
