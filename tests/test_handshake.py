@@ -137,6 +137,30 @@ def test_full_suite_announces_both():
     assert "pre_turn" in text and "knowledge_query" in text
 
 
+@pytest.mark.parametrize("installed", [
+    {"gray-matter", "neuron", "neurag"},        # memory block
+    {"gray-matter", "neurag"},                  # knowledge block
+])
+def test_a_deferred_tool_is_not_an_absent_one(installed):
+    """The escape clause used to fire on the wrong condition.
+
+    Some clients defer MCP tool schemas: the tool is there, but calling it before
+    the schema is loaded fails. The old closing line -- "if no mcp__*__ tools
+    exist here, memory is not connected, ignore this silently" -- made that first
+    failure and the permission to abandon the loop arrive on the same turn.
+
+    So the block must (a) say to load and retry once, and (b) condition the
+    give-up on the tool LIST being empty, never on a call having failed.
+    """
+    text = _hook().handshake("gray-matter", installed)
+    assert "load its schema" in text, "no recovery offered for a deferred tool"
+    assert "retry" in text
+    assert "If no mcp__gray-matter__* tools exist here" not in text, (
+        "the old unconditional escape clause is back")
+    assert "no mcp__gray-matter__* entry" in text, (
+        "giving up must be conditioned on the tool list, not on a failed call")
+
+
 # --- it can never break a session -------------------------------------------
 
 def test_registry_failures_are_silent(monkeypatch, tmp_path):
@@ -207,7 +231,7 @@ def _deployer():
 
 
 def test_deploy_is_idempotent_across_different_command_spellings(monkeypatch, tmp_path):
-    """Gray Matter registers the hook as `"<venv>\python.exe" "<hook>"`; the
+    r"""Gray Matter registers the hook as `"<venv>\python.exe" "<hook>"`; the
     standalone deployer uses `python "<hook>"`. Comparing whole command strings
     treated those as different and appended a SECOND SessionStart entry — the
     double handshake, reintroduced by the code meant to prevent it. Seen live.
