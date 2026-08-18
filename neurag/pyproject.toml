@@ -1,0 +1,78 @@
+[project]
+name = "neurag"
+version = "1.3.3"
+description = "Standalone MCP RAG server: hierarchical knowledge graph on Turso/SQLite with pluggable embeddings"
+requires-python = ">=3.10"
+license = { text = "PolyForm Noncommercial License 1.0.0" }
+authors = [{ name = "Claudio C." }]
+keywords = ["mcp", "rag", "knowledge-base", "vector-search", "turso"]
+
+dependencies = [
+    "mcp>=1.28.0,<2.0",
+    # pyturso è mandatorio: il vector SQL è il tier di default, sqlite3 è il
+    # fallback automatico (db.py lo gestisce a runtime se turso non è
+    # disponibile). Le wheel win_amd64 sono vendored in vendor/ e installate
+    # dall'installer via --find-links, così non serve il toolchain Rust/MSVC.
+    "pyturso==0.6.1",
+    # Hard dependency, exactly as in Neuron. It was an optional `semantic`
+    # extra, and no installer ever requested that extra — so a STANDALONE
+    # NeuRAG got NullEmbedder and fell back to lexical search. It embedded only
+    # when Neuron happened to be installed beside it, borrowing Neuron's copy.
+    # That made "NeuRAG alone" a degraded mode, which is precisely what it must
+    # not be, and it failed silently: picking multilingual-e5-large at install
+    # time produced worse results than the default, with nothing said.
+    #
+    # This does NOT force a model download: fastembed fetches weights lazily on
+    # the first TextEmbedding(...) construction. It decides whether embedding is
+    # POSSIBLE, not whether it happens on install day.
+    #
+    # The installers used to keep a "none — lexical only" menu entry from the
+    # days of the optional extra. It contradicted this line and it did not even
+    # work (it wrote embed_model = '', which means "the default model"), so it
+    # is gone; lexical-only lives at `neurag config set embed_model none`.
+    "fastembed>=0.5.0,<1.0",
+]
+
+[project.optional-dependencies]
+cloud = ["libsql-client>=0.3.1"]        # shared Turso cloud (same pin as Neuron)
+dev = ["pytest>=8.0"]
+pdf = ["PyMuPDF>=1.24.0"]
+docx = ["python-docx>=1.1.0"]
+yaml = ["PyYAML>=6.0"]                  # bulk import mapping
+# Kept as no-op aliases: fastembed is a hard dependency now (see above), so
+# `neurag[semantic]` still resolves for anyone whose scripts
+# or docs name them. Rerank remains OFF by default — the toggle is the gate, not
+# the package.
+semantic = ["fastembed>=0.5.0,<1.0"]
+# GUI opzionale: il control center è UNO (gray_matter.webgui). NeuRAG gira
+# standalone senza; `neurag gui` lo bootstrappa se manca. Il runtime MCP NON
+# dipende da gray-matter (import guardato) — questo extra serve solo alla GUI.
+gui = ["gray-matter>=1.0"]
+
+[project.scripts]
+neurag = "neurag.cli:main"
+neurag-mcp = "neurag.server:main"
+
+# Flat layout: the package IS this folder (no move needed after the rename).
+[tool.setuptools]
+packages = ["neurag"]
+
+[tool.setuptools.package-dir]
+neurag = "."
+
+[tool.setuptools.package-data]
+# Wheel d'emergenza di Gray Matter (fallback offline del bootstrap `neurag gui`).
+# Va ricostruito a ogni release di GM — vedi RELEASE-CHECKLIST.
+neurag = [
+    "_gm_vendor/*.whl",
+    # Skills served by the `skill` MCP tool — a tool reaches every MCP
+    # client, a plugin file reaches only one.
+    "skills/*.md",
+    # Handshake assets: GM deploys them from whichever peer is installed,
+    # so a GM+NeuRAG install (no neuron package) must carry its own copy.
+    "clients/**/*",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,422 @@
+{
+  "queries": [
+    {
+      "id": 1,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "vector_distance_cos",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/DOCTOOLUPDATE.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_retrieval_hybrid.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "GM_NO_CLIENT_REGISTER",
+      "rank": 2,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/cli.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/clients.py"
+      ]
+    },
+    {
+      "id": 3,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "pyvenv.cfg",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/install.sh",
+        "D:/Desktop/Gray Matter Enviroment/neurag/clients/deploy_hooks.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md"
+      ]
+    },
+    {
+      "id": 4,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "MAX_TAG_NODE_RATIO",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+      ]
+    },
+    {
+      "id": 5,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "f32blob",
+      "rank": 2,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/clients/deploy_hooks.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_retrieval_hybrid.py"
+      ]
+    },
+    {
+      "id": 6,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "MMR_LAMBDA",
+      "rank": 2,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_mega_integration.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py"
+      ]
+    },
+    {
+      "id": 7,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "NEURAG_REQUIRE_TURSO",
+      "rank": 2,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/server.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/README.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DOCTOOLUPDATE.md"
+      ]
+    },
+    {
+      "id": 8,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "_split_sql",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_tag_substrate.py"
+      ]
+    },
+    {
+      "id": 9,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "PARK_RULES",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_layers.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_layers.py"
+      ]
+    },
+    {
+      "id": 10,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "prefixes_for",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_retrieval_hybrid.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py"
+      ]
+    },
+    {
+      "id": 11,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "CREATE_NO_WINDOW",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/clients.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/cli.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DOCTOOLUPDATE.md"
+      ]
+    },
+    {
+      "id": 12,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "MIN_CUE_DOC_FLOOR",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_chunker_budget.py"
+      ]
+    },
+    {
+      "id": 13,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "meta.decayed_at",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_layers.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+      ]
+    },
+    {
+      "id": 14,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "lexical_only_requested",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/install.ps1"
+      ]
+    },
+    {
+      "id": 15,
+      "kind": "identifier",
+      "lang": "en",
+      "q": "embed_mismatch",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_reindex_guard.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/install.ps1"
+      ]
+    },
+    {
+      "id": 16,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how does the search combine meaning-based and word-based ranking",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/README.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_retrieval_hybrid.py"
+      ]
+    },
+    {
+      "id": 17,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come si sceglie il modello di embedding durante l'installazione",
+      "rank": 3,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/cli.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/install.sh"
+      ]
+    },
+    {
+      "id": 18,
+      "kind": "concept",
+      "lang": "en",
+      "q": "what happens if I change the embedding model on a vault that already has content",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/tests/test_reindex_guard.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/cli.py"
+      ]
+    },
+    {
+      "id": 19,
+      "kind": "concept",
+      "lang": "it",
+      "q": "cosa succede se il database della conoscenza e' rovinato",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+      ]
+    },
+    {
+      "id": 20,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how does a connection between two nodes get stronger when a user says it was useful",
+      "rank": 5,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/server.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-CROSSLINKS.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/cli.py"
+      ]
+    },
+    {
+      "id": 21,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come si mette da parte un nodo che nessuno consulta piu'",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md"
+      ]
+    },
+    {
+      "id": 22,
+      "kind": "concept",
+      "lang": "en",
+      "q": "which editors and assistants can this be plugged into",
+      "rank": null,
+      "hit@5": false,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/clients/cowork-plugin/neuron-guard/README.md"
+      ]
+    },
+    {
+      "id": 23,
+      "kind": "concept",
+      "lang": "it",
+      "q": "perche' un'etichetta e' diventata una riga invece di testo dentro una colonna",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md"
+      ]
+    },
+    {
+      "id": 24,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how is a piece of text kept short enough for the model to actually read all of it",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/chunker.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/chunker.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/embedder.py"
+      ]
+    },
+    {
+      "id": 25,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come vengono ricostruiti i collegamenti fra i nodi dopo un aggiornamento",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/ingest.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md"
+      ]
+    },
+    {
+      "id": 26,
+      "kind": "concept",
+      "lang": "en",
+      "q": "what happens when two processes open the same vault at the same time",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+      ]
+    },
+    {
+      "id": 27,
+      "kind": "concept",
+      "lang": "it",
+      "q": "quali cartelle non vengono lette quando si importa un progetto",
+      "rank": 4,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md"
+      ]
+    },
+    {
+      "id": 28,
+      "kind": "concept",
+      "lang": "en",
+      "q": "how does a folder structure on disk turn into the shape of the graph",
+      "rank": 2,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/README.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DESIGN-EVOLUTION.md"
+      ]
+    },
+    {
+      "id": 29,
+      "kind": "concept",
+      "lang": "it",
+      "q": "come si riporta alla luce qualcosa che era stato messo a dormire",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/HANDOFF.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/CHANGELOG.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/DOCTOOLUPDATE.md"
+      ]
+    },
+    {
+      "id": 30,
+      "kind": "concept",
+      "lang": "en",
+      "q": "why does a route between ideas get weaker as time passes",
+      "rank": 1,
+      "hit@5": true,
+      "top": [
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py",
+        "D:/Desktop/Gray Matter Enviroment/neurag/clients/cowork-plugin/neuron-guard/skills/neuron-usage/SKILL.md",
+        "D:/Desktop/Gray Matter Enviroment/neurag/db.py"
+      ]
+    }
+  ],
+  "summary": {
+    "all": {
+      "n": 30,
+      "recall@5": 0.967,
+      "mrr@10": 0.809
+    },
+    "concept": {
+      "n": 15,
+      "recall@5": 0.933,
+      "mrr@10": 0.752
+    },
+    "identifier": {
+      "n": 15,
+      "recall@5": 1.0,
+      "mrr@10": 0.867
+    },
+    "en": {
+      "n": 23,
+      "recall@5": 0.957,
+      "mrr@10": 0.813
+    },
+    "it": {
+      "n": 7,
+      "recall@5": 1.0,
+      "mrr@10": 0.798
+    }
+  },
+  "set_version": 3
+}

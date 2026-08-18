@@ -1,0 +1,2527 @@
+"""Turso-backed hierarchical knowledge graph with vector embeddings.
+
+Single-database design using Turso (SQLite-compatible) with an extension for
+vector cosine-similarity search (384-dim, same as Neuron). Local pyturso for
+single-machine, remote Turso (libSQL cloud) for multi-machine.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+import sqlite3
+import struct
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+try:
+    from turso import connect as turso_connect
+    TURSO_AVAILABLE = True
+except ImportError:
+    TURSO_AVAILABLE = False
+
+# --- Cloud Turso (multi-machine) — libsql-client facade ----------------------
+# Decoupled port (2026-07-21), keep-in-sync with Neuron/src/neuron/db.py. NeuRAG
+# accesses rows by name, so the remote cursor yields name-accessible _CompatRow
+# (defined below) instead of Neuron's plain tuples.
+#
+# IMPORTANT: NeuRAG has its OWN cloud DB. Neuron and NeuRAG must NOT share a Turso
+# database — both define a `nodes` table with DIFFERENT schemas, so one URL would
+# collide. Hence NeuRAG reads NEURAG_TURSO_DATABASE_URL (its own DB), never
+# Neuron's TURSO_DATABASE_URL. The auth token may be shared (org/group token):
+# NEURAG_TURSO_AUTH_TOKEN if set, else fall back to TURSO_AUTH_TOKEN.
+def _sanitize_credential(value: str) -> str:
+    """Toglie ogni whitespace/controllo, non solo agli estremi — keep-in-sync con
+    Neuron/_env.py. Il token diventa un header HTTP e lo stack rifiuta un valore
+    con CR/LF/NUL dentro: un a-capo nascosto da copia-incolla, o un .env CRLF,
+    faceva fallire il cloud senza spiegazione."""
+    return re.sub(r"[\s\x00-\x1f\x7f]", "", value or "")
+
+
+TURSO_DATABASE_URL = _sanitize_credential(os.environ.get("NEURAG_TURSO_DATABASE_URL", ""))
+TURSO_AUTH_TOKEN = _sanitize_credential(os.environ.get("NEURAG_TURSO_AUTH_TOKEN")
+                                        or os.environ.get("TURSO_AUTH_TOKEN", ""))
+REMOTE_TURSO = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
+
+_libsql = None
+if REMOTE_TURSO:
+    try:
+        import libsql_client as _libsql
+    except ImportError:
+        import sys as _sys
+        print("neurag: NEURAG_TURSO_DATABASE_URL is set but the 'cloud' extra "
+              "(libsql-client) is not installed — falling back to the local "
+              "engine. Enable cloud with: pip install \"neurag[cloud]\"",
+              file=_sys.stderr)
+        REMOTE_TURSO = False
+
+_REMOTE_NOOP_PRAGMAS = ("journal_mode", "synchronous", "foreign_keys")
+_WRITE_PREFIXES = ("insert", "update", "delete", "replace", "create", "alter", "drop")
+
+
+def _is_write_sql(sql: str) -> bool:
+    head = sql.lstrip()
+    if not head:
+        return False
+    return head.split(None, 1)[0].lower() in _WRITE_PREFIXES
+
+
+def _with_retry(fn, *, attempts: int = 4, base_delay: float = 0.4,
+                on_retry=None):
+    """Run *fn* with exponential backoff on transient remote failures (P5).
+
+    Only wraps atomic units (client creation, single batch) so a retry can
+    never double-apply a partially-written save. *on_retry* (T76) recreates
+    a dead client between attempts — without it a dropped WebSocket session
+    made every retry fail on the same corpse."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if i == attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** i))
+            if on_retry is not None:
+                try:
+                    on_retry()
+                except Exception:
+                    pass
+    raise last  # pragma: no cover
+
+
+def _url_candidates(url: str) -> list[str]:
+    """Connection URLs to try, in order (T76). WebSocket schemes keep a
+    long-lived socket that some proxies silently drop; the https:// form
+    is stateless per request. Try the user's URL first, then its HTTP twin."""
+    out = [url]
+    for prefix in ("libsql://", "wss://", "ws://"):
+        if url.startswith(prefix):
+            out.append("https://" + url[len(prefix):])
+            break
+    return out
+
+
+class _RemoteCursor:
+    """sqlite3-cursor-like view over a libsql ResultSet; rows name-accessible."""
+
+    def __init__(self, result=None):
+        self._result = result
+
+    @property
+    def description(self):
+        if self._result is None:
+            return None
+        return [(c,) for c in self._result.columns]
+
+    def fetchall(self):
+        if self._result is None:
+            return []
+        cols = list(self._result.columns)
+        return [_CompatRow(cols, tuple(r)) for r in self._result.rows]
+
+    def fetchone(self):
+        rows = self.fetchall()
+        return rows[0] if rows else None
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class RemoteTursoConnection:
+    """sqlite3-compatible facade over a remote Turso (libSQL cloud) database.
+
+    Retry + URL fallback + transaction support, matching Neuron's
+    RemoteTursoConnection pattern (keep-in-sync). Rows come back as
+    _CompatRow so NeuRAG's ``row['col']`` access works unchanged.
+    """
+
+    def __init__(self, url: str, auth_token: str):
+        self.row_factory = None  # accepted for API parity; rows already named
+        self._auth_token = auth_token
+        self._urls = _url_candidates(url)
+        self._url_idx = 0
+        self._client = self._create_client()
+        self._tx: list | None = None  # buffered Statements while a tx is open
+
+    def _create_client(self):
+        """Create the libsql client, falling back across URL transports."""
+        last: Exception | None = None
+        for i in range(self._url_idx, len(self._urls)):
+            try:
+                client = _with_retry(
+                    lambda u=self._urls[i]: _libsql.create_client_sync(
+                        url=u, auth_token=self._auth_token),
+                    attempts=2)
+                self._url_idx = i
+                return client
+            except Exception as e:
+                last = e
+        raise last
+
+    def _reconnect(self) -> None:
+        """Drop dead client and build fresh (T76)."""
+        try:
+            self._client.close()
+        except Exception:
+            pass
+        self._client = self._create_client()
+
+    @staticmethod
+    def _is_noop_pragma(sql: str) -> bool:
+        s = sql.strip().lower()
+        return (s.startswith("pragma")
+                and any(p in s for p in _REMOTE_NOOP_PRAGMAS)
+                and "table_info" not in s)
+
+    # -- transaction control ------------------------------------------------
+    def begin(self) -> None:
+        self._tx = []
+
+    def rollback(self) -> None:
+        self._tx = None
+
+    def commit(self) -> None:
+        if self._tx is None:
+            return
+        stmts, self._tx = self._tx, None
+        if stmts:
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
+
+    # -- statement execution ------------------------------------------------
+    def execute(self, sql: str, params=()):
+        if self._is_noop_pragma(sql):
+            return _RemoteCursor(None)
+        if self._tx is not None and _is_write_sql(sql):
+            self._tx.append(_libsql.Statement(sql, list(params) if params else None))
+            return _RemoteCursor(None)
+        return _with_retry(
+            lambda: _RemoteCursor(self._client.execute(sql, list(params) if params else None)),
+            on_retry=self._reconnect)
+
+    def executemany(self, sql: str, seq_of_params):
+        stmts = [_libsql.Statement(sql, list(p)) for p in seq_of_params]
+        if self._tx is not None:
+            self._tx.extend(stmts)
+            return _RemoteCursor(None)
+        if stmts:
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
+        return _RemoteCursor(None)
+
+    def executescript(self, script: str):
+        for s in _split_sql(script):
+            self.execute(s)
+
+    def close(self):
+        try:
+            self._client.close()
+        except Exception:
+            pass
+
+
+def _without_vector(row: dict) -> dict:
+    """Drop the stored vector from a row on its way out of the graph.
+
+    It is ranking machinery, not content: MMR and the sqlite3 cosine fallback
+    read it INSIDE db.py and nothing outside ever has. On the way out it is a
+    384-float blob that `neurag query --json` serialised with `default=str`,
+    so every result dragged a page of escaped bytes through the output a user
+    actually reads. Stripped at the boundary rather than at each printer, so a
+    future caller cannot leak it again."""
+    row.pop("embedding", None)
+    return row
+
+
+def _scored(row: dict, score: float, stage: str) -> dict:
+    """Stamp a result with the score of the stage that ranked it.
+
+    Every row `search()` returns carries both keys. It used to carry `sim` only
+    when it happened to come out of the vector leg — the BM25-only rows had no
+    score at all and the fused RRF value was thrown away — so nothing could
+    display or threshold a ranking it was handed.
+
+    `score_from` is not decoration: the scales are not comparable (cosine in
+    [0,1], RRF around 1/60, BM25 unbounded, a cross-encoder logit signed), so a
+    bare float would be unreadable. Compare within one ranking, never across.
+    """
+    row["score"] = float(score)
+    row["score_from"] = stage
+    return row
+
+
+def _split_sql(script: str) -> list[str]:
+    """Split a SQL script into executable statements.
+
+    Comments are stripped BEFORE the split. Neither pyturso nor the remote
+    client has `executescript`, so we cut on ';' by hand — and a ';' inside a
+    `--` comment truncated the statement that contained it, leaving the engine
+    with "incomplete input" and the schema silently short a table. It cost the
+    tag substrate one debugging round. Comments exist for whoever reads db.py,
+    not for the engine, so dropping them costs nothing.
+
+    keep-in-sync with `neuron/src/neuron/db.py:_split_sql` — that file has the
+    same hand-rolled splitter, and the same latent defect until this landed.
+
+    ponytail: no string-literal awareness. Nothing in SCHEMA_SQL quotes a '--';
+    if something ever does, this needs a real tokenizer, not a bigger regex.
+    """
+    return [s.strip() for s in re.sub(r"--[^\n]*", "", script).split(";") if s.strip()]
+
+
+def _ensure_parent_dir(path: str) -> None:
+    """Create the file's parent dir before open (turso.connect raises
+    ``open: NotFound`` otherwise). keep-in-sync with Neuron/db.py."""
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+
+
+# ponytail: _turso_conn_cache stays permanent — pyturso 0.6.1 on Windows does NOT
+# release the OS file lock on conn.close(), so "release and re-acquire" is
+# impossible. The cache prevents multiple pyturso connections to the same file
+# within one process (which would fail on the second open). Reads from other
+# processes work fine (shared lock); only concurrent writes would fail, and
+# neurag CLI routes writes through GM when it's active (_run_via_gm in cli.py).
+_turso_conn_cache: dict[str, object] = {}
+
+
+def _open_local_turso(path: str, errors: "list[str] | None" = None):
+    """Open the local pyturso engine with a process-level connection cache.
+
+    Uses a module-level cache so multiple KnowledgeGraph instances sharing the
+    same DB path reuse one pyturso connection (pyturso acquires an exclusive
+    lock — a second open to the same file fails). On cache miss, retries a few
+    times then returns None so the caller logs an error.
+    keep-in-sync with Neuron/db.py _open_local_engine.
+
+    `errors` collects WHY. The reason used to be swallowed whole, so the caller
+    could not tell "another process holds the lock" — the normal case when the
+    MCP server is up — from "this file is damaged", and the two have opposite
+    cures. One of them is `--wipe-knowledge`.
+    """
+    # Cache hit: reuse existing connection
+    cached = _turso_conn_cache.get(path)
+    if cached is not None:
+        try:
+            cached.execute("SELECT 1")
+            return cached
+        except Exception:  # noqa: BLE001 — stale connection
+            _turso_conn_cache.pop(path, None)
+
+    # Try to open — transient errors (dir not ready) get a few retries
+    import time as _t
+    try:
+        conn = turso_connect(path)
+        _turso_conn_cache[path] = conn
+        return conn
+    except Exception as e:  # noqa: BLE001
+        last = e
+        # The retries exist for a transient race (parent dir not ready yet). A
+        # lock is not transient: pyturso holds it for the owning process's whole
+        # life, so sleeping and asking again is guaranteed waste on the case
+        # that happens most — every CLI command while the MCP server is up.
+        for attempt in range(0 if is_lock_error(f"{e}") else 2):
+            _t.sleep(0.05 * (attempt + 1))
+            _ensure_parent_dir(path)
+            try:
+                conn = turso_connect(path)
+                _turso_conn_cache[path] = conn
+                return conn
+            except Exception as e2:  # noqa: BLE001
+                last = e2
+        if errors is not None:
+            errors.append(f"pyturso open KO: {last}")
+    return None
+
+
+# SSOT dei path: la posizione del vault vive in neurag/paths.py, non qui.
+from neurag import paths as _paths
+
+
+def _settings_get(key: str):
+    """Read a persisted knob. Never fatal: a missing/unreadable config must not
+    stop the vault from opening (same rule as embedder._setting)."""
+    try:
+        from neurag import settings
+        return settings.get(key)
+    except Exception:  # noqa: BLE001
+        return None
+_DEFAULT_DB_DIR = _paths.data_dir()
+_DEFAULT_DB = _paths.db_path()
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS nodes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    node_type   TEXT    NOT NULL CHECK(node_type IN ('godnode','fundamental','specialization')),
+    parent_id   INTEGER REFERENCES nodes(id) ON DELETE CASCADE,
+    path        TEXT    NOT NULL,   -- materialised path: /BackEndNotes/Java/SpringBoot
+    tags        TEXT    DEFAULT '[]',  -- JSON array
+    triggers    TEXT    DEFAULT '[]',  -- JSON array
+    created_at  TEXT    DEFAULT (datetime('now')),
+    -- Activation layer (DESIGN-EVOLUTION §3). 2 = active vault, 3 = dormant,
+    -- 4 = deep dormant. No layer is a grave: a parked node keeps its chunks,
+    -- its links and its tags, and `recall` reaches every layer. What changes
+    -- is only whether it is scanned by default.
+    layer       INTEGER DEFAULT 2,
+    -- When this node last ANSWERED something. Parking reads inactivity from
+    -- here, never from created_at: a document is not stale because it is old.
+    last_used   TEXT
+);
+
+-- Absolute root (id=0, path='/', parent_id=NULL).
+INSERT OR IGNORE INTO nodes (id, name, node_type, parent_id, path)
+VALUES (0, '/', 'godnode', NULL, '/');
+
+CREATE TABLE IF NOT EXISTS chunks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id     INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    text        TEXT    NOT NULL,
+    source      TEXT,       -- original file path
+    section     TEXT,
+    chunk_index INTEGER DEFAULT 0,
+    embedding   BLOB,       -- 384-dim float32 vector (or NULL if not embedded)
+    created_at  TEXT    DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_path   ON nodes(path);
+CREATE INDEX IF NOT EXISTS idx_chunks_node  ON chunks(node_id);
+
+CREATE TABLE IF NOT EXISTS node_links (
+    source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    link_type   TEXT    NOT NULL CHECK(link_type IN ('tag_overlap','cross_ref','semantic')),
+    weight      REAL    DEFAULT 1.0,
+    evidence    TEXT    DEFAULT '',
+    created_at  TEXT    DEFAULT (datetime('now')),
+    updated_at  TEXT    DEFAULT (datetime('now')),
+    -- Where this link came from. 'auto' is derived from tags and mentions and
+    -- is rebuilt from scratch on every ingest; anything else was learned or
+    -- curated and must OUTLIVE that rebuild. Before this column,
+    -- `rebuild_links` opened with a bare DELETE, so the graph could not learn
+    -- and a hand-made link had a lifetime of one re-ingest.
+    origin      TEXT    DEFAULT 'auto',
+    -- Hebbian: how many times both ends were confirmed useful together, and
+    -- the query index of the last count (the cooldown reads it).
+    co_activation_count INTEGER DEFAULT 0,
+    last_coactivation   INTEGER DEFAULT 0,
+    PRIMARY KEY (source_id, target_id, link_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_links_source ON node_links(source_id);
+CREATE INDEX IF NOT EXISTS idx_links_target ON node_links(target_id);
+
+-- Which embedding model produced the vectors in `chunks`. Stored NEXT TO the
+-- vectors, not in config.json, because that is the only place that stays true:
+-- a settings file can be edited, copied, or reset independently of the vault,
+-- and then nothing knows the stored vectors are from a different space.
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+-- The tag substrate (DESIGN-EVOLUTION §4). One atom had five representations
+-- and no join key: chunk.tags, node.triggers, node.tags, Neuron keywords, GM
+-- endpoint strings. Here a tag is a row, and `uses` (how many nodes carry it)
+-- makes IDF suppression a lookup instead of a hand-maintained stop list.
+-- `nodes.tags` / `nodes.triggers` stay as the legacy read path until the
+-- migration has been verified on real vaults.
+CREATE TABLE IF NOT EXISTS tags (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name      TEXT    NOT NULL UNIQUE,   -- normalized: lowercase, trimmed
+    uses      INTEGER DEFAULT 0,         -- document frequency, drives IDF suppression
+    salience  REAL    DEFAULT 0.0,       -- Hebbian home (P5); unused in P1
+    last_used TEXT
+);
+-- No FK on purpose: pyturso 0.6.1 stack-overflows on cascade triggers (see
+-- delete_node), so every delete site cleans these rows explicitly instead.
+CREATE TABLE IF NOT EXISTS node_tags  (node_id  INTEGER NOT NULL, tag_id INTEGER NOT NULL,
+                                       PRIMARY KEY (node_id, tag_id));
+-- PARKED, 2026-07-30 (DESIGN-EVOLUTION §8.4 asked for this to be measured at
+-- P3 and it never was). Measured: 9360 rows for 2117 chunks, ~4.4 per chunk,
+-- and not one reader in any of the three repos -- linking reads `node_tags`,
+-- IDF (`tags.uses`) counts `node_tags`, and Gray Matter's tag join goes through
+-- `node_tag_names`, which is also `node_tags`. So it was write cost and disk
+-- for a join nobody made. `add_chunk` no longer writes it.
+-- Parked, not dropped: the table and any existing rows stay (I5), the delete
+-- sites below still clean legacy rows, and `health()` still audits them. A
+-- reader that wants chunk-level tags re-populates by re-ingesting -- the data
+-- is derived from `chunker` tags, so nothing here is a source of truth.
+CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER NOT NULL, tag_id INTEGER NOT NULL,
+                                       PRIMARY KEY (chunk_id, tag_id));
+CREATE INDEX IF NOT EXISTS idx_node_tags_tag  ON node_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag_id);
+"""
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS is a no-op
+# on a vault that already has the table, so a new column reaches an existing
+# vault only through here. Applied by `_ensure_columns`, which is idempotent.
+# Every entry needs a DEFAULT that means "behave as before": SQLite backfills
+# it into the existing rows and that value is what an old vault wakes up with.
+ADDED_COLUMNS = (
+    ("nodes", "layer", "INTEGER DEFAULT 2"),
+    ("nodes", "last_used", "TEXT"),
+    ("node_links", "origin", "TEXT DEFAULT 'auto'"),
+    ("node_links", "co_activation_count", "INTEGER DEFAULT 0"),
+    ("node_links", "last_coactivation", "INTEGER DEFAULT 0"),
+)
+
+# Indexes run LAST, after ADDED_COLUMNS. An index over a column added by that
+# step cannot live in SCHEMA_SQL: on an existing vault the CREATE INDEX would
+# run first, fail with "no such column", and — because _init_schema swallows
+# schema errors into `_corrupt` — take the column migration down with it in
+# silence. That is exactly what happened to `idx_nodes_layer`.
+INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_nodes_layer ON nodes(layer);
+"""
+
+
+class _CompatRow:
+    """Turso tuple wrapper: supports both r[0] and r['col'] like sqlite3.Row."""
+
+    __slots__ = ('_cols', '_vals')
+
+    def __init__(self, cols: list[str], vals: tuple):
+        object.__setattr__(self, '_cols', cols)
+        object.__setattr__(self, '_vals', vals)
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            idx = self._cols.index(key)
+            return self._vals[idx]
+        return self._vals[key]
+
+    def __iter__(self):
+        return iter(self._vals)
+
+    def __len__(self):
+        return len(self._vals)
+
+    def keys(self):
+        return self._cols
+
+
+class VaultUnavailable(RuntimeError):
+    """The vault did not open, and the caller asked it to do work anyway."""
+
+
+# A lock and a corrupt file are opposite problems: one clears by itself when the
+# other process lets go, the other is only fixed by replacing the file. Telling
+# them apart matters because the second cure is `--wipe-knowledge`, and handing
+# that to someone whose vault is merely busy destroys a healthy one.
+_LOCK_MARKERS = ("locking error", "database is locked", "os error 33",
+                 "another process", "resource busy", "being used by another")
+
+
+def is_lock_error(err: str) -> bool:
+    """Is this "someone else owns the file" rather than "the file is broken"?"""
+    return any(m in err.lower() for m in _LOCK_MARKERS)
+
+
+def open_failure_message(err: str) -> str:
+    """What went wrong opening the vault, and what to do about it."""
+    if is_lock_error(err):
+        return (f"the vault is open in another process and locked: {err}. "
+                f"Nothing is damaged and nothing needs repairing — stop the "
+                f"other process (`neurag stop`, or the Gray Matter worker that "
+                f"fronts it) and try again.")
+    return (f"knowledge.db could not be opened: {err}. Run `neurag doctor` for "
+            f"the details, or `neurag repair --wipe-knowledge` to start the "
+            f"vault over — the sources on disk are untouched.")
+
+
+class _ReadOnlyConnection:
+    """A borrowed view of a vault another process owns.
+
+    pyturso takes an EXCLUSIVE lock for the life of the connection (0.6.1 does
+    not even release it on `close()` — see `_turso_conn_cache`), so while the
+    MCP server is up no second process can have that tier. Falling back to
+    sqlite3 makes reads work again, which is the whole point... but sqlite3 will
+    also happily WRITE to that file, and then two engines with two different WAL
+    implementations are writing one database. The exclusive lock had been
+    enforcing the single-writer rule by accident; the fallback removed it.
+
+    So the borrowed tier reads and refuses to write. Writes already have a
+    correct route — `_run_via_gm` sends them to the worker that owns the file —
+    and this points at it instead of quietly racing.
+
+    Only for the LOCKED case. A machine with no pyturso at all gets a plain,
+    fully writable sqlite3 connection: that is standalone NeuRAG (I2), not a
+    borrowed vault.
+    """
+
+    def __init__(self, conn, err: str):
+        self._conn = conn
+        self._err = err
+
+    def execute(self, sql, *a, **kw):
+        if _is_write_sql(sql):
+            raise VaultUnavailable(
+                f"this vault is owned by another process, so this connection is "
+                f"read-only ({self._err}). Reads work; writes must go through "
+                f"the process that holds it — Gray Matter routes them there "
+                f"automatically (`_run_via_gm`). Stop that process to write "
+                f"directly.")
+        return self._conn.execute(sql, *a, **kw)
+
+    def commit(self) -> None:
+        """Nothing was written, so there is nothing to commit."""
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _CorruptConnection:
+    """Stands in for the connection when the vault did not open.
+
+    `_init_schema` swallows every schema error into `self._corrupt` so that the
+    diagnostics can RUN and report it instead of the whole CLI dying on a
+    malformed file (audit 2026-07-22). The cost of that choice was paid by
+    everything else: `search`, `park` and `query` went on to use a connection
+    with no tables and surfaced a raw pyturso "no such table" traceback, which
+    names the symptom and not the cause. In one session that silence hid two
+    schema errors, and the second was only found by driving the CLI by hand.
+
+    So the flag now has teeth in exactly one place. Substituting the connection
+    beats a `_require_healthy()` call at the top of thirty methods: there is no
+    single function they all pass through, but there IS a single object, and a
+    method added next year is covered without anyone remembering to guard it.
+    `status`/`health`/`doctor` return before touching `_conn`, which is what
+    keeps them able to report — and repair runs before the DB is opened at all.
+    """
+
+    def __init__(self, err: str):
+        self._err = err
+
+    def _raise(self, *_a, **_kw):
+        raise VaultUnavailable(open_failure_message(self._err))
+
+    execute = executemany = commit = _raise
+
+    def close(self) -> None:
+        """Closing something that never opened is not an error."""
+
+
+class KnowledgeGraph:
+    """Hierarchical knowledge graph with vector search.
+
+    Uses Turso (libsql) via pyturso for local or remote (cloud) operation.
+    """
+
+    def __init__(self, db_path: Optional[Path] = None):
+        # Lazy imports: fastembed (380MB) loads only on first KG instantiation,
+        # not on `import neurag.db` — keeps MCP server startup fast. (audit 2026-07-22)
+        from neurag.chunker import chunk_file, scan_directory
+        from neurag.embedder import get_embedder
+        self._chunk_file = chunk_file
+        self._scan_directory = scan_directory
+        self._db_path = db_path or _DEFAULT_DB
+        # :memory: has no filesystem parent — skip mkdir (audit 2026-07-22)
+        if str(self._db_path) != ":memory:":
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn: sqlite3.Connection | None = None
+        # Corruption is DATA, not a crash: a malformed knowledge.db must not blow
+        # up __init__ (that killed EVERY command, not just health). Flag it here
+        # and let status()/health() REPORT it with a recovery hint. (audit 2026-07-22)
+        self._corrupt = False
+        self._corrupt_err = ""
+        self._connect()
+        self._ensure_turso(db_path)
+        self._init_schema()
+        # After _init_schema, because that is where corruption is detected.
+        if self._corrupt:
+            self._conn = _CorruptConnection(self._corrupt_err)
+        self._embedder = get_embedder()  # auto: fastembed if present, else null (lexical)
+        # Chunk ceiling comes from the LIVE model's tokenizer, not a constant:
+        # every model we ship truncates at 128 tokens, and a chunk past that is
+        # silently unsearchable. `chunk_max_chars` overrides for a bigger model.
+        from neurag.embedder import max_chars_for
+        try:
+            configured = int(_settings_get("chunk_max_chars") or 0)
+        except (TypeError, ValueError):
+            configured = 0
+        self._max_chunk_chars = configured if configured > 0 else max_chars_for(self._embedder)
+
+    # -- connection ---------------------------------------------------------
+
+    def _connect(self) -> None:
+        db_str = str(self._db_path)
+        # Tier order: cloud Turso (shared, multi-machine) -> local pyturso
+        # (native vector_distance_cos). Reads from other processes work fine
+        # via shared lock; writes route through GM (_run_via_gm in cli.py).
+        if REMOTE_TURSO:
+            self._conn = RemoteTursoConnection(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
+            self._vector_sql = True
+            self._engine_name = "Turso (cloud)"
+            return  # remote: pragmas are no-ops, rows already name-accessible
+        _ensure_parent_dir(db_str)
+        self._open_errors: list[str] = []
+        self._read_only = False
+        conn = _open_local_turso(db_str, self._open_errors) if TURSO_AVAILABLE else None
+        if conn is not None:
+            self._conn = conn
+            self._vector_sql = True
+            self._engine_name = "Turso (local)"
+            def _row_factory(cursor, row):
+                if cursor.description is None:
+                    return row
+                cols = [c[0] for c in cursor.description]
+                return _CompatRow(cols, row)
+            self._conn.row_factory = _row_factory
+        else:
+            # The sqlite3 tier, which until 2026-07-30 did not exist.
+            #
+            # I4 calls sqlite3 "a degraded fallback", `_ensure_turso` prints
+            # "degrado a sqlite3", `status`/`doctor` report it and
+            # `_vector_candidates` has a Python-cosine branch commented "only
+            # the sqlite3 tier lands here" — and `sqlite3.connect` was never
+            # called anywhere in this file. The branch left `_conn = None`, so
+            # `_init_schema` failed with "'NoneType' object has no attribute
+            # 'execute'", was caught, and the vault was reported CORRUPT.
+            #
+            # Which is how a healthy vault came to be diagnosed as damaged: the
+            # MCP server holds a pyturso lock on it (pyturso takes an exclusive
+            # one), a second process could not open that tier, and instead of
+            # degrading it declared the file broken. sqlite3 opens and reads the
+            # very same file without complaint — measured, not assumed.
+            #
+            # Neuron never had this bug: `_open_local_engine` ends with
+            # `return _sqlite3.connect(path)`, its "L2 guard". This file is the
+            # keep-in-sync port of that one and dropped exactly that last line —
+            # the failure mode of porting by hand, where the shape survives, the
+            # guard does not, and every comment goes on describing the original.
+            conn = sqlite3.connect(db_str)
+            conn.row_factory = sqlite3.Row
+            self._vector_sql = False
+            why = "; ".join(self._open_errors)
+            if why and is_lock_error(why):
+                # Borrowed, not owned: read, never write. See _ReadOnlyConnection.
+                self._conn = _ReadOnlyConnection(conn, why)
+                self._read_only = True
+                self._engine_name = "SQLite (read-only: owned by another process)"
+            else:
+                self._conn = conn
+                self._engine_name = "SQLite (degraded)"
+        # WAL + busy_timeout: letture concorrenti non bloccano lo scrittore e gli
+        # scrittori si accodano invece di corrompersi (audit 2026-07-22). Su un
+        # file già malformato anche la PRAGMA può sollevare → flag, non crash.
+        if self._conn is not None:
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA busy_timeout=5000")
+                self._conn.execute("PRAGMA foreign_keys=ON")
+            except Exception as e:  # noqa: BLE001 — DB corrotto/illeggibile
+                self._corrupt = True
+                self._corrupt_err = str(e)
+
+    @staticmethod
+    def _find_vendor_dir():
+        """La cartella `vendor/` con le wheel pyturso, se localizzabile."""
+        import importlib.util
+        cands = []
+        env = os.environ.get("NEURAG_VENDOR")
+        if env:
+            cands.append(Path(env))
+        try:
+            spec = importlib.util.find_spec("neurag")
+            for loc in (spec.submodule_search_locations or []) if spec else []:
+                cands.append(Path(loc) / "vendor")
+                cands.append(Path(loc).parent / "vendor")
+        except Exception:  # noqa: BLE001
+            pass
+        cands.append(Path(__file__).resolve().parent / "vendor")
+        for c in cands:
+            try:
+                if c and c.is_dir():
+                    return c
+            except OSError:
+                pass
+        return None
+
+    def _ensure_turso(self, db_path) -> None:
+        """Turso PREFERITO sul vault reale, con fallback documentato.
+
+        Richiesta 2026-07-22: "deve usare Turso senza se e senza ma" MA "senza
+        dimenticare i fallback — prendere Turso dalle wheel, solo dopo X tentativi
+        va in fallback documentando l'errore". Quindi: se sul vault di default
+        (db_path None) NON siamo su Turso, si prova ad acquisirlo — import, e se
+        manca `pip install` dalle wheel vendored — fino a NEURAG_TURSO_ATTEMPTS
+        volte; solo allora si degrada a sqlite3 registrando gli errori (che
+        `status`/`doctor` mostrano). Nessun crash. Non tocca i DB di test
+        (db_path esplicito) né se sbloccato con NEURAG_REQUIRE_TURSO=0."""
+        self._turso_degraded = False
+        self._turso_errors: list[str] = []
+        if db_path is not None:
+            return
+        require = os.environ.get("NEURAG_REQUIRE_TURSO", "1").strip().lower() \
+            not in ("0", "false", "no", "off")
+        if not require or getattr(self, "_vector_sql", False):
+            return  # escape hatch, o già su Turso (cloud/pyturso locale)
+
+        import importlib
+        import subprocess
+        import sys as _sys
+        global TURSO_AVAILABLE, turso_connect
+        attempts = max(1, int(os.environ.get("NEURAG_TURSO_ATTEMPTS", "3") or 3))
+        autoinstall = os.environ.get("NEURAG_TURSO_AUTOINSTALL", "1").strip().lower() \
+            not in ("0", "false", "no", "off")
+        vendor = self._find_vendor_dir()
+
+        for i in range(1, attempts + 1):
+            got = False
+            try:
+                mod = importlib.import_module("turso")
+                turso_connect = mod.connect
+                TURSO_AVAILABLE = True
+                got = True
+            except Exception as e:  # noqa: BLE001 — non ancora installato
+                self._turso_errors.append(f"tentativo {i}: import turso KO ({e!r})")
+                if autoinstall:
+                    cmd = [_sys.executable, "-m", "pip", "install", "pyturso==0.6.1"]
+                    if vendor:
+                        cmd[4:4] = ["--find-links", str(vendor)]
+                    try:
+                        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                                           creationflags=(subprocess.CREATE_NO_WINDOW
+                                                          if os.name == "nt" else 0))
+                        if r.returncode != 0:
+                            self._turso_errors.append(
+                                f"tentativo {i}: pip install KO rc={r.returncode}: "
+                                f"{(r.stderr or '').strip()[-200:]}")
+                        else:
+                            importlib.invalidate_caches()
+                            try:
+                                mod = importlib.import_module("turso")
+                                turso_connect = mod.connect
+                                TURSO_AVAILABLE = True
+                                got = True
+                            except Exception as e2:  # noqa: BLE001
+                                self._turso_errors.append(
+                                    f"tentativo {i}: import post-install KO ({e2!r})")
+                    except Exception as pe:  # noqa: BLE001 — timeout/rete
+                        self._turso_errors.append(f"tentativo {i}: pip errore ({pe!r})")
+                else:
+                    self._turso_errors.append(f"tentativo {i}: autoinstall disattivato")
+            if got:
+                # turso disponibile: riconnetti al tier locale (TURSO_AVAILABLE ora True)
+                try:
+                    if self._conn is not None:
+                        self._conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._conn = None
+                self._connect()
+                if getattr(self, "_vector_sql", False):
+                    return  # riuscito → siamo su Turso
+                # Con il MOTIVO: "open locale fallito" da solo manda a cercare
+                # una wheel rotta quando quasi sempre è il lock del server MCP
+                # (pyturso ne prende uno esclusivo), che non è un guasto.
+                why = "; ".join(getattr(self, "_open_errors", [])) or "n/d"
+                self._turso_errors.append(
+                    f"tentativo {i}: turso importato ma open locale fallito ({why})")
+                if is_lock_error(why):
+                    # Un lock non si sblocca ritentando: pyturso lo tiene per
+                    # tutta la vita del processo proprietario (0.6.1 non lo
+                    # molla nemmeno sulla close()). Ritentare due volte ancora
+                    # costava ~1.3s misurati a ogni comando CLI con il server
+                    # acceso — cioè nel caso NORMALE — per zero possibilità di
+                    # riuscita. Il tier di sola lettura è già quello giusto.
+                    break
+
+        # Esauriti i tentativi → fallback documentato su sqlite3.
+        self._turso_degraded = True
+        if self._conn is None:            # riapri una connessione sqlite valida
+            self._connect()
+        print("neurag: TURSO non ottenuto dopo %d tentativi — degrado a sqlite3. "
+              "Dettagli: %s" % (attempts, " | ".join(self._turso_errors) or "n/d"),
+              file=_sys.stderr)
+
+    def _init_schema(self) -> None:
+        # A borrowed vault already has its schema, and the process that owns it
+        # is the one allowed to migrate it. Without this the CREATE TABLE IF NOT
+        # EXISTS run would hit the read-only guard, be caught below, and mark a
+        # perfectly readable vault corrupt — the exact misdiagnosis this tier
+        # exists to end.
+        if self._read_only:
+            return
+        try:
+            for stmt in _split_sql(SCHEMA_SQL):
+                self._conn.execute(stmt)
+            self._conn.commit()
+            self._ensure_columns()          # before the indexes that use them
+            for stmt in _split_sql(INDEXES_SQL):
+                self._conn.execute(stmt)
+            self._conn.commit()
+            self._migrate_tags()
+        except Exception as e:  # noqa: BLE001 — "file is not a database" & simili
+            # DB malformato: non alziamo qui, così i comandi diagnostici
+            # (status/health/doctor) possono girare e DIRLO invece di crashare.
+            self._corrupt = True
+            self._corrupt_err = str(e)
+
+    def close(self) -> None:
+        if self._conn:
+            # Don't close cached pyturso connections — other KG instances may be using them
+            if self._engine_name == "Turso (local)":
+                self._conn = None  # release reference, keep connection alive in cache
+            else:
+                self._conn.close()
+                self._conn = None
+
+    # -- node CRUD ----------------------------------------------------------
+
+    def add_node(self, name: str, node_type: str,
+                 parent_id: Optional[int] = None,
+                 tags: Optional[list[str]] = None,
+                 triggers: Optional[list[str]] = None) -> int:
+        # Default parent: root (id=0) for godnodes, require explicit parent otherwise
+        if parent_id is None:
+            if node_type == "godnode":
+                parent_id = 0
+            else:
+                raise ValueError(f"{node_type} nodes require an explicit parent_id (godnode root)")
+        parent_path = "/"
+        row = self._conn.execute(
+            "SELECT path FROM nodes WHERE id = ?", (parent_id,)
+        ).fetchone()
+        if row:
+            parent_path = row["path"] if row["path"].endswith("/") else row["path"] + "/"
+        path = f"{parent_path}{name}"
+
+        cur = self._conn.execute(
+            """INSERT INTO nodes (name, node_type, parent_id, path, tags, triggers)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, node_type, parent_id, path,
+             json.dumps(tags or []), json.dumps(triggers or [])),
+        )
+        self._conn.commit()
+        node_id = cur.lastrowid
+        if tags:
+            self._sync_node_tags(node_id, tags)
+        return node_id
+
+    def _merge_json_list(self, node_id: int, column: str,
+                         values: list[str], cap: int) -> None:
+        """Merge values into a node's JSON-array column (dedup, order-preserving).
+
+        `column` is never user input — only the two literals below — so the
+        f-string can't carry injection."""
+        clean = [v for v in (values or []) if v]
+        if not clean:
+            return
+        row = self._conn.execute(
+            f"SELECT {column} FROM nodes WHERE id = ?", (node_id,)).fetchone()
+        if not row:
+            return
+        try:
+            current = json.loads(row[column] or "[]")
+        except (TypeError, ValueError):
+            current = []
+        merged = list(dict.fromkeys([*current, *clean]))[:cap]
+        self._conn.execute(f"UPDATE nodes SET {column} = ? WHERE id = ?",
+                           (json.dumps(merged), node_id))
+        self._conn.commit()
+        return merged
+
+    # -- tag substrate (DESIGN-EVOLUTION §4) ---------------------------------
+
+    @staticmethod
+    def _norm_tag(name: str) -> str:
+        """Normalization IS the join key: `Cache`, `cache ` and `CACHE` are one
+        tag or the substrate buys nothing."""
+        return (name or "").strip().lower()
+
+    def _tag_id(self, name: str) -> "int | None":
+        norm = self._norm_tag(name)
+        if not norm:
+            return None
+        self._conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (norm,))
+        row = self._conn.execute(
+            "SELECT id FROM tags WHERE name = ?", (norm,)).fetchone()
+        return row["id"] if row else None
+
+    def _refresh_tag_uses(self, tag_ids) -> None:
+        """`uses` is recomputed from node_tags, never incremented. IDF
+        suppression reads this column, and a counter that drifts silently
+        un-suppresses (or hides) tags with no way to notice."""
+        for tid in set(tag_ids):
+            self._conn.execute(
+                "UPDATE tags SET uses = (SELECT COUNT(*) FROM node_tags WHERE tag_id = ?) "
+                "WHERE id = ?", (tid, tid))
+
+    def _sync_node_tags(self, node_id: int, names: list[str],
+                        commit: bool = True) -> None:
+        """Make node_tags mirror `names` exactly — removals included, so the
+        relational side never drifts from the legacy column's 40-tag cap."""
+        want = {t for t in (self._tag_id(n) for n in names or []) if t}
+        have = {r["tag_id"] for r in self._conn.execute(
+            "SELECT tag_id FROM node_tags WHERE node_id = ?", (node_id,)).fetchall()}
+        for tid in want - have:
+            self._conn.execute(
+                "INSERT INTO node_tags (node_id, tag_id) VALUES (?, ?)", (node_id, tid))
+        for tid in have - want:
+            self._conn.execute(
+                "DELETE FROM node_tags WHERE node_id = ? AND tag_id = ?", (node_id, tid))
+        self._refresh_tag_uses(want ^ have)
+        if commit:
+            self._conn.commit()
+
+    def _ensure_columns(self) -> None:
+        """Add columns a released vault predates. Idempotent, and never
+        rewrites a row: SQLite backfills the DEFAULT for existing rows, which
+        is why every added column must have one that means "as before"."""
+        for table, column, decl in ADDED_COLUMNS:
+            have = {r[1] for r in self._conn.execute(
+                f"PRAGMA table_info({table})").fetchall()}
+            if column not in have:
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        self._conn.commit()
+
+    def node_tag_names(self, node_id: int) -> list[str]:
+        """The node's canonical (normalized) tag names.
+
+        The read side of the substrate for anyone outside this vault: Gray
+        Matter joins its bridges on these instead of matching substrings against
+        a node name (§4)."""
+        return [r["name"] for r in self._conn.execute(
+            "SELECT t.name AS name FROM node_tags nt JOIN tags t ON t.id = nt.tag_id "
+            "WHERE nt.node_id = ? ORDER BY t.name", (node_id,)).fetchall()]
+
+    def _migrate_tags(self) -> None:
+        """Backfill node_tags from the legacy `nodes.tags` JSON column.
+
+        Idempotent twice over: the meta flag skips the scan after the first
+        run, and `_sync_node_tags` is a mirror operation anyway — running it
+        again on unchanged data writes nothing. chunk_tags has no legacy source
+        to backfill from; it fills on the next ingest."""
+        if self._conn.execute(
+                "SELECT 1 FROM meta WHERE key = 'tags_migrated'").fetchone():
+            return
+        for row in self._conn.execute(
+                "SELECT id, tags FROM nodes WHERE tags IS NOT NULL AND tags != '[]'"
+        ).fetchall():
+            try:
+                names = json.loads(row["tags"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            self._sync_node_tags(row["id"], names, commit=False)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('tags_migrated', '1')")
+        self._conn.commit()
+
+    def add_triggers(self, node_id: int, triggers: list[str]) -> None:
+        """Merge extra triggers into a node (dedup, capped at 40).
+
+        Auto-enriches a node from the symbol tags of the code chunked into it,
+        so the Neuron→NeuRAG bridge can reach the node by concept without anyone
+        hand-tagging it."""
+        self._merge_json_list(node_id, "triggers", triggers, 40)
+
+    def add_tags(self, node_id: int, tags: list[str]) -> None:
+        """Merge tags into a node (dedup, capped at 40).
+
+        Tags are what `build_tag_links` reads. Until this existed, `auto_ingest`
+        wrote the chunker's symbols to `triggers` ONLY, so every auto-ingested
+        node had `tags='[]'`, the linker's `WHERE tags != '[]'` matched nothing,
+        and the whole graph came out with zero links — a silent no-op that the
+        unit tests missed because they hand-set `tags=` on `add_node`.
+
+        Writes both sides: the legacy JSON column (still the read path for
+        `_print_node` and the GM bridge) and the `node_tags` rows the linker
+        now uses. Syncing from the POST-cap merged list keeps the two in step."""
+        merged = self._merge_json_list(node_id, "tags", tags, 40)
+        if merged is not None:
+            self._sync_node_tags(node_id, merged)
+
+    def get_node(self, node_id: int) -> Optional[dict]:
+        row = self._conn.execute(
+            "SELECT * FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_node_by_name(self, name: str) -> Optional[dict]:
+        row = self._conn.execute(
+            "SELECT * FROM nodes WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_children(self, node_id: int) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM nodes WHERE parent_id = ? ORDER BY name",
+            (node_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_node(self, node_id: int) -> int:
+        """Delete a node and its whole subtree — EXPLICIT bottom-up deletes.
+
+        pyturso 0.6.1 stack-overflows on FK cascade triggers even when
+        children are already gone (audit 2026-07-20). We disable FK
+        enforcement around the manual delete loop to avoid the C-level
+        recursion. Funziona identico sul tier sqlite3.
+        Ritorna quanti nodi sono stati rimossi (0 = id inesistente)."""
+        start = self.get_node(node_id)
+        if not start:
+            return 0
+        doomed = [d["id"] for d in reversed(self.get_descendants(node_id))]
+        doomed.append(node_id)                     # la radice per ultima
+        # ponytail: FK off for the loop, pyturso 0.6.1 C cascade bug.
+        # try/finally so FK enforcement is ALWAYS restored, even if a DELETE
+        # raises — otherwise the connection would silently keep FK disabled.
+        self._conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            freed: set[int] = set()
+            for nid in doomed:
+                freed |= {r["tag_id"] for r in self._conn.execute(
+                    "SELECT tag_id FROM node_tags WHERE node_id = ?", (nid,)).fetchall()}
+                self._conn.execute(
+                    "DELETE FROM chunk_tags WHERE chunk_id IN "
+                    "(SELECT id FROM chunks WHERE node_id = ?)", (nid,))
+                self._conn.execute("DELETE FROM node_tags WHERE node_id = ?", (nid,))
+                self._conn.execute("DELETE FROM chunks WHERE node_id = ?", (nid,))
+                self._conn.execute(
+                    "DELETE FROM node_links WHERE source_id = ? OR target_id = ?",
+                    (nid, nid))
+                self._conn.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+            self._refresh_tag_uses(freed)   # I5: the tag row survives, its count doesn't
+            self._conn.commit()
+        finally:
+            self._conn.execute("PRAGMA foreign_keys=ON")
+        return len(doomed)
+
+    def rename_node(self, node_id: int, new_name: str) -> None:
+        """Rinomina un nodo aggiornando il suo path E i path dei discendenti.
+
+        Il path è derivato dai nomi (add_node lo costruisce da parent.path +
+        name): rinominare solo `name` lascerebbe l'albero incoerente. Qui il
+        prefisso vecchio viene riscritto in un colpo su tutto il sottoalbero.
+        """
+        node = self.get_node(node_id)
+        if not node:
+            raise ValueError(f"nodo inesistente: {node_id}")
+        new_name = new_name.strip()
+        if not new_name:
+            raise ValueError("il nuovo nome è vuoto")
+        old_path = node["path"]
+        parent_prefix = old_path.rsplit("/", 1)[0]
+        new_path = f"{parent_prefix}/{new_name}"
+        self._conn.execute("UPDATE nodes SET name = ?, path = ? WHERE id = ?",
+                           (new_name, new_path, node_id))
+        # substr è 1-based: si tiene tutto ciò che segue il vecchio prefisso.
+        self._conn.execute(
+            "UPDATE nodes SET path = ? || substr(path, ?) WHERE path LIKE ?",
+            (new_path, len(old_path) + 1, old_path + "/%"))
+        self._conn.commit()
+
+    def get_descendants(self, node_id: int) -> list[dict]:
+        """Breadth-first descendants via path prefix."""
+        row = self._conn.execute(
+            "SELECT path FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+        if not row:
+            return []
+        base = row["path"]
+        base = base + "/" if not base.endswith("/") else base
+        rows = self._conn.execute(
+            "SELECT * FROM nodes WHERE path LIKE ? ORDER BY path",
+            (f"{base}%",)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def find_node_by_trigger(self, keyword: str) -> Optional[dict]:
+        """Find a node whose triggers list contains the given keyword."""
+        # SQLite JSON array search
+        rows = self._conn.execute(
+            "SELECT * FROM nodes WHERE triggers LIKE ?",
+            (f'%"{"%s" % keyword}"%',)
+        ).fetchall()
+        if rows:
+            return dict(rows[0])
+        return None
+
+    def node_tree(self, root_id: Optional[int] = None) -> str:
+        """Pretty-print the hierarchy. Defaults to root (id=0)."""
+        target_id = root_id if root_id is not None else 0
+        row = self._conn.execute(
+            "SELECT * FROM nodes WHERE id = ?", (target_id,)
+        ).fetchone()
+        if not row:
+            return "(empty)"
+        lines = []
+        self._print_node(dict(row), 0, lines)
+        return "\n".join(lines)
+
+    def _print_node(self, node: dict, depth: int, lines: list) -> None:
+        prefix = "  " * depth
+        tags_str = ", ".join(json.loads(node["tags"])) if node["tags"] != "[]" else ""
+        lines.append(
+            f"{prefix}{node['node_type']}: {node['name']}"
+            f"{'  [' + tags_str + ']' if tags_str else ''}"
+        )
+        children = self.get_children(node["id"])
+        for child in children:
+            self._print_node(child, depth + 1, lines)
+
+    # -- chunks -------------------------------------------------------------
+
+    def add_chunk(self, node_id: int, text: str,
+                  source: Optional[str] = None,
+                  section: Optional[str] = None,
+                  chunk_index: int = 0,
+                  tags: Optional[list[str]] = None) -> int:
+        # Embed the breadcrumb WITH the body (encoding specificity): a paragraph
+        # under "Install > Windows > venv" that only says "run the script" is
+        # unreachable by "windows install" unless its location is in the vector.
+        # Stored text stays pure — only the embedding input is enriched.
+        vec = self._get_embedding(self._embed_input(text, section))
+        blob = self._pack_vec(vec) if vec else None
+        if blob is not None:
+            self._record_embed_signature()   # claims an unclaimed vault only
+        cur = self._conn.execute(
+            "INSERT INTO chunks (node_id, text, source, section, chunk_index, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+            (node_id, text, source, section, chunk_index, blob),
+        )
+        self._conn.commit()
+        # `tags` still shapes the NODE's tags (`index_into_node` pools them into
+        # `add_tags`), which is the side everything reads. The per-chunk copy is
+        # parked — see the `chunk_tags` note in SCHEMA_SQL.
+        return cur.lastrowid
+
+    def get_chunks(self, node_id: int) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM chunks WHERE node_id = ? ORDER BY chunk_index",
+            (node_id,)
+        ).fetchall()
+        return [_without_vector(dict(r)) for r in rows]
+
+    def index_into_node(self, filepath: Path, node_id: int) -> int:
+        """Chunk a file, add the chunks to a node, and enrich the node's triggers
+        with the symbols found (the tags each code chunk carries).
+
+        Idempotent per source file: this file's previous chunks are replaced, not
+        appended to. Without that, running `neurag ingest` twice DOUBLED every
+        chunk (three times tripled them) — duplicates that are embedded, ranked,
+        and counted into the tag/link graph. It also makes re-indexing free: a
+        re-run picks up the current chunk ceiling and embedding model, which is
+        the only way an existing vault gets the benefit of a settings change.
+
+        Not a violation of "nothing is ever deleted": the same source's content
+        is being REPLACED by its current version, not forgotten. Chunks whose
+        file is gone from disk are never touched here."""
+        source = str(filepath)
+        # chunk_tags has no FK cascade (pyturso 0.6.1, see delete_node), so the
+        # join rows go first or a re-ingest leaves them pointing at dead ids.
+        self._conn.execute(
+            "DELETE FROM chunk_tags WHERE chunk_id IN "
+            "(SELECT id FROM chunks WHERE node_id = ? AND source = ?)",
+            (node_id, source))
+        self._conn.execute("DELETE FROM chunks WHERE node_id = ? AND source = ?",
+                           (node_id, source))
+        chunks = self._chunk_file(filepath, self._max_chunk_chars)
+        count = 0
+        tag_pool: list[str] = []
+        for c in chunks:
+            self.add_chunk(
+                node_id=node_id,
+                text=c.text,
+                source=c.source,
+                section=c.section,
+                chunk_index=c.chunk_index,
+                tags=getattr(c, "tags", None) or [],
+            )
+            tag_pool += getattr(c, "tags", None) or []
+            count += 1
+        symbols = list(dict.fromkeys(tag_pool))
+        self.add_triggers(node_id, symbols)
+        self.add_tags(node_id, symbols)   # tags drive build_tag_links; triggers drive lookup
+        return count
+
+    def index_directory_into_node(self, root: Path, node_id: int) -> int:
+        total = 0
+        for fp in self._scan_directory(root):
+            total += self.index_into_node(fp, node_id)
+        return total
+
+    # -- node links ----------------------------------------------------------
+
+    def upsert_link(self, source_id: int, target_id: int,
+                    link_type: str, weight: float = 1.0,
+                    evidence: str = "", commit: bool = True,
+                    origin: str = "auto") -> None:
+        """Insert or update a link between two nodes. Self-links are silently ignored.
+
+        `commit=False` lets a bulk builder write thousands of links in one
+        transaction instead of one fsync per row.
+
+        A derived write NEVER overwrites a learned one. The builders re-upsert
+        every pair on each ingest, so without the `WHERE` below a link the user
+        confirmed — or one Hebbian promotion raised — would silently get its
+        weight replaced by the Jaccard number it started from. Deleting only
+        `origin='auto'` in `rebuild_links` is not enough on its own: the
+        rebuild would clobber the survivor on the way back in.
+        """
+        if source_id == target_id:
+            return
+        self._conn.execute("""
+            INSERT INTO node_links (source_id, target_id, link_type, weight,
+                                    evidence, updated_at, origin)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
+            ON CONFLICT(source_id, target_id, link_type) DO UPDATE SET
+                weight = excluded.weight,
+                evidence = excluded.evidence,
+                origin = excluded.origin,
+                updated_at = datetime('now')
+            WHERE excluded.origin != 'auto' OR node_links.origin = 'auto'
+        """, (source_id, target_id, link_type, weight, evidence, origin))
+        if commit:
+            self._conn.commit()
+
+    def get_links(self, node_id: int, link_type: Optional[str] = None) -> list[dict]:
+        """All links for a node (outgoing + incoming), with connected node info."""
+        # Outgoing: node_id is source → "other" node is target
+        sql = """
+            SELECT nl.link_type, nl.weight, nl.evidence, nl.created_at, nl.updated_at,
+                   nl.source_id, nl.target_id,
+                   nl.target_id AS other_id,
+                   t.name AS other_name, t.node_type AS other_type,
+                   'out' AS direction
+            FROM node_links nl
+            JOIN nodes t ON t.id = nl.target_id
+            WHERE nl.source_id = ?
+        """
+        params: list = [node_id]
+        if link_type:
+            sql += " AND nl.link_type = ?"
+            params.append(link_type)
+
+        # Incoming: node_id is target → "other" node is source
+        sql += """
+            UNION
+            SELECT nl.link_type, nl.weight, nl.evidence, nl.created_at, nl.updated_at,
+                   nl.source_id, nl.target_id,
+                   nl.source_id AS other_id,
+                   s.name AS other_name, s.node_type AS other_type,
+                   'in' AS direction
+            FROM node_links nl
+            JOIN nodes s ON s.id = nl.source_id
+            WHERE nl.target_id = ?
+        """
+        params.append(node_id)
+        if link_type:
+            sql += " AND nl.link_type = ?"
+            params.append(link_type)
+
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def get_neighbors(self, node_id: int, depth: int = 1, limit: int = 10) -> list[dict]:
+        """D3 — structured neighborhood: BFS over parent, children and links up
+        to ``depth`` hops. Returns [{name, path, node_type, relation, distance}]
+        sorted by distance (closest first), self excluded, deduped. SQL-only:
+        no embedding involved, so it is cheap enough for every pulse."""
+        start = self.get_node(node_id)
+        if not start:
+            return []
+        seen = {node_id}
+        out: list[dict] = []
+        frontier = [(start, 0)]
+        for dist in range(1, max(1, min(depth, 3)) + 1):
+            nxt: list[tuple[dict, int]] = []
+            for node, _ in frontier:
+                hops: list[tuple[dict, str]] = []
+                if node.get("parent_id"):
+                    parent = self.get_node(node["parent_id"])
+                    if parent:
+                        hops.append((parent, "parent"))
+                hops += [(c, "child") for c in self.get_children(node["id"])]
+                for lk in self.get_links(node["id"]):
+                    other = self.get_node(lk["other_id"])
+                    if other:
+                        hops.append((other, f"link:{lk['link_type']}"))
+                for other, relation in hops:
+                    if other["id"] in seen:
+                        continue
+                    seen.add(other["id"])
+                    out.append({"name": other["name"], "path": other.get("path"),
+                                "node_type": other.get("node_type"),
+                                "relation": relation, "distance": dist})
+                    nxt.append((other, dist))
+                    if len(out) >= limit:
+                        return out
+            frontier = nxt
+            if not frontier:
+                break
+        return out
+
+    def get_link_graph(self) -> list[dict]:
+        """All links with source/target node info (for graph visualization)."""
+        rows = self._conn.execute("""
+            SELECT nl.*,
+                   s.name AS source_name, s.node_type AS source_type,
+                   t.name AS target_name, t.node_type AS target_type
+            FROM node_links nl
+            JOIN nodes s ON s.id = nl.source_id
+            JOIN nodes t ON t.id = nl.target_id
+            ORDER BY nl.weight DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+    def link_count(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM node_links").fetchone()[0]
+
+    # Jaccard floor for a tag_overlap link. From DESIGN-CROSSLINKS.md §2, which
+    # specified it and shipped without it: one shared tag out of forty is not a
+    # relationship, and linking every such pair is how a few hundred nodes turn
+    # into six figures of meaningless edges.
+    MIN_TAG_JACCARD = 0.15
+
+    # IDF suppression, the tag-side twin of MAX_CUE_DOC_RATIO below. A tag on
+    # half the vault pairs almost every node with almost every other while
+    # identifying none of them — a cue that predicts everything predicts
+    # nothing. Skipping its posting list is also what takes the O(n²) sting out
+    # of the pair loop; the tag still counts in the Jaccard denominators, so
+    # this changes which pairs are CONSIDERED, never how similar they are.
+    MAX_TAG_NODE_RATIO = 0.5
+    # Same caveat as MIN_CUE_DOC_FLOOR: a ratio is meaningless on a small vault.
+    MIN_TAG_NODE_FLOOR = 50
+
+    def build_tag_links(self, min_jaccard: "float | None" = None) -> int:
+        """Create tag_overlap links between nodes sharing tags. Returns link count added.
+
+        Reads the `node_tags` substrate, not the legacy JSON column: an index
+        lookup instead of parsing every node's tag array on every rebuild."""
+        floor = self.MIN_TAG_JACCARD if min_jaccard is None else min_jaccard
+        # Single pass: inverted index + per-node tag sets, on tag ids
+        index: dict[int, set[int]] = {}
+        node_tags: dict[int, set[int]] = {}
+        tag_names: dict[int, str] = {}
+        for row in self._conn.execute(
+            "SELECT nt.node_id AS node_id, nt.tag_id AS tag_id, t.name AS name "
+            "FROM node_tags nt JOIN tags t ON t.id = nt.tag_id"
+        ).fetchall():
+            index.setdefault(row["tag_id"], set()).add(row["node_id"])
+            node_tags.setdefault(row["node_id"], set()).add(row["tag_id"])
+            tag_names[row["tag_id"]] = row["name"]
+
+        cap = max(self.MIN_TAG_NODE_FLOOR,
+                  int(len(node_tags) * self.MAX_TAG_NODE_RATIO))
+
+        added = 0
+        seen: set[tuple[int,int]] = set()
+        for tag, node_ids in index.items():
+            if len(node_ids) > cap:
+                continue                    # too common to identify anything
+            ids = sorted(node_ids)
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    pair = (ids[i], ids[j])
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                    tags_a = node_tags[ids[i]]
+                    tags_b = node_tags[ids[j]]
+                    shared = tags_a & tags_b
+                    union = tags_a | tags_b
+                    weight = len(shared) / len(union) if union else 0.0
+                    if weight < floor:
+                        continue
+                    evidence = ",".join(sorted(tag_names[t] for t in shared))
+                    self.upsert_link(ids[i], ids[j], "tag_overlap", weight,
+                                     evidence, commit=False)
+                    added += 1
+        self._conn.commit()
+        return added
+
+    MIN_CROSSREF_MENTIONS = 2   # one passing mention is a coincidence, not a reference
+
+    # A cue occurring in more than this share of the corpus carries no
+    # information about WHICH node is meant. Measured on a real tree: nodes are
+    # named after folders, so `cache`, `ast`, `docs`, `tests`, `hooks` became
+    # cues and matched every chunk containing that ordinary English word —
+    # `cache` linked to six nodes at weight 1.0, `graphify-out -> ast` claimed
+    # "mentioned in 3996 chunks". A cue that predicts everything predicts
+    # nothing; this is IDF suppression with the threshold made explicit.
+    MAX_CUE_DOC_RATIO = 0.10
+    # ...but a ratio is meaningless on a small vault: at 3 chunks, 10% rounds to
+    # 0 and suppresses every real cue. Below this many documents, suppress
+    # nothing — a corpus this size has no "too common" term.
+    MIN_CUE_DOC_FLOOR = 50
+
+    def build_crossref_links(self, min_mentions: "int | None" = None) -> int:
+        """Create cross_ref links where one node's chunks MENTION another node.
+
+        This is the algorithm `DESIGN-CROSSLINKS.md` §3 specified. What shipped
+        instead linked nodes that share a source *file* — and since
+        `index_into_node` files every chunk of a file into exactly ONE node, each
+        source mapped to one node, the pair loop never executed, and the function
+        returned 0 for every auto-ingested vault. A real cross-reference is "A
+        talks about B", which is what this measures.
+        """
+        floor = self.MIN_CROSSREF_MENTIONS if min_mentions is None else min_mentions
+
+        # Trigger index. Single tokens are matched against a tokenised chunk (so
+        # "int" can't match inside "print"); names with separators need substring.
+        word_index: dict[str, set[int]] = {}
+        phrases: list[tuple[str, int]] = []
+        for row in self._conn.execute(
+                "SELECT id, name, triggers FROM nodes WHERE id != 0").fetchall():
+            try:
+                cues = json.loads(row["triggers"] or "[]")
+            except (TypeError, ValueError):
+                cues = []
+            for cue in [*cues, row["name"]]:
+                cue = (cue or "").strip().lower()
+                if len(cue) < 3:
+                    continue
+                if re.fullmatch(r"\w+", cue):
+                    word_index.setdefault(cue, set()).add(row["id"])
+                else:
+                    phrases.append((cue, row["id"]))
+
+        if not word_index and not phrases:
+            return 0
+
+        node_total_chunks: dict[int, int] = {}
+        for row in self._conn.execute(
+                "SELECT node_id, COUNT(*) AS cnt FROM chunks GROUP BY node_id").fetchall():
+            node_total_chunks[row["node_id"]] = row["cnt"]
+
+        # Pass 1 — keep only the cues each chunk actually contains, and count in
+        # how many chunks every cue occurs (document frequency).
+        per_chunk: list[tuple[int, set[str]]] = []
+        doc_freq: dict[str, int] = {}
+        for row in self._conn.execute("SELECT node_id, text FROM chunks").fetchall():
+            text = (row["text"] or "").lower()
+            found = {t for t in re.findall(r"\w+", text) if t in word_index}
+            found |= {p for p, _ in phrases if p in text}
+            per_chunk.append((row["node_id"], found))
+            for cue in found:
+                doc_freq[cue] = doc_freq.get(cue, 0) + 1
+
+        # Pass 2 — drop the uninformative cues, then count real mentions.
+        total_chunks = len(per_chunk) or 1
+        cap = max(self.MIN_CUE_DOC_FLOOR, int(total_chunks * self.MAX_CUE_DOC_RATIO))
+        cue_targets: dict[str, set[int]] = dict(word_index)
+        for phrase, tgt in phrases:
+            cue_targets.setdefault(phrase, set()).add(tgt)
+
+        mentions: dict[tuple[int, int], int] = {}
+        for src, found in per_chunk:
+            hit: set[int] = set()
+            for cue in found:
+                if doc_freq.get(cue, 0) > cap:
+                    continue                    # too common to identify anything
+                hit |= cue_targets.get(cue, set())
+            for tgt in hit:
+                if tgt != src:
+                    mentions[(src, tgt)] = mentions.get((src, tgt), 0) + 1
+
+        added = 0
+        for (src, tgt), count in mentions.items():
+            if count < floor:
+                continue
+            weight = min(1.0, count / max(node_total_chunks.get(src, 1), 1))
+            self.upsert_link(src, tgt, "cross_ref", weight,
+                             f"mentioned in {count} chunk(s)", commit=False)
+            added += 1
+        self._conn.commit()
+        return added
+
+    # -- L1..L4: the activation gradient (DESIGN-EVOLUTION §3) ---------------
+    #
+    # No layer is a grave. Every layer is a parking level and `recall` reaches
+    # all of them; what a lower layer loses is only the right to be scanned by
+    # default. Same mechanism as Neuron's graveyard, different pressure:
+    # Neuron parks aggressively because a live memory that stays hot is a log,
+    # NeuRAG parks reluctantly because a library's job is availability.
+
+    LAYER_ACTIVE, LAYER_DORMANT, LAYER_DEEP = 2, 3, 4
+
+    # `_vector_sql` says which TIER we opened; this says whether that tier's
+    # `vector_distance_cos` actually runs. Kept apart on purpose: `_ensure_turso`
+    # reads `_vector_sql` as "are we on Turso", and flipping that one off here
+    # would send it looking for a pyturso wheel to reinstall.
+    _vector_sql_ok = True
+
+    # Cut points, as constants in the shape of Neuron's RANK_WEIGHTS (§8.1):
+    # they need real corpus data and they WILL move, so they are one dict to
+    # tune rather than numbers buried in a query.
+    PARK_RULES = {
+        "idle_days_dormant": 180,   # not consulted in half a year
+        "idle_days_deep": 540,      # nor in the year after that
+        "max_link_weight": 0.25,    # a well-connected node is never parked
+    }
+
+    # What decays is the ROUTE, not the trace: a link gets weaker and a tag
+    # less salient, so a dormant thing is harder to reach spontaneously —
+    # never impossible, never removed. The floor is the point of the design:
+    # below it a route would be gone rather than faint.
+    DECAY = {
+        "link_half_life_days": 365,
+        "tag_half_life_days": 180,
+        "floor": 0.05,
+    }
+
+    # L1. Same shape as Neuron's `_session_cache` (models.py): TTL in queries
+    # rather than wall-clock, FIFO eviction at the cap, persisted so it
+    # survives the process — a CLI invocation is a whole process life here.
+    SESSION_CACHE_QUERIES = 10
+    SESSION_CACHE_MAX = 8
+    # ...and a wall-clock bound, which Neuron's does not need. Its cache lives
+    # in a running process; this one is persisted, so a vault queried twice six
+    # months apart would still call the first result "warm" — and since parking
+    # never touches the working set, one query would have protected a node from
+    # ever being parked again.
+    SESSION_CACHE_HOURS = 12
+    SALIENCE_BUMP = 0.15
+
+    def _meta_get(self, key: str, default=None):
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def _meta_set(self, key: str, value: str, commit: bool = True) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, str(value)))
+        if commit:
+            self._conn.commit()
+
+    # -- L1: session working set --------------------------------------------
+
+    def session_cache(self) -> dict:
+        """{node_id: {"q": query_index, "t": iso, "score": float}} — the warm
+        set, with entries past either bound already dropped."""
+        try:
+            raw = {int(k): v for k, v in
+                   json.loads(self._meta_get("session_cache", "{}")).items()}
+        except (TypeError, ValueError):
+            return {}
+        q = int(self._meta_get("query_count", "0") or 0)
+        now = datetime.now(timezone.utc)
+        live = {}
+        for nid, e in raw.items():
+            if q - e.get("q", 0) > self.SESSION_CACHE_QUERIES:
+                continue
+            try:
+                age_h = (now - datetime.fromisoformat(e["t"])).total_seconds() / 3600.0
+            except (KeyError, TypeError, ValueError):
+                continue                    # no timestamp: pre-P4 entry, let it go
+            if age_h <= self.SESSION_CACHE_HOURS:
+                live[nid] = e
+        return live
+
+    def cache_add(self, node_ids, score: float = 1.0) -> None:
+        """Mark nodes as warm for this session, then expire and evict.
+
+        Eviction is not loss: the node stays exactly where it is, it just
+        stops being in the working set."""
+        q = int(self._meta_get("query_count", "0") or 0) + 1
+        self._meta_set("query_count", q, commit=False)
+        cache = self.session_cache()                 # expires both ways first
+        now = datetime.now(timezone.utc).isoformat()
+        for nid in node_ids:
+            cache[int(nid)] = {"q": q, "t": now, "score": max(0.0, min(1.0, score))}
+        while len(cache) > self.SESSION_CACHE_MAX:
+            del cache[min(cache, key=lambda k: cache[k]["q"])]      # FIFO
+        self._meta_set("session_cache", json.dumps(cache))
+
+    # -- activity: what parking and decay actually measure -------------------
+
+    def touch_nodes(self, node_ids) -> None:
+        """Record that these nodes just answered something, and reinforce the
+        tags that got there. This is the only writer of `salience`: without it
+        decay would be halving a number nothing ever raises."""
+        ids = sorted({int(n) for n in node_ids})
+        if not ids:
+            return
+        marks = ",".join("?" * len(ids))
+        self._conn.execute(
+            f"UPDATE nodes SET last_used = datetime('now') WHERE id IN ({marks})", ids)
+        self._conn.execute(
+            f"""UPDATE tags SET last_used = datetime('now'),
+                    salience = MIN(1.0, salience + ?)
+                 WHERE id IN (SELECT tag_id FROM node_tags
+                              WHERE node_id IN ({marks}))""", [self.SALIENCE_BUMP, *ids])
+        self._conn.commit()
+
+    # -- decay ---------------------------------------------------------------
+
+    def decay(self) -> dict:
+        """Weaken every route by the time elapsed since the last decay.
+
+        Elapsed time is read from `meta.decayed_at`, not from each row's own
+        timestamp, so running this twice in a day is not the same as running
+        it twice in a year — the second call finds ~0 days elapsed and changes
+        nothing. That is what makes it safe to call from any maintenance path.
+
+        Reinforcement is the other half: `touch_nodes` raises salience on what
+        gets used, so the net effect is the usual "decay everything, keep what
+        is used" and not a slow slide to the floor."""
+        now = datetime.now(timezone.utc)
+        last = self._meta_get("decayed_at")
+        try:
+            days = (now - datetime.fromisoformat(last)).total_seconds() / 86400.0
+        except (TypeError, ValueError):
+            days = 0.0                      # first run: start the clock, decay nothing
+        floor = self.DECAY["floor"]
+        out = {"days": round(days, 3), "links": 0, "tags": 0}
+        if days > 0:
+            lf = 0.5 ** (days / self.DECAY["link_half_life_days"])
+            tf = 0.5 ** (days / self.DECAY["tag_half_life_days"])
+            for row in self._conn.execute(
+                    "SELECT source_id, target_id, link_type, weight FROM node_links"
+            ).fetchall():
+                new = max(floor, row["weight"] * lf)
+                if new != row["weight"]:
+                    self._conn.execute(
+                        "UPDATE node_links SET weight = ? WHERE source_id = ? "
+                        "AND target_id = ? AND link_type = ?",
+                        (new, row["source_id"], row["target_id"], row["link_type"]))
+                    out["links"] += 1
+            for row in self._conn.execute(
+                    "SELECT id, salience FROM tags WHERE salience > 0").fetchall():
+                new = max(0.0, row["salience"] * tf)
+                if new != row["salience"]:
+                    self._conn.execute("UPDATE tags SET salience = ? WHERE id = ?",
+                                       (new, row["id"]))
+                    out["tags"] += 1
+        self._meta_set("decayed_at", now.isoformat())
+        return out
+
+    # -- L3/L4: parking ------------------------------------------------------
+
+    def park_candidates(self) -> list[dict]:
+        """Nodes the rules would move down a layer, with the reason.
+
+        Idle time is `now - COALESCE(last_used, created_at)`. The fallback is
+        not "content age" smuggled back in: a node that has never answered
+        anything since it was ingested has no activity signal, and how long it
+        has sat there unconsulted IS its inactivity. What is never consulted
+        is the age of the DOCUMENT — a decade-old spec that answers a query
+        every week stays in L2 forever."""
+        warm = set(self.session_cache())
+        rules = self.PARK_RULES
+        best_link: dict[int, float] = {}
+        for row in self._conn.execute(
+                "SELECT source_id, target_id, weight FROM node_links").fetchall():
+            for nid in (row["source_id"], row["target_id"]):
+                best_link[nid] = max(best_link.get(nid, 0.0), row["weight"] or 0.0)
+
+        out = []
+        for row in self._conn.execute(
+                "SELECT id, name, path, layer, "
+                "       CAST(julianday('now') - julianday(COALESCE(last_used, created_at)) "
+                "            AS REAL) AS idle_days "
+                "FROM nodes WHERE id != 0 ORDER BY idle_days DESC").fetchall():
+            layer = row["layer"] or self.LAYER_ACTIVE
+            if layer >= self.LAYER_DEEP:
+                continue
+            idle = row["idle_days"] or 0.0
+            target = (self.LAYER_DEEP if idle >= rules["idle_days_deep"]
+                      else self.LAYER_DORMANT if idle >= rules["idle_days_dormant"]
+                      else None)
+            if target is None or target <= layer:
+                continue
+            if row["id"] in warm:
+                continue                     # in the working set: not a candidate
+            link = best_link.get(row["id"], 0.0)
+            if link > rules["max_link_weight"]:
+                continue                     # well connected: reachable, keep it hot
+            out.append({"id": row["id"], "name": row["name"], "path": row["path"],
+                        "from_layer": layer, "to_layer": target,
+                        "idle_days": round(idle, 1), "max_link_weight": round(link, 3)})
+        return out
+
+    def park(self, apply: bool = False) -> dict:
+        """Move idle, weakly-linked nodes down a layer. DRY RUN by default.
+
+        Parking is off unless someone asks for it (§8.1): the cut points have
+        never been measured on a real corpus, and the failure mode of guessing
+        them is a library that quietly stops offering half of itself."""
+        cands = self.park_candidates()
+        if apply:
+            for c in cands:
+                self._conn.execute("UPDATE nodes SET layer = ? WHERE id = ?",
+                                   (c["to_layer"], c["id"]))
+            self._conn.commit()
+        return {"applied": apply, "count": len(cands), "candidates": cands}
+
+    def unpark(self, node_id: int) -> bool:
+        """Back to L2 by hand. `recall` already reaches a parked node; this is
+        for when it should stop being parked at all."""
+        cur = self._conn.execute(
+            "UPDATE nodes SET layer = ?, last_used = datetime('now') WHERE id = ?",
+            (self.LAYER_ACTIVE, node_id))
+        self._conn.commit()
+        return bool(getattr(cur, "rowcount", 0))
+
+    def layer_counts(self) -> dict:
+        rows = self._conn.execute(
+            "SELECT COALESCE(layer, 2) AS l, COUNT(*) AS n FROM nodes "
+            "WHERE id != 0 GROUP BY l").fetchall()
+        return {f"L{r['l']}": r["n"] for r in rows}
+
+    # -- Hebbian reinforcement (DESIGN-EVOLUTION §5.1, Neuron ADR-003 E2.1) ---
+    #
+    # Neurons that fire together wire together — but CONFIRMATION is the signal,
+    # not co-retrieval. Retrieval is cheap and often wrong: reinforcing on every
+    # co-return would teach the graph whatever the ranker already believes, which
+    # is how a wrong association becomes a strong one.
+
+    HEBBIAN_COOLDOWN = 2            # queries between two counts on the same link
+    HEBBIAN_UPGRADE_MEDIUM = 3      # co-activations promoting tangential -> medium
+    HEBBIAN_UPGRADE_STRONG = 8      # ...and medium -> strong
+    # Neuron's weights are labels ('tangential'|'medium'|'strong'); NeuRAG's are
+    # floats, and a Jaccard overlap can already be 1.0. So a threshold maps to a
+    # FLOOR the weight is raised to, never a value it is set to — otherwise
+    # confirming a strong link would demote it. Promotion stays monotone, as in
+    # Neuron.
+    HEBBIAN_FLOOR = {"tangential": 0.30, "medium": 0.60, "strong": 1.00}
+
+    @classmethod
+    def _hebbian_floor(cls, count: int) -> float:
+        if count >= cls.HEBBIAN_UPGRADE_STRONG:
+            return cls.HEBBIAN_FLOOR["strong"]
+        if count >= cls.HEBBIAN_UPGRADE_MEDIUM:
+            return cls.HEBBIAN_FLOOR["medium"]
+        return cls.HEBBIAN_FLOOR["tangential"]
+
+    def confirm(self, node_ids) -> list[dict]:
+        """Mark these nodes as having been useful TOGETHER, and let the links
+        between them learn from it.
+
+        Only links that already exist are reinforced — creating them stays with
+        the auto-builders, exactly as in Neuron. A reinforced link stops being
+        `origin='auto'`: what the graph learned has to outlive the next ingest,
+        and `rebuild_links` only clears derived links.
+
+        Returns the links whose weight actually moved.
+        """
+        ids = sorted({int(n) for n in node_ids})
+        if len(ids) < 2:
+            return []
+        q = int(self._meta_get("query_count", "0") or 0)
+        marks = ",".join("?" * len(ids))
+        rows = self._conn.execute(
+            f"""SELECT source_id, target_id, link_type, weight, origin,
+                       co_activation_count, last_coactivation
+                  FROM node_links
+                 WHERE source_id IN ({marks}) AND target_id IN ({marks})""",
+            [*ids, *ids]).fetchall()
+
+        upgraded: list[dict] = []
+        for r in rows:
+            # Cooldown on the query clock: two confirms with no query between
+            # them are the same event seen twice, not two pieces of evidence.
+            # A link never reinforced has no cooldown to respect — and it cannot
+            # be recognised by `last_coactivation`, whose DEFAULT 0 is
+            # indistinguishable from "counted at query 0". The count is the
+            # unambiguous "never": without this the FIRST confirm on any fresh
+            # vault was silently swallowed.
+            counted_before = (r["co_activation_count"] or 0) > 0
+            if counted_before and q - (r["last_coactivation"] or 0) < self.HEBBIAN_COOLDOWN:
+                continue
+            count = (r["co_activation_count"] or 0) + 1
+            floor = self._hebbian_floor(count)
+            weight = max(r["weight"] or 0.0, floor)
+            origin = "hebbian" if (r["origin"] or "auto") == "auto" else r["origin"]
+            self._conn.execute(
+                """UPDATE node_links
+                      SET co_activation_count = ?, last_coactivation = ?,
+                          weight = ?, origin = ?, updated_at = datetime('now')
+                    WHERE source_id = ? AND target_id = ? AND link_type = ?""",
+                (count, q, weight, origin,
+                 r["source_id"], r["target_id"], r["link_type"]))
+            if weight > (r["weight"] or 0.0):
+                upgraded.append({"source_id": r["source_id"], "target_id": r["target_id"],
+                                 "link_type": r["link_type"], "weight": weight,
+                                 "co_activation_count": count})
+        self._conn.commit()
+        # Confirmation is stronger evidence of use than a retrieval was, so the
+        # activity clocks parking and decay read move too.
+        self.touch_nodes(ids)
+        return upgraded
+
+    # -- spreading activation (§5.1, Neuron E2.3) ----------------------------
+
+    def spreading_activation(self, seeds, k: int = 2, decay: float = 0.5,
+                             min_activation: float = 0.01,
+                             deep: bool = False) -> list[tuple[int, float]]:
+        """Spread activation from `seeds` along links, k hops out.
+
+        Each hop contributes `activation x weight x salience_factor x decay`:
+        the weight is the link strength Hebbian promotion raises, the salience
+        factor lets a well-used node act as a hub, and `decay` with a small `k`
+        keeps it from flooding the whole graph. Returns the reached NON-seed
+        nodes ranked by accumulated activation — an associative route to
+        something no direct match would have found.
+
+        Pure graph walk: no embedding, no query text. Parked nodes stay out
+        unless `deep`, so an expansion cannot quietly undo P4's parking.
+        """
+        seed_set = {int(s) for s in seeds}
+        live = {r["id"] for r in self._conn.execute(
+            "SELECT id FROM nodes WHERE id != 0" + (
+                "" if deep else f" AND COALESCE(layer, {self.LAYER_ACTIVE}) "
+                                f"<= {self.LAYER_ACTIVE}")).fetchall()}
+        seed_set &= live
+        if not seed_set:
+            return []
+
+        adj: dict[int, list[tuple[int, float]]] = {}
+        for r in self._conn.execute(
+                "SELECT source_id, target_id, weight FROM node_links").fetchall():
+            s, t, w = r["source_id"], r["target_id"], r["weight"] or 0.0
+            if w <= 0 or s not in live or t not in live:
+                continue
+            adj.setdefault(s, []).append((t, w))
+            adj.setdefault(t, []).append((s, w))
+
+        # Salience lives on TAGS in NeuRAG, not on nodes (§4 put it there on
+        # purpose), so a node's hub factor is the mean salience of its tags.
+        sal: dict[int, float] = {r["node_id"]: r["s"] for r in self._conn.execute(
+            "SELECT nt.node_id AS node_id, AVG(t.salience) AS s "
+            "FROM node_tags nt JOIN tags t ON t.id = nt.tag_id "
+            "GROUP BY nt.node_id").fetchall()}
+        max_sal = max(sal.values(), default=0.0) or 1.0
+
+        activation = {s: 1.0 for s in seed_set}
+        frontier = dict(activation)
+        for _hop in range(max(1, k)):
+            nxt: dict[int, float] = {}
+            for src, act in frontier.items():
+                for other, weight in adj.get(src, ()):
+                    contrib = act * weight * (1.0 + sal.get(other, 0.0) / max_sal) * decay
+                    if contrib < min_activation:
+                        continue
+                    activation[other] = activation.get(other, 0.0) + contrib
+                    nxt[other] = nxt.get(other, 0.0) + contrib
+            frontier = nxt
+            if not frontier:
+                break
+        out = [(nid, round(a, 4)) for nid, a in activation.items() if nid not in seed_set]
+        out.sort(key=lambda x: -x[1])
+        return out
+
+    def related_nodes(self, node_id: int, k: int = 2, limit: int = 10,
+                      deep: bool = False) -> list[dict]:
+        """`spreading_activation` with the node info attached — "what else does
+        this connect to", ranked by how strongly rather than by hop count.
+
+        Deliberately NOT folded into `search()` ranking: that is a measurable
+        change to retrieval and it belongs behind the benchmark query set, not
+        behind a plausible argument."""
+        out = []
+        for nid, act in self.spreading_activation([node_id], k=k, deep=deep)[:limit]:
+            node = self.get_node(nid)
+            if node:
+                out.append({"id": nid, "name": node["name"], "path": node["path"],
+                            "activation": act,
+                            "layer": node.get("layer") or self.LAYER_ACTIVE})
+        return out
+
+    def rebuild_links(self) -> dict:
+        """Rebuild the DERIVED links from tags + cross-refs.
+
+        Only `origin='auto'` is cleared. This runs at the end of every ingest,
+        and it used to open with a bare `DELETE FROM node_links` — so the graph
+        could not learn anything and a curated link had a lifetime of exactly
+        one re-ingest (§5.1)."""
+        kept = self._conn.execute(
+            "SELECT COUNT(*) FROM node_links WHERE origin != 'auto'").fetchone()[0]
+        self._conn.execute("DELETE FROM node_links WHERE origin = 'auto'")
+        self._conn.commit()
+        tag_count = self.build_tag_links()
+        xref_count = self.build_crossref_links()
+        return {"tag_overlap": tag_count, "cross_ref": xref_count,
+                "kept": kept, "total": tag_count + xref_count}
+
+    def search_with_links(self, query: str, top_k: int = 5) -> list[dict]:
+        """Search, then enrich each result with links to other result nodes."""
+        results = self.search(query, top_n=top_k)
+        if len(results) < 2:
+            return results
+
+        result_node_ids = {r["node_id"] for r in results}
+        # Collect all links between result nodes
+        inter_links: list[dict] = []
+        for r in results:
+            for link in self.get_links(r["node_id"]):
+                if link["other_id"] in result_node_ids and link["other_id"] != r["node_id"]:
+                    inter_links.append({
+                        "source_id": r["node_id"],
+                        "target_id": link["other_id"],
+                        "target_name": link["other_name"],
+                        "link_type": link["link_type"],
+                        "weight": link["weight"],
+                        "evidence": link["evidence"],
+                    })
+
+        for r in results:
+            r["links"] = [
+                l for l in inter_links
+                if l["source_id"] == r["node_id"] or l["target_id"] == r["node_id"]
+            ]
+        return results
+
+    # -- search: semantic (embedder) or lexical (TF-IDF) --------------------
+
+    # -- embedding provenance: which model built the vectors in this vault ----
+
+    @staticmethod
+    def _embed_input(text: str, section: "str | None") -> str:
+        """What actually gets embedded. One definition so `add_chunk` and
+        `reindex` cannot drift into embedding different strings for the same
+        chunk — which would silently split the vault across two vector spaces."""
+        return f"{section}\n\n{text}" if section else text
+
+    def meta_get(self, key: str) -> "str | None":
+        try:
+            row = self._conn.execute("SELECT value FROM meta WHERE key = ?",
+                                     (key,)).fetchone()
+        except Exception:  # noqa: BLE001 — pre-meta vault, or corrupt
+            return None
+        return row[0] if row else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+        self._conn.commit()
+
+    def active_embed_signature(self) -> "tuple[str, int]":
+        e = self._embedder
+        return (getattr(e, "model_name", "") or e.name, int(getattr(e, "dim", 0) or 0))
+
+    def stored_embed_signature(self) -> "tuple[str, int] | None":
+        model = self.meta_get("embed_model")
+        if model is None:
+            return None
+        try:
+            return (model, int(self.meta_get("embed_dim") or 0))
+        except (TypeError, ValueError):
+            return (model, 0)
+
+    def _record_embed_signature(self, force: bool = False) -> None:
+        """Claim the vault for the active model — only if unclaimed, so an
+        existing mismatch stays visible instead of being overwritten by the
+        first new chunk."""
+        if force or self.stored_embed_signature() is None:
+            model, dim = self.active_embed_signature()
+            self.meta_set("embed_model", model)
+            self.meta_set("embed_dim", dim)
+
+    def embed_mismatch(self) -> "dict | None":
+        """Non-None when the vault's vectors came from a different model.
+
+        Vectors from two models are not comparable — cosine between them is
+        noise, not a weak match — so this has to be detected at OPEN, loudly,
+        rather than quietly producing bad rankings forever. It is never fatal:
+        the vault still opens and still answers (I5)."""
+        stored = self.stored_embed_signature()
+        if stored is None:
+            return None
+        if not getattr(self._embedder, "available", False):
+            return None                      # lexical mode ignores vectors anyway
+        active = self.active_embed_signature()
+        if stored == active:
+            return None
+        try:
+            embedded = self._conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").fetchone()[0]
+        except Exception:  # noqa: BLE001
+            embedded = 0
+        if not embedded:
+            return None                      # nothing to be wrong about
+        return {"stored_model": stored[0], "stored_dim": stored[1],
+                "active_model": active[0], "active_dim": active[1],
+                "embedded_chunks": embedded,
+                "hint": "Vectors in this vault were built with a different model, "
+                        "so semantic search is unreliable. Run `neurag reindex`."}
+
+    def reindex(self, say=None) -> dict:
+        """Re-embed every chunk with the ACTIVE model, in place.
+
+        Only the vectors are rebuilt — chunk text, sections, nodes and links are
+        untouched, and the source files are not needed. That is the right scope
+        for a MODEL change. A change to the chunk ceiling is a different
+        operation: re-run `neurag ingest`, which is idempotent per source file
+        and re-chunks from disk.
+        """
+        say = say or (lambda s: None)
+        model, dim = self.active_embed_signature()
+        if not getattr(self._embedder, "available", False):
+            return {"ok": False, "reason": "lexical mode — no embedder to reindex with",
+                    "model": model, "chunks": 0, "embedded": 0}
+
+        rows = self._conn.execute(
+            "SELECT id, text, section FROM chunks ORDER BY id").fetchall()
+        # ASCII only: a Windows console on the legacy cp1252 codepage raises
+        # UnicodeEncodeError on a bare "->" arrow and takes the whole reindex
+        # down with it. Same rule the .cmd launchers already follow.
+        say(f"[reindex] {len(rows)} chunk(s) -> {model} (dim {dim})")
+        done = failed = 0
+        for i, r in enumerate(rows, 1):
+            try:
+                vec = self._get_embedding(self._embed_input(r["text"], r["section"]))
+                self._conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?",
+                                   (self._pack_vec(vec) if vec else None, r["id"]))
+                done += 1
+            except Exception as exc:  # noqa: BLE001 — one bad chunk must not abort
+                failed += 1
+                say(f"  [!] chunk {r['id']}: {exc}")
+            if i % 200 == 0:
+                self._conn.commit()
+                say(f"  {i}/{len(rows)}")
+        self._conn.commit()
+        self._record_embed_signature(force=True)
+        say(f"[ok] re-embedded {done}, failed {failed}")
+        return {"ok": failed == 0, "model": model, "dim": dim,
+                "chunks": len(rows), "embedded": done, "failed": failed}
+
+    def _get_embedding(self, text: str):
+        """Embed a DOCUMENT. None when lexical-only (NullEmbedder)."""
+        return self._embedder.embed(text)
+
+    def _get_query_embedding(self, text: str):
+        """Embed a QUERY — e5 needs `query: ` where documents need `passage: `."""
+        fn = getattr(self._embedder, "embed_query", None)
+        return fn(text) if fn else self._embedder.embed(text)
+
+    @staticmethod
+    def _pack_vec(v: list[float]) -> bytes:
+        return struct.pack(f"{len(v)}f", *v)
+
+    @staticmethod
+    def _unpack_vec(b: bytes) -> list[float]:
+        return list(struct.unpack(f"{len(b) // 4}f", b))
+
+    def _cosine_sim(self, a: list[float], b: list[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(x * x for x in b) ** 0.5
+        if not na or not nb:
+            return 0.0
+        return dot / (na * nb)
+
+    # Reciprocal Rank Fusion constant. 60 is the value from the original RRF
+    # paper and is not sensitive — it only damps the head of each ranking.
+    RRF_K = 60
+    MMR_LAMBDA = 0.7        # 1.0 = pure relevance, 0.0 = pure diversity
+
+    def search(self, query: str, top_n: int = 5, node_id: "int | None" = None,
+               diversify: bool = True, deep: bool = False,
+               touch: bool = True) -> list[dict]:
+        """Rank chunks for a free-text query, best first.
+
+        Hybrid by default. It used to be either/or — vector if embeddings
+        existed, lexical ONLY as a fallback when they did not — which meant the
+        lexical ranker was dead code on every real install. That is backwards
+        for a corpus of code and technical docs: dense vectors are weakest
+        exactly where precision matters most (identifiers, flags, error
+        strings — `vector_distance_cos`, `WinError 5`, `--client`), and lexical
+        is blind to paraphrase and to cross-language matches, which an IT+EN
+        vault needs constantly. Both retrievers already existed here; they had
+        simply never run together.
+
+        `node_id` scopes the search to a subtree — the hierarchy finally
+        contributing to retrieval rather than only to browsing.
+
+        Every result carries `score` and `score_from` (`cosine` | `bm25` |
+        `rrf` | `cross-encoder`) — the number and the scale of the stage that
+        ranked it. Diversification reorders without rescoring, so with
+        `diversify=True` the order is deliberately not the score order.
+
+        `deep` includes parked (L3/L4) nodes — see `recall`, which is this with
+        the intent named. Answering marks the nodes used, which is what parking
+        and decay measure; `touch=False` is for callers that are inspecting the
+        vault rather than consulting it, so a diagnostic cannot keep a node
+        warm just by looking at it.
+
+        """
+        # A cross-encoder rerank stage lived here, opt-in and off by default.
+        # Measured on bench/ 2026-07-31 and removed: recall@5 unchanged (0.967),
+        # the CONCEPT half of MRR got WORSE (0.780 -> 0.741), and the median
+        # query went from 397ms to 6815ms — 17x, +6.4s each. Its six wins were
+        # all identifier queries moving rank 2 to rank 1, inside a top-5 the
+        # model reads whole. Paying six seconds to reorder what was already
+        # visible, while making paraphrase worse, is the opposite of the trade
+        # it promised. Full numbers in the CHANGELOG.
+        results = self._retrieve(query, max(top_n * 4, 20), node_id=node_id, deep=deep)
+        if diversify and len(results) > top_n:
+            results = self._mmr(query, results, top_n)
+        final = [_without_vector(r) for r in results[:top_n]]
+        # A borrowed vault reads and refuses writes (`_ReadOnlyConnection`), and
+        # reinforcement is a side effect of answering, not part of it: the rows
+        # are already ranked one line up. Without this early-out the write raised
+        # `VaultUnavailable`, `call_tool` turned it into the answer, and a search
+        # that had SUCCEEDED came back as an error message with its results
+        # thrown away. Same shape as `_init_schema`, and the same bug it fixed:
+        # a healthy vault made unusable by a write nobody needed. Writes still
+        # have their route (`_run_via_gm`); salience simply stops being recorded
+        # on the borrowed tier, which `status()` already reports via `engine`.
+        if touch and final and not self._read_only:
+            hit_nodes = {r["node_id"] for r in final}
+            self.touch_nodes(hit_nodes)
+            self.cache_add(hit_nodes)
+        return final
+
+    def recall(self, query: str, top_n: int = 5) -> list[dict]:
+        """Search every layer, parked ones included.
+
+        The guarantee behind I5: whatever was parked comes back through here,
+        byte-identical, because parking never touched the content — only the
+        node's right to be scanned by default. This is `search(deep=True)` with
+        the intent in the name, so a caller does not have to know that L3 and
+        L4 exist to reach what is in them."""
+        return self.search(query, top_n=top_n, deep=True)
+
+    def _scope_ids(self, node_id: "int | None") -> "list[int] | None":
+        """The node and its whole subtree, or None for "the entire vault"."""
+        if node_id is None:
+            return None
+        ids = [node_id] + [d["id"] for d in self.get_descendants(node_id)]
+        return ids or [node_id]
+
+    def _mmr(self, query: str, rows: list[dict], top_n: int) -> list[dict]:
+        """Maximal Marginal Relevance — trade a little relevance for coverage.
+
+        Without it the top-n is routinely five near-identical chunks from one
+        file, which wastes the model's context on one restated point. Same
+        lambda as Neuron's ADR-008 §5.6, so the two behave alike.
+
+        Reorders only — it never rescores, so `score` keeps meaning "how the
+        ranking stage rated this row", not "why it sits here". Overwriting it
+        with the MMR objective would be worse: that number is relative to the
+        rows already chosen and says nothing on its own."""
+        vecs, pool = [], []
+        for r in rows:
+            blob = r.get("embedding")
+            if blob:
+                vecs.append(self._unpack_vec(blob))
+                pool.append(r)
+        if len(pool) <= top_n or not vecs:
+            return rows
+        chosen: list[int] = [0]                      # rows are already ranked
+        while len(chosen) < top_n and len(chosen) < len(pool):
+            best, best_score = None, None
+            for i in range(len(pool)):
+                if i in chosen:
+                    continue
+                relevance = 1.0 - (i / len(pool))    # rank-based, cheap
+                redundancy = max(self._cosine_sim(vecs[i], vecs[j]) for j in chosen)
+                score = self.MMR_LAMBDA * relevance - (1 - self.MMR_LAMBDA) * redundancy
+                if best_score is None or score > best_score:
+                    best, best_score = i, score
+            if best is None:
+                break
+            chosen.append(best)
+        picked = [pool[i] for i in chosen]
+        # Anything without a vector keeps its original order behind the picks.
+        return picked + [r for r in rows if r not in picked]
+
+    def _layer_clause(self, deep: bool) -> str:
+        """Keep parked nodes out of the default candidate scan (§3).
+
+        A subquery rather than an id list: the parked set can be most of a
+        mature vault, and an `IN (?,?,...)` of that size is a different kind of
+        problem. `deep` drops the clause entirely — that is what makes L3/L4 a
+        parking level and not a grave."""
+        return "" if deep else (
+            f" AND node_id IN (SELECT id FROM nodes "
+            f"WHERE COALESCE(layer, {self.LAYER_ACTIVE}) <= {self.LAYER_ACTIVE})")
+
+    def _vector_candidates(self, qv, top_n: int,
+                           scope: "list[int] | None",
+                           deep: bool = False) -> list[dict]:
+        """Vector ranking. Turso does it in SQL (`vector_distance_cos`), which is
+        why pyturso is the default tier; sqlite3 falls back to Python cosine."""
+        if not qv:
+            return []
+        where = "embedding IS NOT NULL" + self._layer_clause(deep)
+        params: list = [self._pack_vec(qv)]
+        if scope:
+            where += f" AND node_id IN ({','.join('?' * len(scope))})"
+        if getattr(self, "_vector_sql", False) and self._vector_sql_ok:
+            try:
+                sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, "
+                       "1.0 - vector_distance_cos(embedding, ?) AS score "
+                       f"FROM chunks WHERE {where} ORDER BY score DESC LIMIT ?")
+                rows = self._conn.execute(
+                    sql, (*params, *(scope or []), top_n)).fetchall()
+                if rows:
+                    return [_scored(d, d["score"], "cosine")
+                            for d in (dict(r) for r in rows)]
+            except Exception as e:  # noqa: BLE001 — qualunque errore → path Python
+                if "no such function" in str(e).lower():
+                    # Permanente per questo processo, non transitorio (lock,
+                    # handle): smettere di ritentarla è l'unica cosa sensata, e
+                    # il latch fa uscire l'avviso una volta sola invece che a
+                    # ogni ricerca. Gli altri errori restano muti come prima.
+                    self._vector_sql_ok = False
+                    import sys as _sys
+                    print(f"neurag: engine senza vector_distance_cos ({e}) — il "
+                          "ranking vettoriale usa il cosine Python per questo "
+                          "processo", file=_sys.stderr)
+        # ponytail: O(N) blob scan + Python cosine. Only the sqlite3 tier lands
+        # here; on Turso the SQL path above is used. Fine to ~10k chunks.
+        sql = f"SELECT * FROM chunks WHERE {where.replace(' AND node_id', ' AND node_id')}"
+        rows = [dict(r) for r in self._conn.execute(sql, tuple(scope or [])).fetchall()]
+        scored = [(self._cosine_sim(qv, self._unpack_vec(r["embedding"])), r) for r in rows]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [_scored(r, sim, "cosine") for sim, r in scored[:top_n]]
+
+    def _lexical_candidates(self, query: str, top_n: int,
+                            scope: "list[int] | None",
+                            deep: bool = False) -> list[dict]:
+        sql = "SELECT * FROM chunks WHERE 1=1" + self._layer_clause(deep)
+        params: tuple = ()
+        if scope:
+            sql += f" AND node_id IN ({','.join('?' * len(scope))})"
+            params = tuple(scope)
+        rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        return self._rank_lexical(query, rows, top_n) if rows else []
+
+    def _retrieve(self, query: str, top_n: int = 5,
+                  node_id: "int | None" = None, deep: bool = False) -> list[dict]:
+        """First-stage retrieval: vector AND lexical, fused with RRF.
+
+        Reciprocal Rank Fusion needs no score calibration — it combines the two
+        RANKINGS, so a cosine in [0,1] and an unbounded BM25 score can be merged
+        without normalising either. That is what makes running both cheap enough
+        to always do.
+
+        A third leg — the link graph voting via spreading activation — was built
+        here, measured, and REMOVED (2026-07-30): recall@5 0.967 -> 0.867 and
+        MRR@10 0.823 -> 0.606, with 13 of 15 moved queries moving down. The
+        numbers and the two reasons (no confirmed links yet, and a node
+        distribution where the godnode holds 70% of chunks) are in the CHANGELOG.
+        It is gone rather than left switched off because an unused branch on the
+        hot retrieval path is a maintenance cost the measurement does not
+        justify. `related` / `knowledge_related` still expose activation where a
+        user asks for it directly, which is the part that works.
+        """
+        scope = self._scope_ids(node_id)
+        # Asking for a subtree by name IS the explicit request §3 lists next to
+        # `deep` and `recall`: someone who names a node already knows it exists.
+        deep = deep or scope is not None
+        qv = self._get_query_embedding(query)
+        vector = self._vector_candidates(qv, top_n, scope, deep)
+        lexical = self._lexical_candidates(query, top_n, scope, deep)
+
+        # ponytail: the single-leg paths return unfused, so they skip the graph
+        # vote — their rows carry a raw cosine/BM25 score and folding a ranking
+        # in would change the scale without a fusion to change it to. Only a
+        # vault with `embed_model none` lands here (fastembed is a hard
+        # dependency since 1.2.2). Give them the vote by fusing every leg that
+        # exists, once something needs it.
+        if not vector:
+            return lexical[:top_n]
+        if not lexical:
+            return vector[:top_n]
+
+        fused: dict[int, float] = {}
+        rows_by_id: dict[int, dict] = {}
+        for ranking in (vector, lexical):
+            for rank, row in enumerate(ranking):
+                cid = row["id"]
+                rows_by_id.setdefault(cid, row)
+                fused[cid] = fused.get(cid, 0.0) + 1.0 / (self.RRF_K + rank + 1)
+        order = sorted(fused, key=lambda c: fused[c], reverse=True)
+        # The fused score REPLACES the leg's own: a row that surfaced from the
+        # vector leg used to keep its cosine while a BM25-only neighbour had no
+        # score at all, so the caller saw a ranking it could not read. Still
+        # `rrf` with the graph folded in — it is the same scale, three rankings
+        # instead of two.
+        return [_scored(rows_by_id[c], fused[c], "rrf") for c in order[:top_n]]
+
+
+    # BM25 constants. k1 damps term-frequency saturation, b controls how much
+    # document length is penalised. 1.5/0.75 are the standard defaults.
+    BM25_K1 = 1.5
+    BM25_B = 0.75
+
+    @classmethod
+    def _rank_lexical(cls, query: str, rows: list[dict], top_n: int) -> list[dict]:
+        """BM25. Was TF-IDF WITHOUT length normalisation (`count * idf`, summed),
+        so a long chunk beat a precise short one on raw term count alone — and
+        chunk lengths were wildly unequal until the size ceiling landed. BM25 is
+        the same shape plus the two constants that fix exactly that."""
+        def toks(s: str) -> list[str]:
+            return [t for t in re.findall(r"\w+", s.lower()) if len(t) > 1]
+
+        q = set(toks(query))
+        if not q:
+            return [_scored(r, 0.0, "bm25") for r in rows[:top_n]]
+        doc_toks = [toks(r["text"]) for r in rows]
+        n = len(rows)
+        avgdl = (sum(len(dt) for dt in doc_toks) / n) if n else 0.0
+        df = {t: sum(1 for dt in doc_toks if t in dt) for t in q}
+        # BM25 probabilistic idf, floored at 0 so a term in >half the corpus
+        # cannot subtract score.
+        idf = {t: max(0.0, math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))) for t in q}
+
+        scored = []
+        for r, dt in zip(rows, doc_toks):
+            dl = len(dt) or 1
+            score = 0.0
+            for t in q:
+                f = dt.count(t)
+                if not f:
+                    continue
+                denom = f + cls.BM25_K1 * (1 - cls.BM25_B + cls.BM25_B * dl / (avgdl or dl))
+                score += idf[t] * (f * (cls.BM25_K1 + 1)) / denom
+            if score > 0:
+                scored.append((score, r))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return ([_scored(r, s, "bm25") for s, r in scored[:top_n]]
+                or [_scored(r, 0.0, "bm25") for r in rows[:top_n]])
+
+    # -- status -------------------------------------------------------------
+
+    def status(self) -> dict:
+        if getattr(self, "_corrupt", False):
+            return {
+                "engine": getattr(self, "_engine_name", "SQLite"),
+                "embedder": getattr(getattr(self, "_embedder", None), "name", "?"),
+                "db_path": str(self._db_path),
+                "corrupt": True,
+                "error": self._corrupt_err,
+                "nodes": 0, "chunks": 0, "embedded": 0, "links": 0, "tags": 0,
+                "embedding_dim": 384,
+                # Same classifier the guard uses, so the diagnostic and the
+                # error never disagree about whether the file is damaged or
+                # merely busy — only one of those is fixed by deleting it.
+                "hint": open_failure_message(self._corrupt_err),
+            }
+        node_count = self._conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        chunk_count = self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        embedded = self._conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL"
+        ).fetchone()[0]
+        tag_count = self._conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0]
+        db_str = str(self._db_path)
+        engine = getattr(self, "_engine_name", "Turso (local)")
+        out = {
+            "engine": engine,
+            "turso_errors": getattr(self, "_turso_errors", []),
+            "embedder": self._embedder.name,
+            "db_path": str(self._db_path),
+            "nodes": node_count,
+            "chunks": chunk_count,
+            "embedded": embedded,
+            "links": self.link_count(),
+            "tags": tag_count,
+            "layers": self.layer_counts(),
+            "session_cache": len(self.session_cache()),
+            # Was hardcoded 384 — wrong the moment the installer let anyone pick
+            # mpnet (768) or e5-large (1024), and this is the number the GUI and
+            # `neurag status` show.
+            "embedding_dim": getattr(self._embedder, "dim", 384),
+            "max_chunk_chars": getattr(self, "_max_chunk_chars", 0),
+        }
+        # Lexical-only is a legitimate ANSWER but a terrible accident. Say which
+        # one this is: a standalone NeuRAG used to land here silently, because
+        # fastembed was an optional extra no installer ever requested.
+        if not getattr(self._embedder, "available", False):
+            from neurag.embedder import lexical_only_requested
+            if lexical_only_requested():
+                out["search_mode"] = "lexical (requested)"
+            else:
+                out["search_mode"] = "lexical (DEGRADED)"
+                out["warning"] = (
+                    "An embedding model is configured but the embedder did not "
+                    "load, so search is lexical only — cross-language and "
+                    "paraphrase matches will fail. Fix: pip install "
+                    "'fastembed>=0.5,<1', then `neurag reindex`.")
+        else:
+            out["search_mode"] = "semantic"
+        mismatch = self.embed_mismatch()
+        if mismatch:
+            out["embed_mismatch"] = mismatch
+            out["warning"] = mismatch["hint"]
+        return out
+
+    # -- health: structural integrity (L1, deterministic) -------------------
+
+    def health(self) -> dict:
+        """Structural audit of the vault (no LLM, no embeddings). Flags problems;
+        it never deletes — NeuRAG is a curated source of truth. `ok` is False only
+        for the serious issues (broken hierarchy, tiny chunks, duplicate names)."""
+        if getattr(self, "_corrupt", False):
+            return {
+                "ok": False,
+                "corrupt": True,
+                "serious_count": 1,
+                "error": self._corrupt_err,
+                "issues": {}, "warnings": {},
+                # Same classifier the guard uses, so the diagnostic and the
+                # error never disagree about whether the file is damaged or
+                # merely busy — only one of those is fixed by deleting it.
+                "hint": open_failure_message(self._corrupt_err),
+            }
+        c = self._conn
+        rows = lambda sql: [dict(r) for r in c.execute(sql).fetchall()]
+        count = lambda sql: c.execute(sql).fetchone()[0]
+
+        # Serious issues
+        broken_hierarchy = rows(
+            "SELECT n.id, n.name, n.parent_id FROM nodes n "
+            "WHERE n.parent_id IS NOT NULL "
+            "  AND NOT EXISTS (SELECT 1 FROM nodes p WHERE p.id = n.parent_id)")
+        tiny_chunks = rows(
+            "SELECT id, node_id, source FROM chunks WHERE length(trim(text)) < 20")
+        duplicate_node_names = rows(
+            "SELECT name, COUNT(*) AS n FROM nodes WHERE id != 0 "
+            "GROUP BY name HAVING n > 1")
+
+        # Warnings (smells, not necessarily errors)
+        orphan_nodes = rows(
+            "SELECT n.id, n.name, n.path FROM nodes n WHERE n.id != 0 "
+            "  AND NOT EXISTS (SELECT 1 FROM chunks ch WHERE ch.node_id = n.id) "
+            "  AND NOT EXISTS (SELECT 1 FROM nodes k WHERE k.parent_id = n.id)")
+        chunks_without_source = count(
+            "SELECT COUNT(*) FROM chunks WHERE source IS NULL OR source = ''")
+        nodes_without_triggers = count(
+            "SELECT COUNT(*) FROM nodes WHERE id != 0 AND (triggers IS NULL OR triggers = '[]')")
+        # The tag join tables carry no foreign key — pyturso 0.6.1 stack-overflows
+        # on cascade triggers, so `delete_node` and the per-file re-ingest clean
+        # their rows by hand. A dangling row is exactly the failure mode of that
+        # decision, and this is where the vault gets audited for it.
+        dangling_tag_links = count(
+            "SELECT (SELECT COUNT(*) FROM node_tags "
+            "        WHERE node_id NOT IN (SELECT id FROM nodes)) "
+            "     + (SELECT COUNT(*) FROM chunk_tags "
+            "        WHERE chunk_id NOT IN (SELECT id FROM chunks))")
+
+        serious = len(broken_hierarchy) + len(tiny_chunks) + len(duplicate_node_names)
+        return {
+            "ok": serious == 0,
+            "serious_count": serious,
+            "issues": {
+                "broken_hierarchy": broken_hierarchy,
+                "tiny_or_empty_chunks": tiny_chunks,
+                "duplicate_node_names": duplicate_node_names,
+            },
+            "warnings": {
+                "orphan_nodes": orphan_nodes,
+                "chunks_without_source": chunks_without_source,
+                "nodes_without_triggers": nodes_without_triggers,
+                "dangling_tag_links": dangling_tag_links,
+            },
+        }
