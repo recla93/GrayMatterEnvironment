@@ -14,6 +14,10 @@ import sys
 
 import pytest
 
+# The peers must run WITHOUT Gray Matter. This file exercises the
+# collaboration WITH it, so a GM-less venv must skip it, not invent failures.
+pytest.importorskip("gray_matter")
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 

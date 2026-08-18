@@ -26,6 +26,10 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+# The peers must run WITHOUT Gray Matter. This file exercises the
+# collaboration WITH it, so a GM-less venv must skip it, not invent failures.
+pytest.importorskip("gray_matter")
+
 # ── paths ──────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent.parent  # Gray Matter Enviroment
 NEURAG = ROOT / "neurag"
