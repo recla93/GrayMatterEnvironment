@@ -3,12 +3,17 @@
 <div align="center">
 <img src="gray_matter/assets/gray-matter-logo.png" alt="Gray Matter logo" width="420">
 <br>
-<img alt="version" src="https://img.shields.io/badge/suite-v3.5.0-7c8cff?style=flat-square">
+<a href="https://github.com/recla93/GrayMatterEnvironment/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/recla93/GrayMatterEnvironment/actions/workflows/ci.yml/badge.svg"></a>
+<a href="https://github.com/recla93/GrayMatterEnvironment/actions/workflows/standalone.yml"><img alt="Standalone" src="https://github.com/recla93/GrayMatterEnvironment/actions/workflows/standalone.yml/badge.svg"></a>
 <img alt="python" src="https://img.shields.io/badge/python-3.10+-green?style=flat-square">
 <img alt="license" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue?style=flat-square">
 </div>
 
 Three cooperating MCP projects, one memory ecosystem for AI agents.
+
+**This is the umbrella repo — the whole suite in one tree.** The three projects
+also live on their own, and you can install any of them from there. What you
+cannot do is develop them there: see [Where the code lives](#where-the-code-lives).
 
 ---
 
@@ -19,12 +24,40 @@ Gray Matter is a **Model Context Protocol (MCP)** ecosystem that gives AI agents
 
 | Component | Version | Role | Learns? |
 |---|---|---|---|
-| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.2.0-7c8cff?style=flat-square)](neuron/) | Episodic/conceptual semantic memory — graph, salience, trust, decay | Yes |
-| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.3.0-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base — nodes, chunks, triggers, auto-ingest | No — permanent vault |
-| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.2.0-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, GUI | Bridges only |
+| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.4.2-7c8cff?style=flat-square)](neuron/) | Episodic/conceptual semantic memory — graph, salience, trust, decay | Yes |
+| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.3.3-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base — nodes, chunks, triggers, auto-ingest | No — permanent vault |
+| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.4.1-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, GUI | Bridges only |
 
 **Model:** MCP clients register ONLY `gray-matter` (the gateway). Neuron and
 NeuRAG run as GM-managed workers. Each can also run standalone.
+
+---
+
+## Where the code lives
+
+Four repositories, one source of truth.
+
+| Repo | What it is | Write to it? |
+|---|---|---|
+| **GrayMatterEnvironment** (here) | The suite: the three projects, the docs, the pipelines | **Yes — this is where you commit** |
+| [Neuron](https://github.com/recla93/Neuron) | Neuron alone, installable on its own | No — projection |
+| [NeuRAG](https://github.com/recla93/NeuRAG) | NeuRAG alone, installable on its own | No — projection |
+| [gray-matter](https://github.com/recla93/gray-matter) | The gateway alone | No — projection |
+
+The three are not copies kept in step by hand: `git subtree split` extracts each
+folder from this tree as its own history and pushes it there — a plain
+fast-forward, same commits, same SHAs, same tags. A commit that touches two
+projects splits itself, and only the relevant half reaches each one.
+
+**So: install from wherever you like, but open pull requests here.** The three
+mirrors run no CI of their own and their `main` accepts nothing but the mirror
+job — a PR opened there would sit unbuilt.
+
+Why an umbrella and not "Gray Matter with the others inside": Neuron and NeuRAG
+must work with no gateway present, and a gateway that contains them makes that
+contract impossible to keep honest. `standalone.yml` installs each peer alone,
+in a venv where importing `gray_matter` is an error, and imports every product
+module one by one. That job is the contract.
 
 ---
 
@@ -74,8 +107,8 @@ shared venv, gateway registered, hooks deployed.
 ### Option C — pip (source checkout)
 
 ```bash
-git clone https://github.com/recla93/Neuron.git
-cd Neuron
+git clone https://github.com/recla93/GrayMatterEnvironment.git
+cd GrayMatterEnvironment
 
 # Install all three:
 pip install -e gray_matter -e neuron -e neurag
@@ -224,11 +257,6 @@ it manages Neuron and NeuRAG as internal workers.
 | **NeuRAG** | [README](neurag/README.md) • [INSTALL-AI.md](neurag/INSTALL-AI.md) • [DOCTOOLUPDATE.md](neurag/DOCTOOLUPDATE.md) • [DESIGN-CROSSLINKS.md](neurag/DESIGN-CROSSLINKS.md) |
 | **Gray Matter** | [README](gray_matter/README.md) • [INSTALL-AI.md](gray_matter/INSTALL-AI.md) • [DOCTOOLUPDATE.md](gray_matter/DOCTOOLUPDATE.md) |
 
-### Working material
-Audits, plans, design records and past handoffs live in **[work/](work/)** —
-kept apart from the docs above because they describe a *moment*, not the
-current state. See [work/README.md](work/README.md) for the map.
-
 ---
 
 ## Development
@@ -250,8 +278,26 @@ python neurag/selfcheck.py           # NeuRAG deterministics
 python gray_matter/selfcheck.py      # Gray Matter deterministics
 ```
 
-**File tools are the source of truth**; git only locally. A sandbox fix is not
-"green" until it passes locally (see `ENVIRONMENT.md`).
+### The flow
+
+1. Branch here, one branch for the whole change even when it spans two projects.
+2. `ci.yml` runs the three suites, one job per project — separate processes, for
+   the reason in `pytest.ini`. `standalone.yml` runs each peer without the
+   gateway.
+3. Merge into `main`. `mirror.yml` splits the tree and fast-forwards the three
+   public repos.
+4. Release by tagging **here**, with the project prefix: `neuron-v6.4.3`,
+   `neurag-v1.3.4`, `gm-v1.4.2`. A bare `v*` would fire all three at once. The
+   mirror renames the tag on the way out, so `neuron-v6.4.3` lands on Neuron as
+   `v6.4.3` — which is what that repo's Releases page should say.
+
+A version bump touches five files per project: `pyproject.toml`, `__init__.py`,
+the README badge, `CHANGELOG.md`, and the vendored Gray Matter wheel in the
+peers (`_gm_vendor/`) — plus `GM_VERSION` in the peers' installers, which the
+release workflow refuses to let drift.
+
+`block_gm.py` at the root makes `gray_matter` unimportable on any tree: it is
+the local way to run what `standalone.yml` runs, without building a clean venv.
 
 ---
 
@@ -296,6 +342,6 @@ See individual project `LICENSE` files for details.
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/recla93/Neuron/issues)
+- **Issues:** [GitHub Issues](https://github.com/recla93/GrayMatterEnvironment/issues) — here, not on the mirrors
 - **Docs:** See per-project documentation above
 - **AI agents:** Each project has `INSTALL-AI.md` for automated setup
