@@ -1291,7 +1291,7 @@ async function loadClients(){
 async function registerClients(){
   const picked = [...CLIENT_SEL];
   if (!picked.length){ append("[clients] " + T("clients_none"), "warn"); return; }
-  const res = await call("clients_register", JSON.stringify({clients: picked, gateway: true}));
+  const res = await call("clients_register", {clients: picked, gateway: true});
   if (!res.ok && res.error){ append("[clients] " + res.error, "err"); return; }
   for (const r of (res.results || [])){
     const ok = r.ok || r.action === "skipped";
@@ -1305,7 +1305,7 @@ async function registerClients(){
 
 async function checkMigration(){
   try {
-    const r = await call("migrate", "{}");
+    const r = await call("migrate", {});
     if (!r.ok) return;
     const old = r.old_installs || [];
     if (old.length === 0) return;
@@ -1327,7 +1327,7 @@ async function checkMigration(){
     
     // Wire buttons
     document.getElementById("btn-migrate-all").onclick = async () => {
-      const res = await call("migrate", JSON.stringify({all: true}));
+      const res = await call("migrate", {all: true});
       append("[migrate] " + (res.migrated || []).length + " tools registered", "ok");
       banner.classList.remove("show");
       loadCatalog(); // refresh sidebar

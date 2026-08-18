@@ -187,6 +187,32 @@ def _argv_for(tool: str, command: str, args: dict, extra: str = "") -> list[str]
     return argv
 
 
+def _req(args: "str | None") -> dict:
+    """Il corpo di una richiesta come dizionario, o un errore chiaro.
+
+    `json.loads` accetta qualunque JSON valido, non solo un oggetto: con un
+    corpo `"{}"` -- una STRINGA che contiene una graffa, non una graffa --
+    torna `str`, e il `req.get(...)` della riga dopo muore con
+    "'str' object has no attribute 'get'". E' successo davvero: il pannello
+    clients ci ha perso un'ora, e li' e' stato tappato con un isinstance
+    locale mentre gli altri quindici punti che scrivevano la stessa riga sono
+    rimasti scoperti. Da cui questa funzione: la regola sta in un posto solo.
+
+    Solleva ValueError -- di cui JSONDecodeError e' sottoclasse -- cosi' chi
+    gia' distingueva "richiesta non valida" continua a farlo con un except
+    solo, e chi non lo faceva riceve un errore leggibile invece di un
+    AttributeError che indica la riga sbagliata.
+    """
+    if not args or not args.strip():
+        return {}
+    dato = json.loads(args)                      # JSONDecodeError se e' rotto
+    if not isinstance(dato, dict):
+        raise ValueError(
+            "il corpo della richiesta deve essere un oggetto JSON, "
+            f"non {type(dato).__name__}")
+    return dato
+
+
 class Api:
     """Backend esposto alla vista. Ogni metodo ritorna dati JSON-abili.
 
@@ -221,7 +247,7 @@ class Api:
         """Rete di sicurezza per il pulsante Copia: scrive `text` negli appunti
         di sistema quando la clipboard del WebView è bloccata (WebView2/pywebview).
         Usa lo strumento nativo dell'OS così non serve nessuna dipendenza."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         text = req.get("text", "")
         try:
             if sys.platform == "win32":
@@ -248,7 +274,7 @@ class Api:
         Mai sollevare: se il catalogo esplode la GUI deve dirlo, non morire.
         """
         try:
-            req = json.loads(args) if args else {}
+            req = _req(args)
             lang = req.get("lang") or "it"
             envs = []
             for env in catalog.environments(lang):
@@ -283,7 +309,7 @@ class Api:
         `running=True` senza riga di uscita significa "in corso, oppure
         interrotta" — e in entrambi i casi quello che era arrivato è qui.
         """
-        req = json.loads(args) if args else {}
+        req = _req(args)
         key = req.get("key") or ""
         p = self._op_log(key) if key else None
         if not p or not p.exists():
@@ -398,7 +424,7 @@ class Api:
         dirottava in una finestra `cmd` per farli rispondere. Ora la risposta
         arriva da qui e la finestra non serve.
         """
-        req = json.loads(args) if args else {}
+        req = _req(args)
         text = str(req.get("text", ""))
         key = req.get("key") or next(iter(self._running), None)
         proc = self._procs.get(key) if key else None
@@ -418,7 +444,7 @@ class Api:
 
     def run(self, args: str = "") -> dict:
         """Esegue QUALUNQUE comando del catalogo. Unico punto di esecuzione."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         tool, command = req.get("tool", ""), req.get("command", "")
         if not tool or not command:
             return {"ok": False, "error": "servono 'tool' e 'command'"}
@@ -459,7 +485,7 @@ class Api:
         tool che li possiede (SSOT), la GUI non importa più `settings`. Un tool
         senza config (es. Neuron) non ha il comando → il pannello non compare.
         """
-        req = json.loads(args) if args else {}
+        req = _req(args)
         tool = req.get("tool", "")
         try:
             argv = _cli_argv(tool, "config", "list", "--json")
@@ -479,7 +505,7 @@ class Api:
         """Persiste un knob via ``<tool> config set <key> <value> --json``,
         con eco in console. Il tool fa la coercizione di tipo e ritorna il valore
         effettivo."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         tool, key, value = req.get("tool", ""), req.get("key", ""), req.get("value", "")
         try:
             argv = _cli_argv(tool, "config", "set", str(key), str(value), "--json")
@@ -499,7 +525,7 @@ class Api:
 
     def stop(self, args: str = "") -> dict:
         """Ferma un comando in corso (o tutti, se non se ne indica uno)."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         keys = [req["key"]] if req.get("key") else list(self._procs)
         stopped = 0
         for k in keys:
@@ -513,7 +539,7 @@ class Api:
     # -- installazione ambienti -------------------------------------------
     def install_env(self, args: str = "") -> dict:
         """Installa un ambiente mancante: cartella sorella se c'è, else git clone."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         key = req.get("key", "")
         if key not in _PEER_GIT:
             return {"ok": False, "error": f"non installabile: {key}"}
@@ -537,7 +563,7 @@ class Api:
         """Superfici cancellabili + reinstall, chieste al TOOL via ``<tool> repair
         --json`` (ogni tool conosce i PROPRI path/installer — SSOT). Da Neuron mostra
         solo Neuron, da NeuRAG solo NeuRAG, da Gray Matter tutta la suite."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         scope = req.get("scope", "gray-matter")
         try:
             argv = _cli_argv(scope, "repair", "--json")
@@ -567,7 +593,7 @@ class Api:
         l'output di una riparazione fallita finisce nel log della GUI, dove lo
         si può copiare, invece di sparire con la finestra alla chiusura.
         """
-        req = json.loads(args) if args else {}
+        req = _req(args)
         wipe = req.get("wipe") or []
         scope = req.get("scope", "gray-matter")
         self._emit(f"$ repair  scope={scope}  wipe={wipe or '(nothing)'}", "cmd")
@@ -587,7 +613,7 @@ class Api:
     # La card compare per ogni tool installato che supporta uninstall.
 
     def uninstall_state(self, args: str = "") -> dict:
-        req = json.loads(args) if args else {}
+        req = _req(args)
         scope = req.get("scope", "gray-matter")
         tools = self._detect_uninstall_tools()
         if scope not in tools:
@@ -609,7 +635,7 @@ class Api:
                 "targets": data.get("targets", []), "data": data.get("data", [])}
 
     def uninstall_run(self, args: str = "") -> dict:
-        req = json.loads(args) if args else {}
+        req = _req(args)
         scope = req.get("scope", "gray-matter")
         purge_data = bool(req.get("purge_data", False))
         # Its own flag, not folded into purge_data: that one is about the user's
@@ -682,7 +708,7 @@ class Api:
 
     def link_run(self, args: str = "") -> dict:
         """Esegui link per i tool selezionati."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         selected = req.get("tools", [])
         if not selected:
             return {"ok": False, "error": "nessun tool selezionato"}
@@ -726,7 +752,7 @@ class Api:
 
     def process_stop(self, args: str = "") -> dict:
         """Ferma un comando lanciato dalla GUI (per PID) o tutti."""
-        req = json.loads(args) if args else {}
+        req = _req(args)
         target = req.get("pid")
         try:
             target = int(target) if target is not None else None
@@ -958,7 +984,7 @@ class Api:
                 else:
                     try:
                         data = json.loads(raw) if raw.strip() else {}
-                    except json.JSONDecodeError:
+                    except ValueError:
                         # JSONC or genuinely broken. We never rewrite these —
                         # say so, loudly, instead of pretending it is fine.
                         info.update(readable=False,
@@ -1016,8 +1042,8 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
         try:
-            payload = json.loads(args) if args.strip() else {}
-        except json.JSONDecodeError as exc:
+            payload = _req(args)
+        except ValueError as exc:
             return {"ok": False, "error": f"bad request: {exc}"}
         picked = payload.get("clients") or []
         if not isinstance(picked, list) or not picked:
@@ -1052,8 +1078,8 @@ class Api:
         # in the GUI's error card. This endpoint is the migration button — the one
         # place a user lands when their install is already in a bad state.
         try:
-            req = json.loads(args) if args else {}
-        except json.JSONDecodeError:
+            req = _req(args)
+        except ValueError:
             return {"ok": False, "error": "richiesta non valida"}
         
         if req.get("all"):

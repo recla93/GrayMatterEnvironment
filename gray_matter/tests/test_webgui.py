@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from io import StringIO
 from unittest.mock import patch, MagicMock
 
 import pytest
+
+# `call(nome, payload)` serializza gia' lui: chi gli passa una stringa la fa
+# serializzare due volte, e al server arriva un JSON che non e' un oggetto.
+PAYLOAD_SERIALIZZATO = re.compile(
+    r'call\(\s*"[a-z_]+"\s*,\s*(JSON\.stringify|"[^"]+")')
 
 
 # ---------------------------------------------------------------------------
@@ -151,3 +157,64 @@ class TestHtmlExists:
         assert _HTML.exists(), f"webgui.html not found at {_HTML}"
         content = _HTML.read_text(encoding="utf-8")
         assert "Gray Matter" in content
+
+
+# ---------------------------------------------------------------------------
+# _req — il corpo della richiesta
+# ---------------------------------------------------------------------------
+
+class TestRichiestaEndpoint:
+    """`json.loads` accetta qualunque JSON valido, non solo un oggetto.
+
+    La pagina chiamava `call("migrate", "{}")`: una STRINGA che contiene una
+    graffa. `call` la passa a `JSON.stringify`, quindi al server arrivava un
+    JSON che si deserializza in `str`, e il `req.get(...)` della riga dopo
+    moriva con "'str' object has no attribute 'get'". Entrambi i pulsanti del
+    pannello di migrazione erano morti -- quello che rileva e quello che
+    migra -- proprio nel pannello dove si finisce quando l'installazione e'
+    gia' messa male. Verificato chiamando l'endpoint con il corpo che la
+    pagina produceva.
+    """
+
+    def test_un_oggetto_passa(self):
+        from gray_matter.webgui import _req
+        assert _req('{"all": true}') == {"all": True}
+
+    def test_il_corpo_vuoto_e_un_dizionario_vuoto(self):
+        from gray_matter.webgui import _req
+        assert _req("") == {} and _req(None) == {} and _req("   ") == {}
+
+    @pytest.mark.parametrize("corpo", ['"{}"', '"testo"', "[1, 2]", "42", "null"])
+    def test_json_valido_ma_non_oggetto_e_rifiutato(self, corpo):
+        from gray_matter.webgui import _req
+        with pytest.raises(ValueError):
+            _req(corpo)
+
+    def test_json_rotto_resta_un_errore_di_json(self):
+        import json
+        from gray_matter.webgui import _req
+        with pytest.raises(json.JSONDecodeError):   # sottoclasse di ValueError
+            _req("{non json")
+
+    def test_migrate_risponde_invece_di_esplodere(self):
+        """Il corpo sbagliato torna un errore leggibile, non un AttributeError
+        che punta a una riga che non c'entra."""
+        import json
+        from gray_matter.webgui import Api
+        r = Api().migrate(json.dumps("{}"))
+        assert r == {"ok": False, "error": "richiesta non valida"}
+
+    def test_la_pagina_non_incapsula_due_volte(self):
+        """La correzione vera sta nel chiamante: `call` serializza gia' lui, e
+        chi gli passa una stringa la fa serializzare due volte.
+
+        Cercato a tappeto quando il primo caso e' saltato fuori: erano TRE --
+        i due pulsanti di migrate e la registrazione dei client. Un payload
+        vuoto (`""`) va bene: `call` lo tratta come "nessun corpo".
+        """
+        import re
+        from pathlib import Path
+        html = (Path(__file__).resolve().parents[1] / "webgui.html").read_text(encoding="utf-8")
+        colpevoli = [r.strip() for r in html.splitlines()
+                     if re.search(PAYLOAD_SERIALIZZATO, r)]
+        assert not colpevoli, "payload serializzato due volte: " + "; ".join(colpevoli)
