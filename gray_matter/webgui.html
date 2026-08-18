@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gray Matter — Control Center</title>
+<style>
+  /* tokyo-night, la stessa palette del Control Center di Neuron */
+  :root{
+    --bg:#1a1b26; --panel:#1f2335; --panel2:#24283b; --line:#2f3450;
+    --fg:#c0caf5; --dim:#7f88b0; --accent:#7aa2f7; --ok:#9ece6a;
+    --warn:#e0af68; --err:#f7768e;
+    --mono:"Cascadia Code","Consolas",ui-monospace,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;
+       background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans)}
+  header{display:flex;align-items:center;gap:10px;padding:10px 16px;
+         border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.2px}
+  /* Served by the local http server (see _build_server): the page is not a
+     file:// document, so a relative path to assets/ would 404. */
+  header .logo{height:26px;width:auto;display:block;flex:0 0 auto}
+  header .sub{color:var(--dim);font-size:12px}
+  header .spacer{flex:1}
+  #lang-select{background:var(--bg);border:1px solid var(--line);border-radius:4px;
+               color:var(--dim);padding:2px 6px;font-size:11px;cursor:pointer}
+  #lang-select:focus{outline:none;border-color:var(--accent)}
+  main{flex:1;display:flex;min-height:0}
+
+  /* --- sidebar: gli ambienti installati --- */
+  nav{width:236px;flex-shrink:0;border-right:1px solid var(--line);
+      background:var(--panel);overflow-y:auto;padding:10px 0}
+  nav h2{margin:6px 14px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+         color:var(--dim);font-weight:600}
+  .env{display:block;width:100%;text-align:left;background:none;border:0;cursor:pointer;
+       color:var(--fg);padding:9px 14px;border-left:3px solid transparent;font:inherit}
+  .env:hover{background:var(--panel2)}
+  .env[aria-current="true"]{background:var(--panel2);border-left-color:var(--accent)}
+  .env .name{font-weight:600}
+  .env .meta{font-size:11px;color:var(--dim)}
+  .env.off{opacity:.62}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;
+       background:var(--ok);vertical-align:middle}
+  .dot.off{background:var(--dim)}
+  .install{margin:2px 14px 8px;font-size:12px;padding:5px 10px;border-radius:6px;
+           border:1px solid var(--accent);background:none;color:var(--accent);cursor:pointer}
+  .install:hover{background:var(--accent);color:var(--bg)}
+
+  /* --- corpo: gruppi, dal più grande al più piccolo --- */
+  section{flex:1;overflow-y:auto;padding:16px 20px;min-width:0}
+  .grp{margin-bottom:22px}
+  .grp h3{margin:0 0 9px;font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+          color:var(--dim);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:5px}
+  .cmds{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:8px}
+  .cmd{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+       padding:10px 12px;cursor:pointer;transition:border-color .12s}
+  .cmd:hover{border-color:var(--accent)}
+  .cmd[aria-expanded="true"]{border-color:var(--accent);grid-column:1/-1}
+  .cmd .n{font-family:var(--mono);font-size:13px;color:var(--accent)}
+  .cmd .h{font-size:12px;color:var(--dim);margin-top:3px}
+  /* "Quando serve": staccato dalla descrizione da una barra laterale, perche'
+     risponde a una domanda diversa (non "cosa fa" ma "e' questo che mi serve
+     adesso") e non deve leggersi come la continuazione della riga sopra. */
+  .cmd .when{font-size:12px;color:var(--dim);margin-top:7px;padding-left:9px;
+             border-left:2px solid var(--line);line-height:1.45;cursor:default}
+  .cmd .when-k{color:var(--accent);font-weight:600}
+  .form{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);
+        display:grid;gap:8px;cursor:default}
+  .row{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center}
+  .row label{font-size:12px;color:var(--dim);font-family:var(--mono);overflow-wrap:anywhere}
+  .row .req{color:var(--err)}
+  input,select{background:var(--bg);border:1px solid var(--line);border-radius:6px;
+               color:var(--fg);padding:6px 9px;font:13px var(--mono);width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  input[type=checkbox]{width:auto}
+  .knobs{display:grid;gap:10px}
+  .pill{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);
+        border:1px solid var(--warn);border-radius:10px;padding:1px 7px;vertical-align:middle}
+  .kstat{margin-left:6px}
+  .go{justify-self:start;background:var(--accent);color:var(--bg);border:0;border-radius:6px;
+      padding:7px 18px;font-weight:600;cursor:pointer;font-size:13px}
+  .go:hover{filter:brightness(1.1)}
+  .hint{font-size:11px;color:var(--dim)}
+  /* Riga di risposta sotto la console: compare solo mentre un comando gira. */
+  #stdin-bar{border-top:1px solid var(--line);gap:8px}
+  #stdin-bar[hidden]{display:none}
+  #stdin-input{flex:1;font:13px var(--mono)}
+  #btn-send{white-space:nowrap}
+  details{border:1px dashed var(--line);border-radius:6px;padding:6px 10px}
+  details[open]{display:grid;gap:8px}
+  summary{cursor:pointer;user-select:none}
+  summary:hover{color:var(--fg)}
+  .empty{color:var(--dim);font-size:13px;padding:22px 0}
+
+   /* --- console --- */
+  footer{height:238px;flex-shrink:0;border-top:1px solid var(--line);
+         background:var(--panel2);display:flex;flex-direction:column}
+  .bar{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--line)}
+  .bar .t{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  .bar .spacer{flex:1}
+  .bar button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--dim);
+              padding:4px 11px;font-size:12px;cursor:pointer}
+  .bar button:hover{color:var(--fg);border-color:var(--accent)}
+  .run{font-size:11px;color:var(--warn);font-family:var(--mono)}
+  pre{flex:1;margin:0;overflow-y:auto;padding:9px 12px;font:12px/1.55 var(--mono);
+      white-space:pre-wrap;word-break:break-word}
+  .l-cmd{color:var(--accent)} .l-ok{color:var(--ok)} .l-warn{color:var(--warn)}
+  .l-err{color:var(--err)}
+
+  /* --- health bar --- */
+  .health-bar{display:flex;gap:8px;padding:6px 16px;border-bottom:1px solid var(--line);
+              background:var(--panel2);font-size:12px;color:var(--dim);align-items:center}
+  .health-item{display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;
+               background:var(--panel);border:1px solid var(--line)}
+  .health-item .dot{width:6px;height:6px;border-radius:50%}
+  .health-item .val{color:var(--fg);font-family:var(--mono);font-size:11px}
+  .health-item.running .dot{background:var(--ok)}
+  .health-item.stopped .dot{background:var(--dim)}
+  .health-item.error .dot{background:var(--err)}
+  .health-item .hb{width:20px;height:20px;border:none;border-radius:4px;cursor:pointer;
+                   font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;
+                   background:var(--panel);color:var(--dim);transition:background .15s,color .15s}
+  .health-item .hb:hover{background:var(--accent);color:#fff}
+  .health-item.running .hb{color:var(--err)}
+  .health-item.stopped .hb{color:var(--ok)}
+  .health-bar .stop-all{margin-left:auto;padding:3px 10px;border:1px solid var(--err);
+                        border-radius:6px;background:transparent;color:var(--err);cursor:pointer;
+                        font-size:11px;transition:background .15s}
+  .health-bar .stop-all:hover{background:var(--err);color:#fff}
+
+  /* --- migration banner --- */
+  .migration-banner{display:none;padding:8px 16px;border-bottom:1px solid var(--warn);
+                    background:var(--panel2);font-size:13px;color:var(--fg)}
+  .migration-banner.show{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .migration-banner .icon{color:var(--warn);font-size:16px}
+  .migration-banner .msg{flex:1;min-width:200px}
+  .migration-banner .msg b{color:var(--warn)}
+  .migration-banner .tool-list{display:flex;gap:6px;flex-wrap:wrap}
+  .migration-banner .tool-pill{display:flex;align-items:center;gap:5px;padding:3px 8px;
+                               border-radius:6px;background:var(--panel);border:1px solid var(--line);
+                               font-size:12px}
+  .migration-banner .tool-pill .name{color:var(--fg)}
+  .migration-banner .tool-pill .path{color:var(--dim);font-family:var(--mono);font-size:11px}
+  .migration-banner button{background:var(--warn);color:var(--bg);border:0;border-radius:6px;
+                           padding:5px 14px;font-weight:600;cursor:pointer;font-size:12px}
+  .migration-banner button:hover{filter:brightness(1.1)}
+  .migration-banner .dismiss{background:none;border:1px solid var(--line);color:var(--dim)}
+  .migration-banner .dismiss:hover{color:var(--fg);border-color:var(--accent)}
+  /* MCP clients panel — detect + verify + merge */
+  .clients-panel{display:none;padding:10px 16px;border-bottom:1px solid var(--line);
+                 background:var(--panel)}
+  .clients-panel.show{display:block}
+  .clients-panel .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+  .clients-panel .head .title{font-weight:600}
+  .clients-panel .head .sub{color:var(--dim);font-size:12px;flex:1;min-width:180px}
+  .clients-grid{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .client-item{display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:6px;
+               border:1px solid var(--line);background:var(--bg);cursor:pointer;font-size:13px}
+  .client-item.absent{opacity:.55}
+  .client-item.bad{border-color:var(--warn)}
+  .client-item .dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+  .client-item .dot.on{background:var(--ok,#7ee787)}
+  .client-item .dot.warn{background:var(--warn)}
+  .client-problems{margin:6px 0 8px;padding:7px 10px;border-left:3px solid var(--warn);
+                   background:var(--bg);border-radius:4px;font-size:12px;color:var(--dim)}
+  .client-problems b{color:var(--warn)}
+  .client-problems div{margin:2px 0;font-family:var(--mono)}
+  .clients-panel .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .clients-panel button{background:var(--accent);color:var(--bg);border:0;border-radius:6px;
+                        padding:5px 12px;font-size:12px;cursor:pointer}
+  .clients-panel button.ghost{background:none;border:1px solid var(--line);color:var(--dim)}
+  .clients-panel button.ghost:hover{color:var(--fg);border-color:var(--accent)}
+
+  /* --- infrastructure panels --- */
+  .infra{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-bottom:18px}
+  .infra-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .infra-card h4{margin:0 0 8px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);font-weight:600;
+                 cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+  .infra-card h4:hover{color:var(--fg)}
+  /* Il caret ruota, il corpo sparisce. Niente altezze animate: la card cambia
+     contenuto a ogni refresh e un'animazione su altezza calcolata sfarfalla. */
+  .infra-card h4::before{content:"\25BE";font-size:9px;transition:transform .12s;opacity:.7}
+  .infra-card.collapsed h4::before{transform:rotate(-90deg)}
+  .infra-card.collapsed h4{margin-bottom:0}
+  .infra-card.collapsed > *:not(h4){display:none}
+  /* Console collassabile: si nasconde il log, la barra dei comandi resta —
+     serve poter fermare/avviare anche con la console chiusa. */
+  footer.collapsed #log{display:none}
+  footer.collapsed #stdin-bar{display:none}
+  #btn-console-toggle{min-width:26px}
+  .infra-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px}
+  .infra-row .label{color:var(--dim);min-width:80px;font-family:var(--mono)}
+  .infra-row .value{color:var(--fg);font-family:var(--mono);word-break:break-all}
+  .infra-row .value.ok{color:var(--ok)}
+  .infra-row .value.warn{color:var(--warn)}
+  .infra-row .value.err{color:var(--err)}
+  .infra-tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:.04em}
+  .infra-tag.on{background:rgba(158,206,106,.15);color:var(--ok)}
+  .infra-tag.off{background:rgba(127,136,176,.15);color:var(--dim)}
+</style>
+</head>
+<body>
+
+<header>
+  <img class="logo" src="__GM_API_BASE__/logo.png" alt="Gray Matter"
+       onerror="this.style.display='none'">
+  <h1>Gray Matter</h1>
+  <span class="sub">Control Center</span>
+  <span class="spacer"></span>
+  <select id="lang-select" title="Language / Lingua">
+    <option value="it">IT</option>
+    <option value="en">EN</option>
+  </select>
+  <span class="sub" id="pyv"></span>
+</header>
+
+<div class="health-bar" id="health-bar"></div>
+
+<div class="clients-panel" id="clients-panel">
+  <div class="head">
+    <span class="title" id="clients-title"></span>
+    <span class="sub" id="clients-sub"></span>
+    <button class="ghost" id="btn-clients-refresh"></button>
+  </div>
+  <div class="clients-grid" id="clients-grid"></div>
+  <div class="client-problems" id="clients-problems" style="display:none"></div>
+  <div class="actions">
+    <button id="btn-clients-register"></button>
+    <button class="ghost" id="btn-clients-hide"></button>
+  </div>
+</div>
+<div class="migration-banner" id="migration-banner">
+  <span class="icon">&#9888;</span>
+  <span class="msg" id="migration-msg"></span>
+  <div class="tool-list" id="migration-tools"></div>
+  <button id="btn-migrate-all"></button>
+  <button id="btn-migrate-dismiss" class="dismiss"></button>
+</div>
+
+<div class="infra" id="infra-panels"></div>
+
+<main>
+  <nav>
+    <h2 id="nav-title"></h2>
+    <div id="envs"></div>
+  </nav>
+  <section id="body"><div class="empty" id="loading-msg"></div></section>
+</main>
+
+<footer>
+  <div class="bar">
+    <button id="btn-console-toggle" title=""></button>
+    <span class="t" id="console-title"></span>
+    <span class="run" id="running"></span>
+    <span class="spacer"></span>
+    <button id="btn-start"></button>
+    <button id="btn-stop"></button>
+    <button id="btn-copy"></button>
+    <button id="btn-clear"></button>
+  </div>
+  <pre id="log"></pre>
+  <!-- Riga di risposta: i comandi che fanno domande (setup, connect, cloud,
+       repair) si rispondono qui. Prima venivano dirottati su una finestra
+       `cmd` esterna — la finestra nera che spuntava dalla GUI. -->
+  <div class="bar" id="stdin-bar" hidden>
+    <span class="t" id="stdin-label"></span>
+    <input id="stdin-input" type="text" autocomplete="off" spellcheck="false">
+    <button id="btn-send"></button>
+  </div>
+</footer>
+
+<script>
+const API = "__GM_API_BASE__";
+let CATALOG = [], current = null, openCmd = null;
+
+// ── i18n ─────────────────────────────────────────────────────────
+let LANG = localStorage.getItem("gm_lang") || "it";
+const STRINGS = {
+  it: {
+    loading_catalog: "Carico il catalogo\u2026",
+    envs_title: "Ambienti",
+    not_installed: "non installato",
+    console_title: "Console",
+    console_collapse: "Chiudi la console",
+    console_expand: "Apri la console",
+    btn_stop: "Ferma",
+    btn_start: "Avvia",
+    btn_copy: "Copia",
+    btn_clear: "Pulisci",
+    btn_send: "Invia",
+    when_label: "Quando serve: ",
+    stdin_label: "Risposta:",
+    stdin_hint: "Scrivi qui la risposta e premi Invio",
+    copy_hint: "Copia tutta la console negli appunti",
+    copied: "Copiato!",
+    copy_fail: "Copia fallita",
+    no_backend: "Non raggiungo il backend",
+    retrying: "\u2014 riprovo\u2026",
+    not_installed_detail: " non \u00e8 installato \u2014 usa il pulsante nella barra a sinistra.",
+    no_commands: " \u00e8 installato ma non espone nessun comando: quasi sempre \u00e8 una versione vecchia nel venv. Rilancia l\u2019installer (install.ps1) e riapri.",
+    settings_hint: "Impostazioni \u2014 ogni modifica si salva subito (persistente).",
+    repair_hint: "Reinstall pulito. Di default NON cancella nulla: le caselle partono spente. Spunta SOLO ci\u00f2 che vuoi rimuovere \u2014 tutto il resto viene tenuto. Poi reinstalla forzato (bypassa il check versione).",
+    uninstall_hint: "Disinstalla questo componente. I dati vengono rimossi solo se selezionati. Conferma a due click \u2014 la verifica finale accerta che sia davvero rimosso.",
+    link_hint: "Ri-aggancia al gateway i tool che erano usciti come standalone. GM torna a gestirli \u2014 l\u2019entry MCP diretta del tool sparisce dai client.",
+    advanced_opts: "Opzioni avanzate (facoltative)",
+    no_params_hint: "Nessun parametro necessario: premi Esegui e guarda la console qui sotto.",
+    btn_run: "Esegui",
+    confirm_reinstall_wipe: "Conferma: cancella ",
+    confirm_reinstall_clean: "Conferma reinstall (nessuna cancellazione)",
+    btn_repair: "Ripara",
+    btn_uninstall: "Disinstalla",
+    btn_link: "Ricollega al gateway",
+    btn_confirm: "Conferma: ",
+    btn_stop_all: "Ferma tutti",
+    hb_stop_all: "Ferma tutto",
+    no_processes: "Nessun processo attivo per ",
+    no_tools: "Nessun tool installato.",
+    status_not_installed: "non installato",
+    status_standalone: "standalone \u2014 ricollegabile",
+    status_managed: "gi\u00e0 gestito da GM",
+    verified_ok: "\u2713 Disinstallato e verificato.",
+    verify_failed: "\u2717 Verifica fallita: ",
+    no_standalone: "Nessun tool standalone da ricollegare.",
+    linked_ok: "\u2713 Ricollegati: ",
+    restart_hint: ". Riavvia le app AI.",
+    none_linked: "Nessun tool ricollegato",
+    loading: "carico\u2026",
+    no_config: "config non disponibile",
+    no_repair: "repair non disponibile",
+    no_uninstall: "uninstall non disponibile",
+    no_link: "stato non disponibile",
+    interactive_hint: "\u23c9 Questo comando fa domande: si aprir\u00e0 in una finestra di terminale.",
+    migrating: "Migrazione in corso\u2026",
+    clients_title: "Client MCP",
+    clients_sub: "Scegli dove registrare Gray Matter. Nulla viene sovrascritto: le voci esistenti vengono unite, con backup e verifica.",
+    clients_refresh: "Ricontrolla",
+    clients_register: "Registra nei selezionati",
+    repair_will_close: "L'installer chiudera questo control center per liberare i file. La riparazione CONTINUA: riapri il control center per vedere com'e andata.",
+    last_op_running: "Ultima operazione interrotta (il control center e stato chiuso). Ecco cosa era arrivato:",
+    last_op_done: "Ultima operazione conclusa, uscita",
+    clients_hide: "Chiudi",
+    clients_none: "Seleziona almeno un client.",
+    clients_problems: "Problemi rilevati:",
+    clients_ok: "Registrazione completata",
+    clients_absent: "non rilevato",
+    migrate_title: " tool installati ma non nel registro GME:",
+    btn_migrate_all: "Migra Tutti",
+    btn_ignore: "Ignora",
+    infra_title: "Infrastruttura",
+    tunnel_title: "Tunnel",
+    tunnel_backend: "Backend",
+    tunnel_cloudflare_creds: "Credenziali Cloudflare",
+    tunnel_config: "Configurazione",
+    tunnel_none: "Nessun backend trovato \u2014 installa cloudflared o neuron[tunnel]",
+    bridge_title: "Bridge HTTP",
+    bridge_server: "Server",
+    bridge_port: "Porta",
+    bridge_escalation: "Escalation",
+    bridge_active: "Attivo",
+    bridge_inactive: "Non attivo",
+    bridge_full_suite: "Full suite",
+    bridge_standalone: "Standalone",
+    cloud_title: "Cloud Turso",
+    cloud_database: "Database",
+    cloud_status: "Stato",
+    cloud_configured: "Configurato",
+    cloud_local: "Solo locale",
+    cloud_env_var: "Variabile",
+    cloud_url: "URL",
+  },
+  en: {
+    loading_catalog: "Loading catalog\u2026",
+    envs_title: "Environments",
+    not_installed: "not installed",
+    console_title: "Console",
+    console_collapse: "Collapse the console",
+    console_expand: "Expand the console",
+    btn_stop: "Stop",
+    btn_start: "Start",
+    btn_copy: "Copy",
+    btn_clear: "Clear",
+    btn_send: "Send",
+    when_label: "When to use it: ",
+    stdin_label: "Answer:",
+    stdin_hint: "Type your answer here and press Enter",
+    copy_hint: "Copy entire console to clipboard",
+    copied: "Copied!",
+    copy_fail: "Copy failed",
+    no_backend: "Cannot reach backend",
+    retrying: "\u2014 retrying\u2026",
+    not_installed_detail: " is not installed \u2014 use the button in the left panel.",
+    no_commands: " is installed but exposes no commands: usually an outdated venv. Re-run the installer (install.ps1) and reopen.",
+    settings_hint: "Settings \u2014 every change is saved immediately (persistent).",
+    repair_hint: "Clean reinstall. By default NOTHING is deleted: checkboxes start unchecked. Check ONLY what you want removed \u2014 everything else is kept. Then force reinstall (bypass version check).",
+    uninstall_hint: "Uninstall this component. Data is removed only when selected. Two-click confirm \u2014 final verification ensures it\u2019s actually removed.",
+    link_hint: "Re-attach tools that went standalone back to the gateway. GM manages them again \u2014 the tool\u2019s direct MCP entry disappears from clients.",
+    advanced_opts: "Advanced options (optional)",
+    no_params_hint: "No parameters required: press Run and watch the console below.",
+    btn_run: "Run",
+    confirm_reinstall_wipe: "Confirm: delete ",
+    confirm_reinstall_clean: "Confirm reinstall (no deletion)",
+    btn_repair: "Repair",
+    btn_uninstall: "Uninstall",
+    btn_link: "Re-link to gateway",
+    btn_confirm: "Confirm: ",
+    btn_stop_all: "Stop all",
+    hb_stop_all: "Stop all",
+    no_processes: "No active processes for ",
+    no_tools: "No tools installed.",
+    status_not_installed: "not installed",
+    status_standalone: "standalone \u2014 re-linkable",
+    status_managed: "already managed by GM",
+    verified_ok: "\u2713 Uninstalled and verified.",
+    verify_failed: "\u2717 Verification failed: ",
+    no_standalone: "No standalone tools to re-link.",
+    linked_ok: "\u2713 Re-linked: ",
+    restart_hint: ". Restart AI apps.",
+    none_linked: "No tools re-linked",
+    loading: "loading\u2026",
+    no_config: "config unavailable",
+    no_repair: "repair unavailable",
+    no_uninstall: "uninstall unavailable",
+    no_link: "state unavailable",
+    interactive_hint: "\u23c9 This command asks questions: it will open in a terminal window.",
+    migrating: "Migrating\u2026",
+    clients_title: "MCP clients",
+    clients_sub: "Choose where to register Gray Matter. Nothing is overwritten: existing entries are merged, with backup and verification.",
+    clients_refresh: "Re-check",
+    clients_register: "Register in selected",
+    repair_will_close: "The installer will close this control center to release the files. The repair KEEPS RUNNING: reopen the control center to see how it went.",
+    last_op_running: "Last operation interrupted (the control center was closed). Here is what had arrived:",
+    last_op_done: "Last operation finished, exit",
+    clients_hide: "Close",
+    clients_none: "Select at least one client.",
+    clients_problems: "Problems found:",
+    clients_ok: "Registration complete",
+    clients_absent: "not detected",
+    migrate_title: " tools installed but not in GME registry:",
+    btn_migrate_all: "Migrate All",
+    btn_ignore: "Ignore",
+    infra_title: "Infrastructure",
+    tunnel_title: "Tunnel",
+    tunnel_backend: "Backend",
+    tunnel_cloudflare_creds: "Cloudflare Credentials",
+    tunnel_config: "Configuration",
+    tunnel_none: "No backend found \u2014 install cloudflared or neuron[tunnel]",
+    bridge_title: "HTTP Bridge",
+    bridge_server: "Server",
+    bridge_port: "Port",
+    bridge_escalation: "Escalation",
+    bridge_active: "Active",
+    bridge_inactive: "Inactive",
+    bridge_full_suite: "Full suite",
+    bridge_standalone: "Standalone",
+    cloud_title: "Cloud Turso",
+    cloud_database: "Database",
+    cloud_status: "Status",
+    cloud_configured: "Configured",
+    cloud_local: "Local only",
+    cloud_env_var: "Variable",
+    cloud_url: "URL",
+  },
+};
+
+function T(key) { return (STRINGS[LANG] || STRINGS.it)[key] || key; }
+
+async function call(method, payload){
+  // pywebview espone l'Api direttamente; in browser si passa da HTTP.
+  if (window.pywebview && window.pywebview.api && window.pywebview.api[method]){
+    return await window.pywebview.api[method](payload ? JSON.stringify(payload) : "");
+  }
+  const r = await fetch(API + "/api/" + method, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: payload ? JSON.stringify(payload) : ""
+  });
+  return await r.json();
+}
+
+function el(tag, attrs = {}, ...kids){
+  const n = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)){
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) n.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c !== null && c !== undefined)
+    n.append(c.nodeType ? c : document.createTextNode(c));
+  return n;
+}
+
+async function loadCatalog(){
+  let res;
+  try{
+    res = await call("catalog", {lang: LANG});
+  }catch(e){
+    // Mai pagina bianca: si dice cosa succede e si riprova da soli.
+    document.getElementById("body").replaceChildren(
+      el("div", {class:"empty"}, T("no_backend") + " (" + e + ") " + T("retrying")));
+    setTimeout(loadCatalog, 1500);
+    return;
+  }
+  CATALOG = res.envs || [];
+  // La versione in testata: se qui leggi una versione vecchia, gira un venv
+  // stantio — è LA prima cosa da controllare quando "non funziona".
+  if (res.version)
+    document.querySelector("header .sub").textContent = "Control Center · v" + res.version;
+  if (res.error) append("[!] " + res.error, "err");
+  document.getElementById("pyv").textContent = res.python || "";
+  if (!current){
+    const first = CATALOG.find(e => e.installed);
+    current = first ? first.key : (CATALOG[0] && CATALOG[0].key);
+  }
+  renderNav();
+  render();
+}
+
+function renderNav(){
+  const nav = document.getElementById("envs");
+  nav.replaceChildren();
+  for (const e of CATALOG){
+    nav.append(el("button", {
+      class: "env" + (e.installed ? "" : " off"),
+      "aria-current": String(current === e.key),
+      onclick: () => { current = e.key; openCmd = null; renderNav(); render(); }
+    },
+      el("div", {class:"name"},
+        el("span", {class:"dot" + (e.installed ? "" : " off")}), e.label),
+      el("div", {class:"meta"},
+        e.installed ? (e.subtitle + (e.version ? " \u00b7 v" + e.version : ""))
+                    : T("not_installed"))
+    ));
+    if (e.installable)
+      nav.append(el("button", {class:"install", onclick: () => installEnv(e.key)},
+                    "Installa " + e.label));
+  }
+}
+
+function render(){
+  const body = document.getElementById("body");
+  body.replaceChildren();
+  const env = CATALOG.find(e => e.key === current);
+  if (!env) return;
+  if (!env.installed){
+    body.append(el("div", {class:"empty"},
+      env.label + T("not_installed_detail")));
+    return;
+  }
+  if (env.error){
+    body.append(el("div", {class:"empty l-err"}, "Catalog error: " + env.error));
+    return;
+  }
+  if (!env.groups.length){
+    body.append(el("div", {class:"empty"},
+      env.label + T("no_commands")));
+    return;
+  }
+  const procCard = el("div", {class:"cmds"});
+  procCard.append(el("div", {class:"hint"}, "carico…"));
+  setTimeout(() => processPanel(env, procCard), 50);
+  body.append(el("div", {class:"grp"}, el("h3", {}, "Processi"), procCard));
+  for (const g of env.groups){
+    const cards = el("div", {class:"cmds"});
+    for (const c of g.commands) cards.append(commandCard(env, c));
+    body.append(el("div", {class:"grp"}, el("h3", {}, g.label), cards));
+  }
+}
+
+function commandCard(env, c){
+  const id = env.key + ":" + c.name;
+  const open = openCmd === id;
+  const card = el("div", {
+    class:"cmd", "aria-expanded": String(open),
+    onclick: (ev) => {
+      if (ev.target.closest(".form")) return;   // click dentro il form: non richiudere
+      openCmd = open ? null : id; render();
+    }
+  }, el("div", {class:"n"}, c.name), el("div", {class:"h"}, c.help || ""));
+
+  // "Quando serve" solo a card aperta: chiusa, l'elenco deve restare
+  // scorribile a colpo d'occhio; aperta, e' il momento in cui uno si chiede
+  // davvero "e' questo il comando giusto adesso?".
+  if (open && c.when) card.append(el("div", {class:"when"},
+    el("span", {class:"when-k"}, T("when_label")), c.when));
+
+  if (!open) return card;
+
+  // `config` non è un comando come gli altri: è il pannello Impostazioni.
+  // Invece del form generico action/key/value, disegna una card di knob
+  // (toggle/select/campi) che si salvano subito — vale per ogni ambiente che
+  // espone un config (Gray Matter e NeuRAG), zero elenchi a mano.
+  if (c.name === "config"){
+    const panel = el("div", {class:"form"});
+    const knobs = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      T("settings_hint")), knobs);
+    configPanel(env, knobs);
+    card.append(panel);
+    return card;
+  }
+
+  if (c.name === "repair"){
+    const panel = el("div", {class:"form"});
+    const box = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      T("repair_hint")),
+      box);
+    repairPanel(env, box);
+    card.append(panel);
+    return card;
+  }
+
+  if (c.name === "uninstall"){
+    const panel = el("div", {class:"form"});
+    const box = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      T("uninstall_hint")),
+      box);
+    uninstallPanel(env, box);
+    card.append(panel);
+    return card;
+  }
+
+  if (c.name === "link"){
+    const panel = el("div", {class:"form"});
+    const box = el("div", {class:"knobs"});
+    panel.append(el("div", {class:"hint"},
+      T("link_hint")),
+      box);
+    linkPanel(env, box);
+    card.append(panel);
+    return card;
+  }
+
+  const form = el("div", {class:"form"});
+  const inputs = {};
+  const fieldRow = (a) => {
+    let field;
+    if (a.is_flag){
+      field = el("input", {type:"checkbox", id:"f_"+a.dest});
+    } else if (a.choices && a.choices.length){
+      field = el("select", {id:"f_"+a.dest},
+                 ...(a.required ? [] : [el("option", {value:""}, "— (lascia vuoto)")]),
+                 ...a.choices.map(o => el("option", {value:o}, o)));
+    } else {
+      field = el("input", {type:"text", id:"f_"+a.dest,
+                           placeholder: a.required ? (LANG === "en" ? "required" : "obbligatorio") : (LANG === "en" ? "optional" : "facoltativo")});
+    }
+    inputs[a.dest] = {field, spec:a};
+    return el("div", {class:"row"},
+      el("label", {for:"f_"+a.dest}, a.dest.replace(/_/g,"-"),
+         a.required ? el("span",{class:"req"}," *") : ""),
+      el("div", {}, field,
+         a.help ? el("div", {class:"hint"}, a.help) : ""));
+  };
+
+  const required = c.args.filter(a => a.required);
+  const optional = c.args.filter(a => !a.required);
+  for (const a of required) form.append(fieldRow(a));
+
+  // Le opzioni facoltative e il campo libero stanno ripiegati: il caso comune
+  // è "premi Esegui e basta" — nessun parametro misterioso in faccia.
+  const extra = el("input", {type:"text",
+    placeholder: LANG === "en" ? "extra CLI arguments (advanced)" : "argomenti extra da riga di comando (per esperti)"});
+  const adv = el("details", {},
+    el("summary", {class:"hint"}, T("advanced_opts")),
+    ...optional.map(fieldRow),
+    el("div", {class:"row"}, el("label", {}, "extra"), extra));
+  if (optional.length || !required.length) form.append(adv);
+
+  if (c.interactive)
+    form.append(el("div", {class:"hint"},
+      T("interactive_hint")));
+  else if (!required.length)
+    form.append(el("div", {class:"hint"},
+      T("no_params_hint")));
+
+  form.append(el("button", {class:"go",
+    onclick: () => runCmd(env.key, c, inputs, extra.value)}, T("btn_run")));
+  card.append(form);
+  return card;
+}
+
+// --- pannello Ripara (reinstall pulito) ---------------------------------
+async function repairPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, T("loading")));
+  // Se la volta scorsa l'installer ha chiuso questa finestra, l'esito e su
+  // disco e non lo ha mai visto nessuno. Mostrarlo all'apertura del pannello e
+  // il momento giusto: e' esattamente qui che si torna per sapere com'e andata.
+  try {
+    const prev = await call("operation_log", {key: env.key + ":repair"});
+    if (prev && prev.found){
+      append("[repair] " + (prev.running ? T("last_op_running")
+                                         : T("last_op_done") + " " + prev.exit),
+             prev.running ? "warn" : (prev.exit === 0 ? "ok" : "err"));
+      for (const ln of prev.tail.slice(-25)) append("  " + ln, "");
+    }
+  } catch(e){ /* nessun esito precedente: non e' un errore */ }
+  let r;
+  try { r = await call("repair_state", {scope: env.key}); }
+  catch(e){     container.replaceChildren(el("div", {class:"hint"}, "repair: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || T("no_repair")));
+    return;
+  }
+  container.append(el("div", {class:"hint"},
+    "Ambito: " + (r.scope || env.key) + " — reinstall: " + (r.reinstall || "?")));
+  const checks = {};
+  for (const t of (r.targets || [])){
+    const cb = el("input", {type:"checkbox", id:"w_"+t.key});
+    cb.disabled = !t.exists;
+    checks[t.key] = cb;
+    container.append(el("div", {class:"row"},
+      el("label", {for:"w_"+t.key}, t.label,
+         t.exists ? "" : el("span", {class:"hint"}, " (assente)")),
+      el("div", {}, cb, el("div", {class:"hint"}, t.path))));
+  }
+  if (!r.installer)
+    container.append(el("div", {class:"hint", style:"color:var(--warn)"},
+      "⚠ Installer non raggiungibile da qui: farò `pip --force-reinstall` dai sorgenti (se presenti)."));
+  let armed = false;
+  const btn = el("button", {class:"go"}, T("btn_repair"));
+  btn.addEventListener("click", async () => {
+    const wipe = Object.entries(checks)
+      .filter(([k, cb]) => cb.checked && !cb.disabled).map(([k]) => k);
+    if (!armed){
+      armed = true;
+      btn.textContent = wipe.length
+        ? (T("confirm_reinstall_wipe") + wipe.length + " + reinstall")
+        : T("confirm_reinstall_clean");
+      btn.style.background = "var(--err)";
+      setTimeout(() => { armed = false; btn.textContent = T("btn_repair"); btn.style.background = ""; }, 4000);
+      return;
+    }
+    armed = false; btn.textContent = T("btn_repair"); btn.style.background = "";
+    // L'installer ferma OGNI processo del venv di Gray Matter, e questa finestra
+    // e uno di quelli: sparira mentre la riparazione va avanti. Dirlo prima, e
+    // dire dove ritrovare l'esito, e la differenza fra "si e chiuso tutto e non
+    // so cosa sia successo" e un'operazione che si puo seguire.
+    append("[repair] " + T("repair_will_close"), "warn");
+    const rr = await call("repair_run", {scope: env.key, wipe});
+    if (rr && rr.error) append("[!] " + rr.error, "err");
+  });
+  container.append(btn);
+}
+
+// --- pannello Disinstalla ------------------------------------------------
+async function uninstallPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, T("loading")));
+  let r;
+  try { r = await call("uninstall_state", {scope: env.key}); }
+  catch(e){     container.replaceChildren(el("div", {class:"hint"}, "uninstall: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || T("no_uninstall")));
+    return;
+  }
+  container.append(el("div", {class:"hint"}, "Ambito: " + (r.scope || env.key)));
+  const checks = {};
+  for (const t of (r.targets || [])){
+    // Only the venv is a real choice. Hooks and code are removed by every
+    // uninstall — they were rendered as tickboxes whose state was collected
+    // into `checks` and then never sent anywhere, so unticking them looked
+    // like it did something and did not.
+    const optional = t.key === "venv";
+    const cb = el("input", {type:"checkbox", id:"ut_"+t.key});
+    cb.checked = optional ? (t.default === true) : true;
+    cb.disabled = !optional;
+    checks[t.key] = cb;
+    const note = optional
+      ? (t.size ? " — " + t.size : "")
+      : (LANG === "en" ? " — always removed" : " — sempre rimosso");
+    container.append(el("div", {class:"row"},
+      el("label", {for:"ut_"+t.key}, t.label, note,
+         t.exists ? "" : el("span", {class:"hint"}, " (assente)")),
+      el("div", {}, cb, el("div", {class:"hint"}, t.path))));
+  }
+  const dataChecks = {};
+  for (const d of (r.data || [])){
+    const cb = el("input", {type:"checkbox", id:"ud_"+d.key});
+    cb.disabled = !d.exists;
+    dataChecks[d.key] = cb;
+    container.append(el("div", {class:"row"},
+      el("label", {for:"ud_"+d.key}, d.name,
+         d.exists ? "" : el("span", {class:"hint"}, " (assente)")),
+      el("div", {}, cb, el("div", {class:"hint"}, d.path))));
+  }
+  const purgeCb = el("input", {type:"checkbox", id:"upurge"});
+  container.append(el("div", {class:"row"},
+    el("label", {for:"upurge"}, LANG === "en" ? "Purge all" : "Purge totale"),
+    el("div", {}, purgeCb, el("div", {class:"hint"}, LANG === "en" ? "Remove ALL data (ignores above choices)" : "Rimuovi TUTTI i dati (ignora le scelte sopra)"))));
+  const resultBox = el("div", {});
+  let armed = false;
+  const btn = el("button", {class:"go"}, T("btn_uninstall"));
+  btn.addEventListener("click", async () => {
+    if (!armed){
+      armed = true;
+      btn.textContent = T("btn_confirm") + (r.scope || env.key);
+      btn.style.background = "var(--err)";
+      setTimeout(() => { armed = false; btn.textContent = T("btn_uninstall"); btn.style.background = ""; }, 4000);
+      return;
+    }
+    armed = false; btn.textContent = T("btn_uninstall"); btn.style.background = "";
+    btn.disabled = true;
+    const purge = purgeCb.checked;
+    resultBox.replaceChildren(el("div", {class:"hint"}, T("migrating")));
+    const rr = await call("uninstall_run", {scope: env.key, purge_data: purge,
+                                            remove_venv: !!(checks.venv && checks.venv.checked)});
+    btn.disabled = false;
+    resultBox.replaceChildren();
+    if (rr && rr.error){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--err)"}, "Error: " + rr.error));
+      return;
+    }
+    const v = (rr && rr.verification) || {};
+    if (v.ok){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--ok)"},
+        T("verified_ok")));
+    } else {
+      const failed = Object.entries(v.checks || {}).filter(([,ok]) => !ok).map(([k]) => k);
+      resultBox.append(el("div", {class:"hint", style:"color:var(--err)"},
+        T("verify_failed") + (failed.join(", ") || (LANG === "en" ? "unknown" : "sconosciuto"))));
+    }
+  });
+  container.append(btn, resultBox);
+}
+
+// --- pannello Link (gm_link) --------------------------------------------
+
+async function linkPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, T("loading")));
+  let r;
+  try { r = await call("link_state", {}); }
+  catch(e){     container.replaceChildren(el("div", {class:"hint"}, "link: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || T("no_link")));
+    return;
+  }
+  const tools = r.tools || [];
+  if (!tools.length){
+    container.append(el("div", {class:"hint"}, T("no_tools")));
+    return;
+  }
+  const anyStandalone = tools.some(t => t.standalone);
+  const checks = {};
+  for (const t of tools){
+    const label = t.label || t.key;
+    let statusText, statusColor;
+    if (!t.installed){ statusText = T("status_not_installed"); statusColor = "var(--dim)"; }
+    else if (t.standalone){ statusText = T("status_standalone"); statusColor = "var(--warn)"; }
+    else { statusText = T("status_managed"); statusColor = "var(--ok)"; }
+    if (t.standalone){
+      const cb = el("input", {type:"checkbox", id:"lk_"+t.key, checked: true});
+      checks[t.key] = cb;
+      container.append(el("div", {class:"row"},
+        el("label", {for:"lk_"+t.key}, label),
+        el("div", {}, cb, el("span", {class:"hint", style:"color:"+statusColor}, " " + statusText))));
+    } else {
+      container.append(el("div", {class:"row"},
+        el("label", {}, label),
+        el("div", {}, el("span", {class:"hint", style:"color:"+statusColor}, statusText))));
+    }
+  }
+  const resultBox = el("div", {});
+  if (!anyStandalone){
+    resultBox.append(el("div", {class:"hint"}, T("no_standalone")));
+    container.append(resultBox);
+    return;
+  }
+  let armed = false;
+  const btn = el("button", {class:"go"}, T("btn_link"));
+  btn.addEventListener("click", async () => {
+    if (!armed){
+      armed = true;
+      btn.textContent = T("btn_confirm") + (LANG === "en" ? "re-link" : "ricollega");
+      btn.style.background = "var(--warn)";
+      setTimeout(() => { armed = false; btn.textContent = T("btn_link"); btn.style.background = ""; }, 4000);
+      return;
+    }
+    armed = false; btn.textContent = T("btn_link"); btn.style.background = "";
+    btn.disabled = true;
+    const selected = Object.entries(checks).filter(([,cb]) => cb.checked).map(([k]) => k);
+    if (!selected.length){
+      resultBox.replaceChildren(el("div", {class:"hint"}, T("no_tools")));
+      btn.disabled = false;
+      return;
+    }
+    resultBox.replaceChildren(el("div", {class:"hint"}, T("migrating")));
+    const rr = await call("link_run", {tools: selected});
+    btn.disabled = false;
+    resultBox.replaceChildren();
+    if (rr && rr.error){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--err)"}, "Error: " + rr.error));
+      return;
+    }
+    if (rr && rr.ok){
+      resultBox.append(el("div", {class:"hint", style:"color:var(--ok)"},
+        T("linked_ok") + (rr.linked || []).join(", ") + T("restart_hint")));
+    } else {
+      const why = (rr.skipped || []).map(s => s.tool + ": " + s.reason).join("; ");
+      resultBox.append(el("div", {class:"hint", style:"color:var(--warn)"},
+        T("none_linked") + (why ? " (" + why + ")" : "") + "."));
+    }
+  });
+  container.append(btn, resultBox);
+}
+
+// --- pannello Processi ---------------------------------------------------
+async function processPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, T("loading")));
+  let r;
+  try { r = await call("process_list", {scope: env.key}); }
+  catch(e){     container.replaceChildren(el("div", {class:"hint"}, "process: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || (LANG === "en" ? "no processes" : "nessun processo")));
+    return;
+  }
+  const procs = r.processes || [];
+  if (!procs.length){
+    container.append(el("div", {class:"hint"}, T("no_processes") + env.label));
+    return;
+  }
+  for (const p of procs){
+    const stopBtn = el("button", {class:"go", style:"padding:3px 10px;font-size:11px"}, T("btn_stop"));
+    stopBtn.addEventListener("click", async () => {
+      stopBtn.disabled = true;
+      await call("process_stop", {pid: p.pid, scope: env.key});
+      processPanel(env, container);
+    });
+    container.append(el("div", {class:"row"},
+      el("label", {}, p.name + " (PID " + p.pid + ")"),
+      el("div", {}, el("span", {class:"hint"}, p.source), stopBtn)));
+  }
+  const stopAllBtn = el("button", {class:"go", style:"padding:3px 10px;font-size:11px;background:var(--err)"},
+    T("btn_stop_all"));
+  stopAllBtn.addEventListener("click", async () => {
+    stopAllBtn.disabled = true;
+    await call("process_stop", {scope: env.key});
+    processPanel(env, container);
+  });
+  container.append(el("div", {class:"row"}, el("label", {}), stopAllBtn));
+}
+
+// --- pannello Impostazioni (knob) ---------------------------------------
+async function configPanel(env, container){
+  container.replaceChildren(el("div", {class:"hint"}, T("loading")));
+  let r;
+  try { r = await call("config_knobs", {tool: env.key}); }
+  catch(e){     container.replaceChildren(el("div", {class:"hint"}, "config: " + e)); return; }
+  container.replaceChildren();
+  if (!r || !r.ok){
+    container.append(el("div", {class:"hint"}, (r && r.error) || T("no_config")));
+    return;
+  }
+  if (r.note) container.append(el("div", {class:"hint"}, "ℹ " + r.note));
+  for (const k of (r.knobs || [])) container.append(knobRow(env, k));
+}
+
+function knobRow(env, k){
+  const status = el("span", {class:"hint kstat"}, "");
+  const save = (value) => saveKnob(env, k, value, status, badge);
+  let control;
+  if (k.type === "bool"){
+    control = el("input", {type:"checkbox", id:"k_"+k.key});
+    control.checked = !!k.value;
+    control.addEventListener("change", () => save(control.checked));
+  } else if (k.suggest && k.suggest.length){
+    const cur = k.value == null ? "" : String(k.value);
+    const opts = k.suggest.map(String);
+    if (!opts.includes(cur)) opts.push(cur);
+    control = el("select", {id:"k_"+k.key},
+      ...opts.map(o => {
+        const opt = el("option", {value:o}, o === "" ? "(default)" : o);
+        if (o === cur) opt.selected = true;
+        return opt;
+      }));
+    control.addEventListener("change", () => save(control.value));
+  } else {
+    control = el("input", {
+      type: (k.type === "int" || k.type === "float") ? "number" : "text",
+      id:"k_"+k.key, value: k.value == null ? "" : String(k.value)});
+    control.addEventListener("keydown", (e) => {
+      if (e.key === "Enter"){ e.preventDefault(); save(control.value); }});
+    control.addEventListener("blur", () => save(control.value));
+  }
+  const badge = el("span", {class:"pill", style: k.value !== k.default ? "" : "display:none"},
+                   "modificato");
+  return el("div", {class:"row"},
+    el("label", {for:"k_"+k.key}, k.key.replace(/_/g,"-"), " ", badge),
+    el("div", {}, control,
+       k.help ? el("div", {class:"hint"}, k.help) : "", status));
+}
+
+async function saveKnob(env, k, value, status, badge){
+  status.textContent = " salvo…"; status.style.color = "";
+  let r;
+  try { r = await call("config_set", {tool: env.key, key: k.key, value}); }
+  catch(e){ status.textContent = " ✗ " + e; status.style.color = "var(--err)"; return; }
+  if (r && r.ok){
+    k.value = r.value;
+    status.textContent = " ✓"; status.style.color = "var(--ok)";
+    badge.style.display = (r.value !== k.default) ? "" : "none";
+    setTimeout(() => { status.textContent = ""; }, 1400);
+  } else {
+    status.textContent = " ✗ " + ((r && r.error) || "errore");
+    status.style.color = "var(--err)";
+  }
+}
+
+async function runCmd(tool, c, inputs, extra){
+  const args = {};
+  for (const [dest, o] of Object.entries(inputs))
+    args[dest] = o.spec.is_flag ? o.field.checked : o.field.value;
+  const r = await call("run", {tool, command:c.name, args, extra});
+  if (r && r.error) append("[!] " + r.error, "err");
+}
+
+async function installEnv(key){
+  const r = await call("install_env", {key});
+  if (r && r.error) append("[!] " + r.error, "err");
+  setTimeout(loadCatalog, 4000);   // a install finita il catalogo si riallinea
+}
+
+function append(line, tag){
+  const log = document.getElementById("log");
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.append(el("div", {class: tag ? "l-" + tag : ""}, line));
+  while (log.childElementCount > 4000) log.firstElementChild.remove();
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+document.getElementById("btn-start").addEventListener("click", () => call("run", {tool:"gray-matter", command:"start", args:{}}));
+document.getElementById("btn-stop").addEventListener("click", () => call("stop", {}));
+
+// Risposta a un comando interattivo: Invio o il pulsante. Si svuota il campo
+// PRIMA della chiamata — chi risponde in fretta a due domande di fila non deve
+// rischiare di rimandare la prima.
+async function sendStdin(){
+  const box = document.getElementById("stdin-input");
+  const text = box.value;
+  box.value = "";
+  await call("send_input", {text: text});
+  box.focus();
+}
+document.getElementById("btn-send").addEventListener("click", sendStdin);
+document.getElementById("stdin-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter"){ e.preventDefault(); sendStdin(); }
+});
+document.getElementById("btn-clear").addEventListener("click", async () => {
+  await call("clear_log");
+  document.getElementById("log").replaceChildren();
+});
+
+// Console collassabile. La barra con Avvia/Ferma resta SEMPRE visibile: chiudere
+// la console non deve togliere i comandi, solo il rumore.
+function applyConsoleCollapsed(){
+  const off = localStorage.getItem("gm_console_collapsed") === "1";
+  document.querySelector("footer").classList.toggle("collapsed", off);
+  const b = document.getElementById("btn-console-toggle");
+  b.textContent = off ? "▴" : "▾";
+  b.title = T(off ? "console_expand" : "console_collapse");
+}
+document.getElementById("btn-console-toggle").addEventListener("click", () => {
+  const off = localStorage.getItem("gm_console_collapsed") === "1";
+  localStorage.setItem("gm_console_collapsed", off ? "0" : "1");
+  applyConsoleCollapsed();
+});
+
+// Copia tutta la console: serve per mandare la trace di un errore. WebView2/
+// pywebview a volte non danno navigator.clipboard → fallback textarea+execCommand,
+// e come ultima rete un metodo Api lato Python che scrive negli appunti.
+document.getElementById("btn-copy").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-copy");
+  const text = document.getElementById("log").innerText || "";
+  const done = (ok) => {
+    btn.textContent = ok ? T("copied") : T("copy_fail");
+    setTimeout(() => { btn.textContent = T("btn_copy"); }, 1500);
+  };
+  if (!text.trim()){ done(false); return; }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(text); done(true); return;
+    }
+  } catch(e){ /* cade nel fallback */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed"; ta.style.top = "-1000px";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok){ done(true); return; }
+  } catch(e){ /* ultima rete: Python */ }
+  try {
+    const r = await call("copy_clipboard", {text});
+    done(!!(r && r.ok));
+  } catch(e){ done(false); }
+});
+
+// Card collassabile. Lo stato sta in localStorage per chiave, non nel DOM:
+// refreshInfra() ricostruisce le card da zero a ogni giro, quindi qualunque
+// stato tenuto nell'elemento verrebbe buttato via al primo refresh.
+function infraCard(key, title){
+  const card = el("div", {class:"infra-card"});
+  if (localStorage.getItem("gm_collapsed_" + key) === "1") card.classList.add("collapsed");
+  const h = el("h4", {}, title);
+  h.addEventListener("click", () => {
+    const now = card.classList.toggle("collapsed");
+    localStorage.setItem("gm_collapsed_" + key, now ? "1" : "0");
+  });
+  card.append(h);
+  return card;
+}
+
+async function refreshInfra(){
+  try {
+    const [tunnel, bridge, cloud] = await Promise.all([
+      call("tunnel_state"), call("bridge_state"), call("cloud_state")
+    ]);
+    const container = document.getElementById("infra-panels");
+    container.replaceChildren();
+
+    // Tunnel card
+    const tCard = infraCard("tunnel", T("tunnel_title"));
+    if (tunnel.ok && tunnel.backends.length){
+      tCard.append(el("div", {class:"infra-row"},
+        el("span", {class:"label"}, T("tunnel_backend")),
+        el("span", {class:"value"}, tunnel.backends.join(", "))));
+      tCard.append(el("div", {class:"infra-row"},
+        el("span", {class:"label"}, T("tunnel_cloudflare_creds")),
+        el("span", {class:"value " + (tunnel.has_cloudflare_creds ? "ok" : "warn")},
+          tunnel.has_cloudflare_creds ? "\u2713" : "\u2717")));
+      if (tunnel.config && tunnel.config.backend){
+        tCard.append(el("div", {class:"infra-row"},
+          el("span", {class:"label"}, T("tunnel_config")),
+          el("span", {class:"value"}, tunnel.config.backend + (tunnel.config.tunnel_name ? " (" + tunnel.config.tunnel_name + ")" : ""))));
+      }
+    } else {
+      tCard.append(el("div", {class:"infra-row"},
+        el("span", {class:"value warn"}, T("tunnel_none"))));
+    }
+    container.append(tCard);
+
+    // Bridge card
+    const bCard = infraCard("bridge", T("bridge_title"));
+    if (bridge.ok){
+      bCard.append(el("div", {class:"infra-row"},
+        el("span", {class:"label"}, T("bridge_server")),
+        el("span", {class:"value " + (bridge.full_suite ? "ok" : "")},
+          bridge.full_suite ? T("bridge_full_suite") : T("bridge_standalone"))));
+      for (const b of bridge.bridges){
+        const active = bridge.active_ports.includes(b.default_port);
+        bCard.append(el("div", {class:"infra-row"},
+          el("span", {class:"label"}, b.key),
+          el("span", {class:"value"},
+            el("span", {class:"infra-tag " + (active ? "on" : "off")},
+              active ? T("bridge_active") : T("bridge_inactive")),
+            " : " + b.default_port + (b.escalates_to_gm ? " \u2192 gm" : ""))));
+      }
+    }
+    container.append(bCard);
+
+    // Cloud card
+    const cCard = infraCard("cloud", T("cloud_title"));
+    if (cloud.ok){
+      for (const [name, db] of Object.entries(cloud.databases)){
+        cCard.append(el("div", {class:"infra-row"},
+          el("span", {class:"label"}, name),
+          el("span", {class:"value " + (db.configured ? "ok" : "warn")},
+            db.configured ? "\u2713 " + T("cloud_configured") : "\u25cb " + T("cloud_local")),
+          el("span", {class:"hint"}, db.env_var)));
+        // The URL was already computed server-side (truncated to 50 chars)
+        // but silently dropped here \u2014 cramped-panel complaint, not missing data.
+        if (db.configured && db.url){
+          cCard.append(el("div", {class:"infra-row"},
+            el("span", {class:"label"}, T("cloud_url")),
+            el("span", {class:"value"}, db.url)));
+        }
+      }
+    }
+    container.append(cCard);
+  } catch(e){ /* backend down */ }
+}
+
+async function poll(){
+  try{
+    const r = await call("poll_log");
+    for (const l of (r.lines || [])) append(l.line, l.tag);
+    const running = Object.values(r.running || {});
+    document.getElementById("running").textContent =
+      running.length ? "▶ " + running.join(", ") : "";
+    // La riga di risposta esiste solo mentre un comando gira: un input attivo
+    // senza nessuno che ascolti è solo un modo per confondere.
+    const bar = document.getElementById("stdin-bar");
+    const wasHidden = bar.hidden;
+    bar.hidden = running.length === 0;
+    if (wasHidden && !bar.hidden) document.getElementById("stdin-input").focus();
+  }catch(e){ /* finestra in chiusura */ }
+  setTimeout(poll, 400);
+}
+
+async function refreshHealth(){
+  try {
+    const r = await call("health_state");
+    if (!r.ok) return;
+    const bar = document.getElementById("health-bar");
+    bar.replaceChildren();
+    const tools = r.tools || [];
+    for (const t of tools){
+      const cls = t.status || "stopped";
+      const items = [];
+      items.push(el("span", {class:"dot"}));
+      items.push(el("span", null, t.label));
+      if (t.version) items.push(el("span", {class:"val"}, "v" + t.version));
+      if (t.health && t.health.ping_ms != null)
+        items.push(el("span", {class:"val"}, t.health.ping_ms + "ms"));
+      if (t.health && t.health.memory_mb != null)
+        items.push(el("span", {class:"val"}, t.health.memory_mb + "MB"));
+      // Toggle button: running -> stop, stopped -> start
+      const running = cls === "running";
+      const btn = el("button", {class:"hb"}, running ? "\u25a0" : "\u25b6");
+      btn.title = running ? "Stop " + t.label : "Start " + t.label;
+      btn.onclick = async () => {
+        btn.disabled = true;
+        if (running){
+          await call("run", {tool: t.key, command: "stop", args: {}});
+        } else {
+          await call("run", {tool: t.key, command: "start", args: {}});
+        }
+        refreshHealth();  // immediate refresh
+      };
+      items.push(btn);
+      bar.append(el("div", {class:"health-item " + cls}, ...items));
+    }
+    // "Stop All" button for GM daemon
+    if (tools.length > 0){
+      const stopAll = el("button", {class:"stop-all"}, T("hb_stop_all"));
+      stopAll.onclick = async () => {
+        stopAll.disabled = true;
+        await call("stop", {});
+        setTimeout(refreshHealth, 500);
+      };
+      bar.append(stopAll);
+    }
+  } catch(e){ /* backend down */ }
+  setTimeout(refreshHealth, 15000);
+}
+
+// ── MCP clients: detect + verify + merge ─────────────────────────
+let CLIENT_SEL = new Set();
+
+async function loadClients(){
+  const panel = document.getElementById("clients-panel");
+  const grid  = document.getElementById("clients-grid");
+  const probs = document.getElementById("clients-problems");
+  let st;
+  try { st = await call("clients_state", ""); }
+  catch(e){ return; }
+  if (!st || !st.ok) return;
+
+  grid.replaceChildren();
+  for (const c of (st.clients || [])){
+    const bad = !!c.problem;
+    const item = el("div", {class:"client-item" + (c.detected ? "" : " absent") + (bad ? " bad" : "")});
+    const dot  = el("span", {class:"dot" + (c.registered ? " on" : "") + (bad ? " warn" : "")});
+    const box  = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = CLIENT_SEL.has(c.key) || (c.detected && !c.registered);
+    if (box.checked) CLIENT_SEL.add(c.key);
+    box.onchange = () => { box.checked ? CLIENT_SEL.add(c.key) : CLIENT_SEL.delete(c.key); };
+    item.append(box, dot, el("span", {}, c.label));
+    if (!c.detected) item.append(el("span", {class:"path"}, " " + T("clients_absent")));
+    item.onclick = (ev) => { if (ev.target !== box){ box.checked = !box.checked; box.onchange(); } };
+    grid.append(item);
+  }
+
+  // The error register: never silently skip a config we could not use.
+  const withProblems = (st.clients || []).filter(c => c.problem);
+  if (withProblems.length){
+    probs.replaceChildren(el("b", {}, T("clients_problems")));
+    for (const c of withProblems) probs.append(el("div", {}, c.label + ": " + c.problem));
+    probs.style.display = "";
+  } else { probs.style.display = "none"; }
+  panel.classList.add("show");
+}
+
+async function registerClients(){
+  const picked = [...CLIENT_SEL];
+  if (!picked.length){ append("[clients] " + T("clients_none"), "warn"); return; }
+  const res = await call("clients_register", JSON.stringify({clients: picked, gateway: true}));
+  if (!res.ok && res.error){ append("[clients] " + res.error, "err"); return; }
+  for (const r of (res.results || [])){
+    const ok = r.ok || r.action === "skipped";
+    append("[clients] " + r.client + ": " + r.action + (r.detail ? " \u2014 " + r.detail : ""),
+           ok ? "ok" : "err");
+    if (r.snippet) append(r.snippet, "warn");   // JSONC: hand the user valid JSON
+  }
+  if (res.ok) append("[clients] " + T("clients_ok"), "ok");
+  loadClients();
+}
+
+async function checkMigration(){
+  try {
+    const r = await call("migrate", "{}");
+    if (!r.ok) return;
+    const old = r.old_installs || [];
+    if (old.length === 0) return;
+    
+    const banner = document.getElementById("migration-banner");
+    const msg = document.getElementById("migration-msg");
+    const tools = document.getElementById("migration-tools");
+    
+    msg.innerHTML = "<b>" + old.length + "</b>" + T("migrate_title");
+    tools.replaceChildren();
+    for (const t of old){
+      const pill = el("div", {class:"tool-pill"},
+        el("span", {class:"name"}, t.label),
+        t.venv ? el("span", {class:"path"}, t.venv) : null
+      );
+      tools.append(pill);
+    }
+    banner.classList.add("show");
+    
+    // Wire buttons
+    document.getElementById("btn-migrate-all").onclick = async () => {
+      const res = await call("migrate", JSON.stringify({all: true}));
+      append("[migrate] " + (res.migrated || []).length + " tools registered", "ok");
+      banner.classList.remove("show");
+      loadCatalog(); // refresh sidebar
+    };
+    document.getElementById("btn-migrate-dismiss").onclick = () => {
+      banner.classList.remove("show");
+    };
+  } catch(e){ /* backend down */ }
+}
+
+// ── i18n: apply language to all static UI elements ────────────────
+function applyLang(){
+  localStorage.setItem("gm_lang", LANG);
+  document.documentElement.lang = LANG;
+  document.getElementById("loading-msg").textContent = T("loading_catalog");
+  document.getElementById("nav-title").textContent = T("envs_title");
+  document.getElementById("console-title").textContent = T("console_title");
+  applyConsoleCollapsed();
+  document.getElementById("btn-start").textContent = T("btn_start");
+  document.getElementById("btn-stop").textContent = T("btn_stop");
+  document.getElementById("btn-copy").textContent = T("btn_copy");
+  document.getElementById("btn-copy").title = T("copy_hint");
+  document.getElementById("btn-clear").textContent = T("btn_clear");
+  document.getElementById("btn-send").textContent = T("btn_send");
+  document.getElementById("stdin-label").textContent = T("stdin_label");
+  document.getElementById("stdin-input").placeholder = T("stdin_hint");
+  document.getElementById("btn-migrate-all").textContent = T("btn_migrate_all");
+  document.getElementById("clients-title").textContent = T("clients_title");
+  document.getElementById("clients-sub").textContent = T("clients_sub");
+  document.getElementById("btn-clients-refresh").textContent = T("clients_refresh");
+  document.getElementById("btn-clients-register").textContent = T("clients_register");
+  document.getElementById("btn-clients-hide").textContent = T("clients_hide");
+  document.getElementById("btn-migrate-dismiss").textContent = T("btn_ignore");
+  // Re-render sidebar + body with new lang
+  if (CATALOG.length){ renderNav(); render(); }
+}
+
+// Wire language selector
+const langSel = document.getElementById("lang-select");
+langSel.value = LANG;
+langSel.addEventListener("change", () => {
+  LANG = langSel.value;
+  applyLang();
+  // Le descrizioni dei comandi arrivano dal backend gia' nella lingua giusta:
+  // senza ricaricare il catalogo restavano nella lingua precedente, con
+  // l'interfaccia tradotta a meta'.
+  loadCatalog();
+});
+
+loadCatalog();
+poll();
+refreshHealth();
+setTimeout(checkMigration, 800);
+document.getElementById("btn-clients-refresh").onclick = loadClients;
+document.getElementById("btn-clients-register").onclick = registerClients;
+document.getElementById("btn-clients-hide").onclick = () =>
+  document.getElementById("clients-panel").classList.remove("show");
+setTimeout(loadClients, 1000);
+setTimeout(refreshInfra, 1200);
+applyLang(); // initial apply
+</script>
+</body>
+</html>

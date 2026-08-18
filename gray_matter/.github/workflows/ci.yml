@@ -1,0 +1,86 @@
+name: CI
+
+# Gray Matter had no CI at all until 2026-08-03: 466 tests that no automation
+# ever ran. That is how v1.3.0 shipped with the vendored Gray Matter wheels
+# still at 1.2.0 — `test_gui_bundling` calls itself "THE stale-release guard",
+# it was correct, it was red, and nothing interrogated it.
+#
+# WHY THREE CHECKOUTS
+# Six test files reach for the sibling repos (`parents[2]`): the packaging guard
+# reads neuron/ and neurag/ vendor dirs, the handshake guard compares the client
+# assets byte for byte. Checked out alone, those tests would have to be skipped
+# — and a guard that stays silent is indistinguishable from one that approves,
+# which is the exact failure this workflow exists to end. So the siblings come
+# along, laid out the way the tests expect:
+#
+#     <workspace>/gray_matter   <workspace>/neuron   <workspace>/neurag
+#
+# All three are INSTALLED, not merely checked out. The first CI run said so:
+# 42 tests failed on `No module named 'neuron.paths'`. Several suites reach the
+# peers by module name through parametrization (`[neuron.clients]`) rather than
+# a top-level import, so having the files on disk is not enough — a grep for
+# import statements does not find them, and this workflow found them on the
+# first try. Which is the argument for having it.
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      # PERCHE' IL REF DEI SIBLING SI RISOLVE
+      # Un cambiamento puo' attraversare i tre repo — l'handshake vive in tutti
+      # e tre, e il registro GME e' letto da un mirror che sta nei peer. Presi
+      # sempre dal loro DEFAULT, i sibling facevano confrontare al guard una
+      # meta' nuova e una meta' vecchia, e una modifica coerente risultava rossa
+      # (successo davvero: 3 test rossi su un branch verde in locale). Se esiste
+      # un branch omonimo di la', e' quello che va provato insieme a questo.
+      # Ref vuoto = branch di default, cioe' il comportamento di prima.
+      - name: Resolve the sibling ref
+        id: peers
+        shell: bash
+        run: |
+          BR="${{ github.head_ref || github.ref_name }}"
+          resolve() {   # $1 = repo su GitHub, $2 = chiave di output
+            if git ls-remote --exit-code --heads "https://github.com/recla93/$1.git" "$BR" >/dev/null 2>&1; then
+              echo "$2=$BR" >> "$GITHUB_OUTPUT"; echo "  $1 -> $BR"
+            else
+              echo "$2=" >> "$GITHUB_OUTPUT"; echo "  $1 -> (default)"
+            fi
+          }
+          resolve Neuron neuron
+          resolve NeuRAG neurag
+
+      - uses: actions/checkout@v4
+        with:
+          path: gray_matter
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/Neuron
+          ref: ${{ steps.peers.outputs.neuron }}
+          path: neuron
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recla93/NeuRAG
+          ref: ${{ steps.peers.outputs.neurag }}
+          path: neurag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the suite
+        run: |
+          pip install -e ./gray_matter[dev]
+          pip install -e ./neuron
+          pip install -e ./neurag
+
+      - name: Check syntax
+        working-directory: gray_matter
+        run: python -m compileall .
+
+      - name: Run tests
+        working-directory: gray_matter
+        run: python -m pytest tests/ -v

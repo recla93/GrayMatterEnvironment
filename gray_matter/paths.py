@@ -1,0 +1,403 @@
+"""Install-path SSOT + install manifest for the trio (INSTALLER-UX §3–4).
+
+One place that resolves every location install/uninstall touch, and a manifest
+that records exactly what was written — so uninstall removes exactly that, no
+guessing. Stdlib only. The env override GM_HOME roots everything under one dir
+(handy for tests and isolated installs).
+
+Layout (per-OS base = %LOCALAPPDATA% on Windows, $XDG_DATA_HOME|~/.local/share else):
+    <base>/graymatter/        app/, config.json, logs/, manifest.json, pids.json, bridges.json
+    <base>/<slug>/graphs      Neuron graph store (slug default 'neuron')
+    <base>/neurag/knowledge.db NeuRAG knowledge base
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+
+# Must match neuron/config.py:resolve_slug(), which defaults to "neuron". It
+# defaulted to "neuron5" here, so Neuron wrote its graphs to <base>/neuron while
+# Gray Matter looked in <base>/neuron5 — that divergence is what split a real
+# user's memory across two folders. Only used as the fallback for when Neuron
+# is not importable; neuron_graphs() asks the peer first.
+SLUG = os.environ.get("NEURON_SLUG", "neuron")
+MANIFEST_SCHEMA = 1
+
+
+SUITE_DIR = "GrayMatterEnvironment"
+
+
+def _os_base() -> Path:
+    """La radice dati per-OS. Regola identica nei tre tool."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.join(
+            os.path.expanduser("~"), ".local", "share")
+    # LOCALAPPDATA/XDG vuoti (servizio, scheduled task, env ripulito) davano un
+    # path RELATIVO: la cartella finiva nella cwd del processo di turno. È il
+    # buco che gme.user_base() documenta di aver gia' tappato una volta.
+    return Path(base or os.path.expanduser("~"))
+
+
+def _user_base() -> Path:
+    """La radice UNICA della suite: <base>/GrayMatterEnvironment.
+
+    Prima erano quattro radici scollegate — `graymatter/` (GM),
+    `GrayMatterEnvironment/` (solo il registro), `neuron/graphs`, `neurag/` — e
+    nessuna diceva all'utente che appartenevano allo stesso prodotto. Una sola
+    cartella per i path json e per i dati dei tool: si vede cosa c'e', si copia
+    su un'altra macchina, si cancella, in un colpo solo.
+
+    GM_HOME resta l'override e vale la RADICE SUITE (non la base dell'OS), come
+    lo usano gia' install.ps1 e install.sh.
+    """
+    if os.environ.get("GM_HOME"):
+        return Path(os.environ["GM_HOME"])
+    return _os_base() / SUITE_DIR
+
+
+# --- Code / control (removed on uninstall) ---------------------------------
+def gm_home() -> Path:      return _user_base() / "graymatter"
+def config_file() -> Path:  return gm_home() / "config.json"
+def logs_dir() -> Path:     return gm_home() / "logs"
+def manifest_path() -> Path: return gm_home() / "manifest.json"
+def pids_path() -> Path:    return gm_home() / "pids.json"
+
+
+# --- User MEMORY (never wiped without explicit consent — INSTALLER-UX §6) ---
+# SoC: GM NON definisce i path dei peer, li SCOPRE chiamando i peer (ognuno è la
+# SSOT dei propri). Import lazy + fallback storico se il peer non è installato,
+# così GM standalone non si rompe. (richiesta 2026-07-22: SSOT/SoC ai massimi)
+def neuron_graphs() -> Path:
+    try:
+        from neuron import paths as _np
+        return _np.graphs_dir()
+    except Exception:  # noqa: BLE001 — Neuron non installato: fallback storico
+        return legacy_or_new(_os_base() / SLUG / "graphs",
+                             _user_base() / SLUG / "graphs")
+
+
+def legacy_or_new(legacy: Path, new: Path) -> Path:
+    """LA regola di transizione, una sola volta: se i dati stanno ancora nella
+    vecchia posizione e la nuova non esiste, si continua a leggere la vecchia.
+
+    Cambiare dove si guarda non deve MAI poter far sparire una memoria: il
+    trasloco lo fa `migrate_to_suite_root()`, esplicitamente, e finche' non e'
+    avvenuto tutto continua a funzionare da dov'e'."""
+    try:
+        if new.exists():
+            return new
+        if legacy.exists():
+            return legacy
+    except OSError:
+        pass
+    return new
+
+
+def _neurag_dir_fallback() -> Path:
+    """Come NeuRAG risolve la SUA cartella, senza poterlo importare.
+
+    Deve restare allineato a `neurag/paths.py:data_dir()`, inclusa la regola
+    "il vault esistente vince": NeuRAG ha scritto per anni in
+    `~/.local/share/neurag` su OGNI OS, quindi su Windows indovinare solo
+    `%LOCALAPPDATA%\\neurag` puntava a una cartella vuota mentre il vault vero
+    stava altrove."""
+    if os.environ.get("NEURAG_HOME"):
+        return Path(os.environ["NEURAG_HOME"])
+    current = _user_base() / "neurag"
+    for legacy in (_os_base() / "neurag", Path.home() / ".local" / "share" / "neurag"):
+        if current != legacy and legacy.exists() and not current.exists():
+            return legacy
+    return current
+
+
+def neurag_db() -> Path:
+    try:
+        from neurag import paths as _rp
+        return _rp.db_path()
+    except Exception:  # noqa: BLE001 — NeuRAG non installato: fallback storico
+        return _neurag_dir_fallback() / "knowledge.db"
+
+
+def neurag_config() -> Path:
+    try:
+        from neurag import paths as _rp
+        return _rp.config_path()
+    except Exception:  # noqa: BLE001 — stessa regola del vault (vedi sopra)
+        return _neurag_dir_fallback() / "config.json"
+
+
+def gm_bridges() -> Path:    return gm_home() / "bridges.db"   # was bridges.json (migrated once)
+def gm_state() -> Path:      return gm_home() / "state.db"    # blackboard (TTL + versioni)
+
+
+def migrate_to_suite_root(*, dry_run: bool = False) -> list[dict]:
+    """Porta le quattro vecchie radici sotto ``<base>/GrayMatterEnvironment``.
+
+    COPIA e verifica, poi rimuove l'originale — mai un move cieco: se la copia
+    non arriva intera, l'originale e' ancora li' ed e' `legacy_or_new()` a
+    continuare a leggerlo. Idempotente: rilanciarla non fa nulla.
+
+    Non tocca il venv: non e' spostabile (pyvenv.cfg e gli script hanno path
+    assoluti) e i client MCP registrati puntano al suo interprete. Quello si
+    sposta ricreandolo, cioe' al prossimo -Clear.
+    """
+    import shutil
+
+    suite = _user_base()
+    base = _os_base()
+    moves = [
+        (base / "graymatter", suite / "graymatter"),
+        (base / SLUG, suite / SLUG),
+        (base / "neurag", suite / "neurag"),
+        (Path.home() / ".local" / "share" / "neurag", suite / "neurag"),
+        (base / SUITE_DIR / "registry", suite / "registry"),   # no-op se gia' li'
+    ]
+    # Il registro piatto pre-suite: i .json stanno nella radice suite stessa.
+    out: list[dict] = []
+    for src, dst in moves:
+        try:
+            if not src.exists() or src.resolve() == dst.resolve():
+                continue
+        except OSError:
+            continue
+        rec = {"from": str(src), "to": str(dst), "ok": False, "detail": ""}
+        if dry_run:
+            rec.update(ok=True, detail="[dry-run]")
+            out.append(rec)
+            continue
+        try:
+            if dst.exists():
+                rec["detail"] = "destinazione gia' presente: lasciato dov'e'"
+                out.append(rec)
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src, dst)
+            src_n = sum(1 for _ in src.rglob("*") if _.is_file())
+            dst_n = sum(1 for _ in dst.rglob("*") if _.is_file())
+            if dst_n < src_n:
+                rec["detail"] = f"copia incompleta ({dst_n}/{src_n}): originale intatto"
+                out.append(rec)
+                continue
+            shutil.rmtree(src, ignore_errors=True)
+            rec.update(ok=True, detail=f"{dst_n} file")
+        except OSError as exc:
+            rec["detail"] = str(exc)
+        out.append(rec)
+
+    # Registro piatto -> registry/
+    flat = suite
+    reg = suite / "registry"
+    try:
+        loose = [p for p in flat.glob("*.json")] if flat.is_dir() else []
+        if loose and not dry_run:
+            reg.mkdir(parents=True, exist_ok=True)
+            for p in loose:
+                dest = reg / p.name
+                if not dest.exists():
+                    shutil.copy2(p, dest)
+                p.unlink(missing_ok=True)
+            out.append({"from": str(flat) + "/*.json", "to": str(reg),
+                        "ok": True, "detail": f"{len(loose)} entry"})
+        elif loose:
+            out.append({"from": str(flat) + "/*.json", "to": str(reg),
+                        "ok": True, "detail": "[dry-run]"})
+    except OSError as exc:
+        out.append({"from": str(flat), "to": str(reg), "ok": False, "detail": str(exc)})
+    return out
+
+
+def data_paths() -> dict:
+    """The user's memory — treated specially at uninstall (interactive prompt).
+
+    SSOT: the GUI panel (`cli._uninstall_targets`) and the removal plan both read
+    THIS. They used to enumerate their own lists, and the panel's extra
+    `neurag_config` row was therefore offered to the user and then removed by
+    nothing — a surface you could tick that no action ever handled.
+    """
+    return {"neuron_graphs": neuron_graphs(),
+            "gm_bridges": gm_bridges(),
+            "neurag_db": neurag_db(),
+            "neurag_config": neurag_config()}
+
+
+# --- The venv: the biggest thing the installer writes -----------------------
+# It was in no model at all: `app_dir()` (<home>/app) was labelled "the code" in
+# the uninstall panel and is an empty folder nothing ever writes into, while the
+# real code — GM plus whichever peers share the interpreter, dependencies and all
+# — sat in a venv that uninstall never mentioned and never removed.
+def gm_venv() -> "Path | None":
+    """Where GM is installed, per the manifest; else this venv if we are in one.
+
+    The manifest is authoritative because the location has changed (installs made
+    before 1.4.1 live in `<base>/gray-matter/.venv`, not `<base>/graymatter/.venv`)
+    and a new uninstaller still has to find an old one."""
+    try:
+        rec = Manifest.load().data.get("venv")
+        if rec and Path(rec).is_dir():
+            return Path(rec)
+    except Exception:  # noqa: BLE001
+        pass
+    import sys
+    if sys.prefix != sys.base_prefix:      # running from a venv = that's the one
+        return Path(sys.prefix)
+    return None
+
+
+def venv_peers() -> list:
+    """Trio tools other than GM sharing gm_venv(), per the manifest.
+
+    Removing the venv removes THEIR runtime too, which is why uninstall shows it
+    as its own unticked row instead of folding it into "remove the code"."""
+    try:
+        comps = Manifest.load().components()
+    except Exception:  # noqa: BLE001
+        return []
+    return sorted(k for k in comps if k not in ("gray_matter", "gray-matter"))
+
+
+def dir_size(path) -> int:
+    """Bytes under *path* (0 if unreadable). Best-effort: the number exists to
+    tell the user a venv is worth 1 GB, not to be accounted to the byte."""
+    total = 0
+    try:
+        for entry in os.scandir(path):
+            try:
+                total += entry.stat(follow_symlinks=False).st_size
+                if entry.is_dir(follow_symlinks=False):
+                    total += dir_size(entry.path)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return total
+
+
+def human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} GB"
+
+
+# --- Source discovery: GM registra il PROPRIO sorgente, SCOPRE quelli dei peer
+# SoC/SSOT: ogni componente è la fonte di verità del proprio path sorgente
+# (`<comp>.paths.source_dir()`). GM tiene solo il PROPRIO record e, per repair/
+# reinstall/GUI, COMPONE la vista chiedendo ai peer — non li ridefinisce.
+def env_file() -> Path:
+    return gm_home() / "paths.json"          # record del sorgente DI GM
+
+
+def record_self(source: "str | Path | None" = None) -> dict:
+    """GM registra la propria cartella sorgente (repo). La chiama l'installer.
+    I peer registrano sé stessi con i loro `record-paths`. Idempotente."""
+    data = {}
+    try:
+        data = json.loads(env_file().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        data = {}
+    if source and (Path(source) / "pyproject.toml").exists():
+        data["source"] = str(Path(source).resolve())
+    data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        f = env_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return data
+
+
+def _gm_source() -> Path:
+    try:
+        rec = json.loads(env_file().read_text(encoding="utf-8")).get("source")
+        if rec and Path(rec).exists():
+            return Path(rec)
+    except Exception:  # noqa: BLE001
+        pass
+    return Path(__file__).resolve().parent   # .../gray_matter (posizione pacchetto)
+
+
+def source_dir(component: str) -> "Path | None":
+    """Cartella sorgente (repo) di un componente. GM la conosce per sé, i peer la
+    ESPONGONO loro (`<comp>.paths.source_dir()`) → GM chiede, non hardcoda."""
+    try:
+        if component == "gray-matter":
+            p = _gm_source()
+        elif component == "neuron":
+            from neuron import paths as _np
+            p = _np.source_dir()
+        elif component == "neurag":
+            from neurag import paths as _rp
+            p = _rp.source_dir()
+        else:
+            return None
+        return p if p and Path(p).exists() else None
+    except Exception:  # noqa: BLE001 — peer non installato
+        return None
+
+
+def discover_sources() -> dict:
+    """Vista composta {componente: sorgente} chiedendo a ciascuno il proprio."""
+    out = {}
+    for c in ("gray-matter", "neuron", "neurag"):
+        d = source_dir(c)
+        if d:
+            out[c] = str(d)
+    return out
+
+
+def installer_script() -> "Path | None":
+    """L'installer completo (install.ps1/sh) dal sorgente gray-matter."""
+    gm = source_dir("gray-matter")
+    if not gm:
+        return None
+    ps1, sh = gm / "install.ps1", gm / "install.sh"
+    if os.name == "nt" and ps1.exists():
+        return ps1
+    if sh.exists():
+        return sh
+    return ps1 if ps1.exists() else None
+
+
+class Manifest:
+    """Records what the installer wrote so uninstall can undo it precisely."""
+
+    def __init__(self, data: dict | None = None):
+        self.data = data or {"schema": MANIFEST_SCHEMA, "components": {},
+                             "clients": [], "hooks": {}, "pids": []}
+
+    @classmethod
+    def load(cls, path=None) -> "Manifest":
+        try:
+            return cls(json.loads(Path(path or manifest_path()).read_text(encoding="utf-8")))
+        except Exception:
+            return cls()
+
+    def save(self, path=None) -> None:
+        p = Path(path or manifest_path())
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self.data["schema"] = MANIFEST_SCHEMA
+        self.data["updated"] = time.time()
+        p.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def record_component(self, name: str, **info) -> None:
+        self.data.setdefault("components", {})[name] = info
+
+    def remove_component(self, name: str) -> None:
+        self.data.get("components", {}).pop(name, None)
+
+    def set_clients(self, clients) -> None:
+        self.data["clients"] = sorted(set(clients))
+
+    def record_hook(self, client: str, path: str) -> None:
+        hooks = self.data.setdefault("hooks", {}).setdefault(client, [])
+        if path not in hooks:
+            hooks.append(path)
+
+    def components(self) -> dict:
+        return self.data.get("components", {})

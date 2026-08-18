@@ -1,0 +1,324 @@
+"""Executor tests — tmp-dir only (GM_HOME + HOME patched), no live processes.
+
+Static/sandbox coverage of the effectful wrappers; the real-machine pass
+(processes, 6 client configs) stays a local step per ENVIRONMENT.md.
+"""
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parent.parent.parent
+# Handshake assets now live inside the neuron package (SSOT); legacy repo-root
+# path kept as a fallback for older checkouts.
+ASSETS = REPO / "neuron" / "src" / "neuron" / "clients"
+if not (ASSETS / "claude-code-hook").exists():
+    ASSETS = REPO / "neuron" / "clients"
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    monkeypatch.setenv("GM_HOME", str(tmp_path / "gmhome"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    (tmp_path / "home").mkdir()
+    return tmp_path
+
+
+def _run_install(state, **kw):
+    from gray_matter import executor
+    return executor.execute_install(state, assets_root=ASSETS, **kw)
+
+
+def _wiring(env):
+    from gray_matter import executor
+    return {r["check"]: r for r in executor.check_wiring()}
+
+
+def test_wiring_reports_a_hook_entry_that_cannot_run(env):
+    """Il guasto vero visto in produzione: dopo la migrazione alla radice GME il
+    comando registrato puntava a un interprete sparito, e nulla se ne accorgeva —
+    `doctor` usciva subito con "not running" perche' chiedeva a un server che
+    per l'appunto non partiva."""
+    home = env / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    dead = str(env / "venv-sparito" / "python.exe")
+    (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command",
+         "command": f'"{dead}" "{home}/.claude/hooks/neuron_sessionstart_hook.py"'}]}]}}),
+        encoding="utf-8")
+
+    r = _wiring(env)["hook_entry"]
+    assert r["ok"] is False
+    assert "venv-sparito" in r["detail"], r
+    assert r["fix"], "un guasto senza rimedio stampato non aiuta nessuno"
+
+
+def test_wiring_reports_a_deployed_hook_older_than_the_source(env):
+    """Un deploy vecchio resta li' per sempre: l'hook stantio che parlava di
+    `mcp__neuron5__*` e' vissuto per mesi cosi'."""
+    home = env / "home"
+    dst = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text("# una copia vecchia\n", encoding="utf-8")
+
+    r = _wiring(env)["hook_file"]
+    assert r["ok"] is False and "diverso dal sorgente" in r["detail"], r
+
+
+def test_wiring_is_happy_with_a_freshly_deployed_hook(env):
+    """Il verso opposto: dopo un deploy vero i due controlli devono tacere, o
+    il doctor diventa rumore che si impara a ignorare."""
+    from gray_matter import executor
+    home = env / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    executor._deploy_claude_code(
+        ASSETS / "claude-code-hook" / "neuron_sessionstart_hook.py", dry_run=False)
+
+    w = _wiring(env)
+    assert w["hook_file"]["ok"], w["hook_file"]
+    assert w["hook_entry"]["ok"], w["hook_entry"]
+
+
+class _FakeDist:
+    def __init__(self, name, version):
+        self.name = name
+        self.version = version
+
+
+def test_wiring_catches_a_label_that_lies_about_the_code(env, monkeypatch):
+    """Un install andato a meta' lascia il dist-info NUOVO sopra i file VECCHI.
+
+    Da li' in poi tutto cio' che si fida della versione — pip ("already
+    satisfied"), `Install-Peer` ("Keeping X"), `catalog._version` — vede
+    aggiornato cio' che non lo e', e i fix non arrivano piu'. Visto dal vivo:
+    neuron con `__version__` 6.4.0 sotto un dist-info 6.4.1."""
+    import importlib.metadata as md
+    import neuron
+    monkeypatch.setattr(md, "distributions",
+                        lambda: [_FakeDist("neuron", "9.9.9")])
+    monkeypatch.setattr(neuron, "__version__", "0.0.1", raising=False)
+
+    r = _wiring(env)["versions"]
+    assert r["ok"] is False
+    assert "dist-info 9.9.9" in r["detail"] and "codice 0.0.1" in r["detail"], r
+
+
+def test_wiring_catches_two_dist_info_for_the_same_package(env, monkeypatch):
+    """Due dist-info per lo stesso pacchetto = disinstallazione mai completata:
+    quale versione risponda dipende dall'ordine di scansione."""
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "distributions",
+                        lambda: [_FakeDist("neuron", "6.4.0"),
+                                 _FakeDist("neuron", "6.4.1")])
+
+    r = _wiring(env)["versions"]
+    assert r["ok"] is False and "2 dist-info" in r["detail"], r
+
+
+def test_wiring_catches_the_registry_mirror_drifting(env, monkeypatch):
+    """Il controllo che avrebbe risparmiato la caccia: GM e l'hook devono
+    guardare la stessa cartella. L'hook rispecchia `gme_root()` senza importarlo,
+    quindi e' la copia che va alla deriva."""
+    from gray_matter import executor, gme
+    monkeypatch.setattr(gme, "gme_root", lambda: env / "da-un-altra-parte")
+
+    r = _wiring(env)["registry"]
+    assert r["ok"] is False and "l'hook legge" in r["detail"], r
+
+
+def test_install_creates_dirs_and_manifest(env):
+    from gray_matter import paths
+    res = _run_install({"installed": ["neuron", "neurag"], "gm_present": False,
+                        "clients": []})
+    assert all(r["ok"] for r in res)
+    assert paths.neuron_graphs().exists()
+    assert paths.neurag_db().parent.exists()
+    assert paths.logs_dir().exists()
+    assert paths.config_file().exists()
+    m = json.loads(paths.manifest_path().read_text(encoding="utf-8"))
+    assert m["components"]["gray_matter"]["registered"] is True
+    assert m["components"]["neuron"]["registered"] is False
+
+
+def test_install_dry_run_touches_nothing(env):
+    from gray_matter import paths
+    res = _run_install({"installed": ["neuron"], "gm_present": False,
+                        "clients": []}, dry_run=True)
+    assert all(r["ok"] for r in res)
+    assert not paths.gm_home().exists()
+    assert not paths.neuron_graphs().exists()
+
+
+def test_deploy_hook_claude_code(env):
+    home = env / "home"
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    res = _run_install({"installed": ["neuron"], "gm_present": True,
+                        "clients": ["claude-code"]})
+    hook = [r for r in res if r["action"] == "deploy_hook"][0]
+    assert hook["ok"], hook
+    dest = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
+    assert dest.exists()
+    cfg = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    cmds = [h["command"] for g in cfg["hooks"]["SessionStart"] for h in g["hooks"]]
+    assert any("neuron_sessionstart_hook" in c for c in cmds)
+    # idempotent: second run doesn't duplicate the entry
+    _run_install({"installed": ["neuron"], "gm_present": True, "clients": ["claude-code"]})
+    cfg2 = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert len(cfg2["hooks"]["SessionStart"]) == len(cfg["hooks"]["SessionStart"])
+    # manifest tracks the deployed path
+    from gray_matter import paths
+    m = json.loads(paths.manifest_path().read_text(encoding="utf-8"))
+    assert str(dest) in m["hooks"]["claude-code"]
+
+
+def test_deploy_hook_cowork_and_opencode(env):
+    home = env / "home"
+    res = _run_install({"installed": ["neuron"], "gm_present": True,
+                        "clients": ["cowork", "opencode"]})
+    hooks = {r["client"]: r for r in res if r["action"] == "deploy_hook"}
+    assert hooks["cowork"]["ok"] and hooks["opencode"]["ok"]
+    assert (home / ".claude" / "plugins" / "neuron-guard" / "hooks" / "hooks.json").exists()
+    mjs = home / ".config" / "opencode" / "plugins" / "neuron-handshake.mjs"
+    assert mjs.exists()
+    cfg = json.loads((home / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+    assert any("neuron-handshake" in p for p in cfg["plugin"])
+
+
+def test_deploy_hook_codex(env):
+    """codex usa lo STESSO plugin cowork (formato .claude-plugin): mirror nel
+    cache codex + enable in config.toml, senza toccare le altre sezioni."""
+    home = env / "home"
+    res = _run_install({"installed": ["neuron"], "gm_present": True,
+                        "clients": ["codex"]})
+    hooks = {r["client"]: r for r in res if r["action"] == "deploy_hook"}
+    assert hooks["codex"]["ok"], hooks["codex"]
+    cache = home / ".codex" / "plugins" / "cache" / "claude-cowork" / "neuron-guard" / "0.1.0"
+    assert (cache / "hooks" / "hooks.json").exists()
+    assert (cache / ".claude-plugin" / "plugin.json").exists()
+    cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert '[plugins."neuron-guard@claude-cowork"]' in cfg
+    assert "enabled = true" in cfg
+    # idempotente: il secondo run non duplica il blocco
+    _run_install({"installed": ["neuron"], "gm_present": True, "clients": ["codex"]})
+    cfg2 = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert cfg2.count('[plugins."neuron-guard@claude-cowork"]') == 1
+
+
+def test_uninstall_removes_hooks_code_and_asks_data(env):
+    from gray_matter import executor, paths
+    home = env / "home"
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    _run_install({"installed": ["neuron"], "gm_present": False,
+                  "clients": ["claude-code", "opencode"]})
+    paths.neuron_graphs().mkdir(parents=True, exist_ok=True)
+    (paths.neuron_graphs() / "g.json").write_text("{}", encoding="utf-8")
+    asked = []
+    res = executor.execute_uninstall(ask=lambda q: (asked.append(q), False)[1])
+    by_action = {}
+    for r in res:
+        by_action.setdefault(r["action"], []).append(r)
+    assert all(r["ok"] for rs in by_action.values() for r in rs)
+    # hooks gone, entry scrubbed
+    assert not (home / ".claude" / "hooks" / "neuron_sessionstart_hook.py").exists()
+    cfg = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert not cfg.get("hooks", {}).get("SessionStart")
+    oc = json.loads((home / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+    assert not any("neuron-handshake" in p for p in oc.get("plugin", []))
+    # code removed, memory KEPT (answered no)
+    assert not paths.logs_dir().exists() and not paths.manifest_path().exists()
+    assert (paths.neuron_graphs() / "g.json").exists()
+    assert asked, "must ask before touching the memory"
+
+
+def _venv_install(env):
+    """Install with a fake venv recorded in the manifest, shared with Neuron."""
+    from gray_matter import paths
+    _run_install({"installed": ["neuron"], "gm_present": False, "clients": []})
+    venv = env / "fake-venv"
+    (venv / "Lib").mkdir(parents=True, exist_ok=True)   # re-installed per scenario
+    (venv / "Lib" / "big.pyd").write_bytes(b"x" * 2048)
+    m = paths.Manifest.load()
+    m.data["venv"] = str(venv)
+    m.save()
+    return venv
+
+
+def test_venv_is_offered_but_never_removed_by_assume_yes(env):
+    """--yes is a batch flag, not consent to uninstall the peers.
+
+    The venv is shared: removing it takes Neuron's and NeuRAG's runtime with it,
+    so it must survive every path except an explicit yes."""
+    from gray_matter import executor, paths
+    venv = _venv_install(env)
+    res = executor.execute_uninstall(assume_yes=True)
+    assert venv.exists(), "--yes must not tear down the shared venv"
+    row = [r for r in res if r["action"] == "ask_venv"]
+    assert row and "kept" in row[0]["detail"] and "neuron" in row[0]["detail"]
+
+    # purge_data is about the user's memory, not about the peers' runtime.
+    _venv_install(env)
+    executor.execute_uninstall(purge_data=True, assume_yes=True)
+    assert venv.exists()
+
+    # An explicit yes — and only that — removes it.
+    _venv_install(env)
+    assert paths.gm_venv() == venv
+    res = executor.execute_uninstall(remove_venv=True, ask=lambda q: False)
+    assert not venv.exists()
+    assert [r for r in res if r["action"] == "remove_venv"][0]["ok"]
+
+
+def test_locked_venv_is_deferred_not_reported_as_failure(env, monkeypatch):
+    """The uninstall usually runs FROM the venv it is deleting (GUI, or the CLI
+    itself), and Windows will not unlink a loaded .pyd. That is not an error —
+    it is handed to a detached process that outlives us."""
+    from gray_matter import executor
+    venv = _venv_install(env)
+    scheduled = []
+    monkeypatch.setattr(executor.shutil, "rmtree", lambda *a, **k: None)  # "locked"
+    monkeypatch.setattr(executor, "_schedule_venv_delete",
+                        lambda p: scheduled.append(p) or True)
+    res = executor.execute_uninstall(remove_venv=True, ask=lambda q: False)
+    row = [r for r in res if r["action"] == "remove_venv"][0]
+    assert scheduled == [str(venv)]
+    assert row["ok"] and "scheduled" in row["detail"]
+
+
+def test_uninstall_purge_wipes_data_without_asking(env):
+    from gray_matter import executor, paths
+    _run_install({"installed": ["neuron"], "gm_present": False, "clients": []})
+    (paths.neuron_graphs() / "g.json").write_text("{}", encoding="utf-8")
+    res = executor.execute_uninstall(
+        purge_data=True, remove_venv=False, ask=lambda q: pytest.fail("must not ask with purge_data"))
+    assert all(r["ok"] for r in res)
+    assert not paths.neuron_graphs().exists()
+
+
+def test_uninstall_dry_run_never_asks_nor_touches(env):
+    from gray_matter import executor, paths
+    _run_install({"installed": ["neuron"], "gm_present": False, "clients": []})
+    res = executor.execute_uninstall(
+        dry_run=True, ask=lambda q: pytest.fail("dry-run must not prompt"))
+    assert all(r["ok"] for r in res)
+    assert paths.logs_dir().exists() and paths.manifest_path().exists()
+
+
+def test_deregister_scrubs_json_client(env):
+    from gray_matter import clients
+    home = env / "home"
+    cfgp = home / ".cursor" / "mcp.json"
+    cfgp.parent.mkdir(parents=True)
+    cfgp.write_text(json.dumps({"mcpServers": {
+        "gray-matter": {"command": "py"}, "neuron5": {"command": "py"},
+        "other": {"command": "keep"}}}), encoding="utf-8")
+    res = [r for r in clients.deregister() if r.get("detail") == str(cfgp)]
+    assert res and res[0]["ok"]
+    data = json.loads(cfgp.read_text(encoding="utf-8"))
+    assert set(data["mcpServers"]) == {"other"}
+    assert (home / ".cursor" / "mcp.json.bak").exists()
