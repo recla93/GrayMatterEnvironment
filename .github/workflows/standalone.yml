@@ -41,11 +41,18 @@ jobs:
 
       # Un solo tool, e nient'altro. Nessun `-e ./gray_matter`, per nessun
       # motivo: e' l'intero punto del job.
+      # DA DENTRO LA CARTELLA DEL TOOL, NON DALLA RADICE.
+      # Alla radice il job si autoannullava, e alla prima esecuzione vera si e'
+      # visto: `gray_matter/` e `neurag/` sono pacchetti a layout piatto, quindi
+      # dalla radice `import gray_matter` riesce dalla CWD anche con niente
+      # installato, e la guardia qui sotto sparava su se stessa.
       - name: Install ONLY ${{ matrix.tool }}
-        run: pip install -e ./${{ matrix.tool }}[dev]
+        working-directory: ${{ matrix.tool }}
+        run: pip install -e .[dev]
 
       - name: Gray Matter non deve essere qui
         shell: bash
+        working-directory: ${{ matrix.tool }}
         run: |
           if python -c "import gray_matter" 2>/dev/null; then
             echo "::error::gray_matter e' importabile: il job non prova piu' niente"
@@ -56,7 +63,16 @@ jobs:
       # I moduli del prodotto, importati uno per uno. Il grosso del contratto
       # sta qui: un import non protetto muore su questa riga, non fra sei mesi.
       - name: Import di ogni modulo del prodotto
+        working-directory: ${{ matrix.tool }}
         run: python -c "import importlib,pkgutil,${{ matrix.tool }} as p; [importlib.import_module(m.name) for m in pkgutil.walk_packages(p.__path__, p.__name__ + '.')]"
 
+      # --confcutdir=. taglia il conftest.py della radice, che inserisce la
+      # cartella contenitore in sys.path: da li' i tre pacchetti si importano
+      # tutti, installati o no. Serve alle run normali -- e' il file che mette
+      # il pacchetto vero di ogni tool davanti -- ma qui e' esattamente cio'
+      # che il job deve NON avere. Senza il taglio pytest lo carica comunque:
+      # la rootdir sale fino a pytest.ini della radice anche partendo da
+      # dentro il tool.
       - name: Run tests
-        run: python -m pytest ${{ matrix.tool }}/tests -q
+        working-directory: ${{ matrix.tool }}
+        run: python -m pytest tests -q --confcutdir=.
