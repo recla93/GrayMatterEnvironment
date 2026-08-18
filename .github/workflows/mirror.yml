@@ -1,0 +1,90 @@
+name: Mirror
+
+# I TRE REPO PUBBLICI SONO PROIEZIONI, NON GEMELLI.
+#
+# Qui si committa; loro seguono. `git subtree split` non fabbrica copie: per la
+# storia importata ricostruisce ESATTAMENTE i commit originali (verificato: lo
+# split di neuron/ ha restituito lo stesso SHA di master), e per i commit nuovi
+# produce discendenti diretti. Quindi il push e' un fast-forward normale —
+# niente --force, niente SHA riscritti, i tag gia' pubblicati restano validi.
+#
+# Un commit che tocca due tool insieme si divide da solo: nel mirror di neuron
+# arriva la sola parte di neuron.
+#
+# REGOLA: non si committa sui mirror. `main` va protetto la' lasciando scrivere
+# solo il token di questo workflow. Due copie che possono divergere sono la
+# trappola che questo repo esiste per chiudere.
+#
+# Tutti e tre i mirror hanno `main` come default. Non e' un dettaglio estetico:
+# la prima passata a vuoto pushava su `refs/heads/main` mentre Neuron stava su
+# `master`, e invece di aggiornare il mirror creava un branch nuovo — un push
+# riuscito che non aggiornava niente. Un nome solo, nessun caso particolare.
+
+on:
+  push:
+    branches: [main]
+    tags: ["*-v*"]
+
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+jobs:
+  push-mirrors:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - prefix: neuron
+            repo: recla93/Neuron
+          - prefix: neurag
+            repo: recla93/NeuRAG
+          - prefix: gray_matter
+            repo: recla93/gray-matter
+    steps:
+      # subtree split deve poter risalire tutta la storia: senza fetch-depth 0
+      # ricostruirebbe da un albero tronco e il push non sarebbe fast-forward.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Split e push del branch
+        if: startsWith(github.ref, 'refs/heads/')
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -eu
+          # Finche' il PAT non esiste, il mirror non e' un errore: e' un passo
+          # che non tocca a questo repo. Senza questa riga ogni push su main
+          # lascerebbe una X rossa che non dice niente a nessuno.
+          if [ -z "${TOKEN:-}" ]; then echo "  MIRROR_TOKEN assente: niente mirror"; exit 0; fi
+          SHA=$(git subtree split --prefix=${{ matrix.prefix }})
+          echo "  ${{ matrix.prefix }} -> $SHA"
+          git push "https://x-access-token:$TOKEN@github.com/${{ matrix.repo }}.git" \
+            "$SHA:refs/heads/main"
+
+      # Il tag e' l'unico punto in cui il mirror NON e' una proiezione letterale.
+      # Qui i tag sono prefissati (`neuron-v6.4.2`) perche' un `v*` nudo farebbe
+      # scattare tutti e tre i release insieme; di la' deve arrivare `v6.4.2`, o
+      # la pagina Releases di quel repo smette di avere senso.
+      - name: Split e push del tag, rinominato
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -eu
+          # Finche' il PAT non esiste, il mirror non e' un errore: e' un passo
+          # che non tocca a questo repo. Senza questa riga ogni push su main
+          # lascerebbe una X rossa che non dice niente a nessuno.
+          if [ -z "${TOKEN:-}" ]; then echo "  MIRROR_TOKEN assente: niente mirror"; exit 0; fi
+          TAG="${GITHUB_REF#refs/tags/}"
+          case "$TAG" in
+            ${{ matrix.prefix }}-v*) ;;
+            *) echo "  $TAG non e' di ${{ matrix.prefix }}: niente da fare"; exit 0 ;;
+          esac
+          SHA=$(git subtree split --prefix=${{ matrix.prefix }})
+          OUT="v${TAG#${{ matrix.prefix }}-v}"
+          echo "  $TAG -> ${{ matrix.repo }} come $OUT ($SHA)"
+          git push "https://x-access-token:$TOKEN@github.com/${{ matrix.repo }}.git" \
+            "$SHA:refs/tags/$OUT"

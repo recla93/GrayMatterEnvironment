@@ -9,7 +9,7 @@ name: Release
 # it regenerated automatically on every release / pyturso bump.
 on:
   push:
-    tags: ["v*"]
+    tags: ["neuron-v*"]
 
 permissions:
   contents: write
@@ -21,6 +21,9 @@ jobs:
   # wheels before knowing whether the code works was the wrong order anyway.
   test:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: neuron
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,23 +42,24 @@ jobs:
       # without a local GM got a three-releases-old gateway paired with a
       # current Neuron — exactly the venv skew the pip check in GM's installer
       # now reports. A release cannot ship that silently any more.
-      - name: GM_VERSION matches Gray Matter's latest release
+      - name: GM_VERSION combacia con Gray Matter in questo albero
         shell: bash
+        working-directory: .
         run: |
           set -eu
-          ps1=$(sed -n 's/^\$GmVersion = .*else { "\(.*\)" }.*/\1/p' install.ps1)
-          sh=$(sed -n 's/^GM_VERSION="\${GM_VERSION:-\(.*\)}"/\1/p' install.sh)
-          latest=$(git ls-remote --tags --refs https://github.com/recla93/gray-matter.git 'v*' \
-                   | sed 's#.*refs/tags/v##' | sort -V | tail -1)
-          echo "install.ps1=$ps1  install.sh=$sh  gray-matter latest=$latest"
-          [ "$ps1" = "$sh" ] || { echo "::error::install.ps1 ($ps1) and install.sh ($sh) disagree on GM_VERSION"; exit 1; }
-          [ -n "$latest" ] || { echo "::error::could not read gray-matter tags"; exit 1; }
-          [ "$ps1" = "$latest" ] || { echo "::error::GM_VERSION is $ps1 but Gray Matter's latest release is $latest — bump it in install.ps1 and install.sh"; exit 1; }
-
+          ps1=$(sed -n 's/^\$GmVersion = .*else { "\(.*\)" }.*/\1/p' neuron/install.ps1)
+          sh=$(sed -n 's/^GM_VERSION="\${GM_VERSION:-\(.*\)}"/\1/p' neuron/install.sh)
+          gm=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' gray_matter/pyproject.toml | head -1)
+          echo "install.ps1=$ps1  install.sh=$sh  gray_matter/pyproject.toml=$gm"
+          [ "$ps1" = "$sh" ] || { echo "::error::install.ps1 ($ps1) e install.sh ($sh) non concordano su GM_VERSION"; exit 1; }
+          [ "$ps1" = "$gm" ] || { echo "::error::GM_VERSION e' $ps1 ma Gray Matter in questo albero e' $gm"; exit 1; }
   # --- 1. Compile pyturso for Windows (no win_amd64 on PyPI → we build it) ---
   build-pyturso-win:
     needs: test                        # red tests, no release
     runs-on: windows-latest          # already has Rust + MSVC + Windows SDK
+    defaults:
+      run:
+        working-directory: neuron
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +79,9 @@ jobs:
   build-release:
     needs: build-pyturso-win
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: neuron
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -90,5 +97,5 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*                # neuron wheel + sdist + pyturso win wheels
+          files: neuron/dist/*                # neuron wheel + sdist + pyturso win wheels
           generate_release_notes: true

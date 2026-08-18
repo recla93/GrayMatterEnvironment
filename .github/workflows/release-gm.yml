@@ -7,7 +7,7 @@ name: Release
 # wheels — a plain `python -m build` covers the artifacts.)
 on:
   push:
-    tags: ["v*"]
+    tags: ["gm-v*"]
 
 permissions:
   contents: write
@@ -17,21 +17,13 @@ jobs:
   # A tag used to go straight to publish. The suite existed, the stale-release
   # guard existed and was RED, and v1.3.0 shipped anyway with the vendored
   # wheels two versions behind. A guard nothing runs is a comment.
-  # Same three-repo layout as ci.yml, and for the same reason.
+  # Un checkout solo: i sibling sono gia' nell'albero. Erano tre perche' i tre
+  # repo erano separati, e li' la CI doveva ricomporli a mano — con il rischio,
+  # visto davvero, di prenderli dal branch sbagliato.
   test:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: gray_matter
-      - uses: actions/checkout@v4
-        with:
-          repository: recla93/Neuron
-          path: neuron
-      - uses: actions/checkout@v4
-        with:
-          repository: recla93/NeuRAG
-          path: neurag
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -39,12 +31,14 @@ jobs:
           pip install -e ./gray_matter[dev]
           pip install -e ./neuron
           pip install -e ./neurag
-      - working-directory: gray_matter
-        run: python -m pytest tests/ -q
+      - run: python -m pytest gray_matter/tests -q
 
   build-release:
     needs: test                        # red tests, no release
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gray_matter
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,5 +49,5 @@ jobs:
       - run: python -m pip install dist/*.whl && python -c "import gray_matter; print(gray_matter.__version__)"
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*                # gray-matter wheel + sdist
+          files: gray_matter/dist/*                # gray-matter wheel + sdist
           generate_release_notes: true

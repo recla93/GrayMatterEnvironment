@@ -1,0 +1,62 @@
+name: Standalone
+
+# I DUE PEER DEVONO FUNZIONARE SENZA GRAY MATTER.
+#
+# Il contratto e' retto da ~60 `try/except ImportError` scritti a mano nel
+# codice di neuron e neurag. Prima del monorepo qualcosa lo verificava per
+# ACCIDENTE: la CI di Neuron faceva un checkout solo e `pip install -e .[dev]`,
+# quindi girava in un venv dove `gray_matter` non esisteva e un import non
+# protetto esplodeva li'.
+#
+# Il monorepo cancella quell'accidente: la CI naturale installa tutti e tre, e
+# in quel venv un import non protetto passa liscio. Anche sulla macchina di chi
+# sviluppa, dove GM c'e' sempre. La regressione si manifesterebbe solo a casa di
+# un utente standalone, mesi dopo, con un ModuleNotFoundError all'avvio.
+#
+# Quindi il guard torna, ma dichiarato invece che ereditato: un venv per peer,
+# con QUEL peer soltanto.
+
+on: [push, pull_request]
+
+jobs:
+  alone:
+    name: ${{ matrix.tool }} senza Gray Matter
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [neuron, neurag]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache fastembed ONNX model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-all-MiniLM-L6-v2-v1
+
+      # Un solo tool, e nient'altro. Nessun `-e ./gray_matter`, per nessun
+      # motivo: e' l'intero punto del job.
+      - name: Install ONLY ${{ matrix.tool }}
+        run: pip install -e ./${{ matrix.tool }}[dev]
+
+      - name: Gray Matter non deve essere qui
+        shell: bash
+        run: |
+          if python -c "import gray_matter" 2>/dev/null; then
+            echo "::error::gray_matter e' importabile: il job non prova piu' niente"
+            exit 1
+          fi
+          echo "  ok: gray_matter assente"
+
+      # I moduli del prodotto, importati uno per uno. Il grosso del contratto
+      # sta qui: un import non protetto muore su questa riga, non fra sei mesi.
+      - name: Import di ogni modulo del prodotto
+        run: python -c "import importlib,pkgutil,${{ matrix.tool }} as p; [importlib.import_module(m.name) for m in pkgutil.walk_packages(p.__path__, p.__name__ + '.')]"
+
+      - name: Run tests
+        run: python -m pytest ${{ matrix.tool }}/tests -q

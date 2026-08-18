@@ -1,0 +1,56 @@
+name: CI
+
+# I tre tool girano insieme perche' SONO accoppiati: l'handshake vive in tutti
+# e tre, il registro GME e' letto da un mirror che sta nei peer, e sei file di
+# test raggiungono i sibling con `parents[2]`. Prima del monorepo la CI di
+# gray_matter tirava giu' i peer dal loro branch di DEFAULT, quindi confrontava
+# una meta' nuova e una meta' vecchia e bocciava le modifiche coerenti. Qui il
+# problema non esiste: c'e' un albero solo.
+#
+# Niente filtri `paths:`. Far girare tutto a ogni push non e' lo spreco, e' la
+# ragione per cui i tre stanno insieme: una modifica a neurag PUO' rompere il
+# guard che vive nei test di gray_matter, ed e' esattamente cio' che vogliamo
+# sapere subito.
+#
+# Processi SEPARATI, un job per suite: `neuron/tests/_mockdeps.py` inietta
+# finti `mcp`/`fastembed` in `sys.modules` all'import, e `neurag.db` cattura
+# TURSO_AVAILABLE al SUO import — un processo condiviso propaga i falsi ai peer
+# (~25 fallimenti spuri). Lo dice gia' pytest.ini.
+
+on: [push, pull_request]
+
+jobs:
+  suite:
+    name: ${{ matrix.tool }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [neuron, neurag, gray_matter]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache fastembed ONNX model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-all-MiniLM-L6-v2-v1
+
+      # Tutti e tre installati: i guard cross-repo hanno bisogno dei sibling
+      # come moduli, non solo come file su disco (la prima CI di gray_matter
+      # falli' 42 test con `No module named 'neuron.paths'` proprio per questo).
+      - name: Install the suite
+        run: |
+          pip install -e ./gray_matter[dev]
+          pip install -e ./neuron
+          pip install -e ./neurag
+
+      - name: Check syntax
+        run: python -m compileall ${{ matrix.tool }} -q
+
+      - name: Run tests
+        run: python -m pytest ${{ matrix.tool }}/tests -q

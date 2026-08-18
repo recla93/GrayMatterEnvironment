@@ -10,61 +10,61 @@ name: Release
 # pyturso bump. Keep the pin in sync with the [turso] extra in pyproject.toml.
 on:
   push:
-    tags: ["v*"]
+    tags: ["neurag-v*"]
 
 permissions:
   contents: write
 
 jobs:
   # --- 0. The gate ---------------------------------------------------------
-  # A tag used to publish without asking the 369 tests anything. Same
-  # three-repo layout as ci.yml, and for the same reason.
+  # A tag used to publish without asking the 369 tests anything.
+  # Un checkout solo: i sibling sono gia' nell'albero. Erano tre perche' i tre
+  # repo erano separati, e li' il job doveva ricomporli clonandoli da GitHub --
+  # cosa che qui avrebbe provato il loro `main` invece dell'albero che si sta
+  # per taggare, e con `path: neurag` avrebbe anche annidato il repo in se'.
   test:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: neurag
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: neurag
-      - uses: actions/checkout@v4
-        with:
-          repository: recla93/Neuron
-          path: neuron
-      - uses: actions/checkout@v4
-        with:
-          repository: recla93/gray-matter
-          path: gray_matter
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: |
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-all-MiniLM-L6-v2-v1
+      - working-directory: .
+        run: |
           pip install -e ./neurag[dev]
           pip install -e ./neuron
           pip install -e ./gray_matter
-      - working-directory: neurag
-        run: python -m pytest tests/ -q
+      - run: python -m pytest tests/ -q
 
       # Il bootstrap in install.ps1/install.sh scarica `v$GM_VERSION` di un ALTRO
       # repo quando GM non e' in locale. Niente teneva allineata quella costante:
       # in Neuron era rimasta a 1.1.2 mentre GM era a 1.4.0, e qui era identica.
       # Una release non puo' piu' spedirla stantia in silenzio.
-      - name: GM_VERSION matches Gray Matter's latest release
+      - name: GM_VERSION combacia con Gray Matter in questo albero
         shell: bash
-        working-directory: neurag
+        working-directory: .
         run: |
           set -eu
-          ps1=$(sed -n 's/^\$GmVersion = .*else { "\(.*\)" }.*/\1/p' install.ps1)
-          sh=$(sed -n 's/^GM_VERSION="\${GM_VERSION:-\(.*\)}"/\1/p' install.sh)
-          latest=$(git ls-remote --tags --refs https://github.com/recla93/gray-matter.git 'v*' \
-                   | sed 's#.*refs/tags/v##' | sort -V | tail -1)
-          echo "install.ps1=$ps1  install.sh=$sh  gray-matter latest=$latest"
+          ps1=$(sed -n 's/^\$GmVersion = .*else { "\(.*\)" }.*/\1/p' neurag/install.ps1)
+          sh=$(sed -n 's/^GM_VERSION="\${GM_VERSION:-\(.*\)}"/\1/p' neurag/install.sh)
+          gm=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' gray_matter/pyproject.toml | head -1)
+          echo "install.ps1=$ps1  install.sh=$sh  gray_matter/pyproject.toml=$gm"
           [ "$ps1" = "$sh" ] || { echo "::error::install.ps1 ($ps1) e install.sh ($sh) non concordano su GM_VERSION"; exit 1; }
-          [ -n "$latest" ] || { echo "::error::non riesco a leggere i tag di gray-matter"; exit 1; }
-          [ "$ps1" = "$latest" ] || { echo "::error::GM_VERSION e' $ps1 ma l'ultima release di Gray Matter e' $latest — bumpalo in install.ps1 e install.sh"; exit 1; }
-
+          [ "$ps1" = "$gm" ] || { echo "::error::GM_VERSION e' $ps1 ma Gray Matter in questo albero e' $gm"; exit 1; }
   # --- 1. Compile pyturso for Windows (no win_amd64 on PyPI → we build it) ---
   build-pyturso-win:
     needs: test                      # red tests, no release
     runs-on: windows-latest          # already has Rust + MSVC + Windows SDK
+    defaults:
+      run:
+        working-directory: neurag
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +84,9 @@ jobs:
   build-release:
     needs: build-pyturso-win
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: neurag
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -99,5 +102,5 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*                # neurag wheel + sdist + pyturso win wheels
+          files: neurag/dist/*                # neurag wheel + sdist + pyturso win wheels
           generate_release_notes: true
