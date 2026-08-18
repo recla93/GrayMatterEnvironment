@@ -1,0 +1,88 @@
+[project]
+name = "neuron"
+version = "6.4.2"
+description = "Neuron - persistent semantic memory for AI (semantic graph + vector search with Turso)"
+requires-python = ">=3.10"
+license = { text = "PolyForm Noncommercial License 1.0.0" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+authors = [
+    { name = "Claudio C." },
+]
+keywords = ["mcp", "semantic-memory", "vector-embedding", "turso", "graph"]
+
+dependencies = [
+    # Upper bounds guard against breaking major releases (mcp 2.x / fastembed 1.x)
+    # resolving silently into installs. Bump deliberately after testing.
+    "mcp>=1.28.0,<2.0",
+    # Pinned exactly: there is no win_amd64 wheel for pyturso on PyPI, so on
+    # Windows pip would compile it from Rust source. The release workflow
+    # pre-builds a win_amd64 wheel and install.ps1 feeds it via --find-links;
+    # a loose ">=" could resolve to a newer version with no vendored wheel and
+    # silently fall back to compiling. Bump this together with release.yml.
+    "pyturso==0.6.1",
+    "fastembed>=0.5.0,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+cloud = [
+    "libsql-client>=0.3.1",
+]
+# GUI opzionale: il control center è UNO (gray_matter.webgui). Neuron gira
+# standalone senza questo extra; `neuron gui` lo bootstrappa se manca. Il runtime
+# MCP NON dipende da gray-matter (import guardato) — questo è solo per la GUI.
+gui = [
+    "gray-matter>=1.0",
+]
+
+[project.scripts]
+neuron-mcp = "neuron.server:cli"
+# `neuron` dispatches: no args -> MCP server; `neuron init` -> client wiring;
+# `neuron gui` -> il control center web condiviso (gray_matter.webgui), che si
+# bootstrappa da solo se Gray Matter non è installato. Niente più `neuron-gui`
+# (la vecchia GUI Tkinter è ritirata).
+neuron = "neuron.__main__:cli"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# --- Packaging: src-layout discovery + version + bundled seed DB ------------
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the seed knowledge DB AND the skill files inside the wheel (both loaded
+# via importlib.resources). The skills are the source the MCP server serves as
+# `instructions` + resources, so they MUST travel in the package, not just at repo
+# root. `skills/*/*.md` covers the nested neuron-curated-memory/SKILL.md.
+# `clients/**/*` ships the per-client handshake assets (SessionStart hooks +
+# cowork/opencode plugins) so GM's unified installer can deploy them after a
+# plain `pip install` — SSOT lives here, inside the package, not at repo root.
+[tool.setuptools.package-data]
+neuron = [
+    "data/*.db", "data/*.png", "skills/*.md", "skills/*/*.md",
+    # Explicit per-depth globs (portable across setuptools versions; no `**`
+    # recursion dependency) covering the whole clients/ tree, deepest file is
+    # clients/cowork-plugin/neuron-guard/skills/neuron-usage/SKILL.md.
+    "clients/*", "clients/*/*", "clients/*/*/*",
+    "clients/*/*/*/*", "clients/*/*/*/*/*",
+    # `*` never matches a leading dot, so the plugin manifest needs its own glob.
+    "clients/*/*/.*/*",
+    # Wheel d'emergenza di Gray Matter (fallback offline del bootstrap `neuron
+    # gui`). Va ricostruito a ogni release di GM — vedi RELEASE-CHECKLIST.
+    "_gm_vendor/*.whl",
+]

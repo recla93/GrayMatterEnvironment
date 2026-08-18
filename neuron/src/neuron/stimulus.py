@@ -1,0 +1,303 @@
+"""Stimulus engine: topic shift, auto-linking, context window, flashes (T57).
+
+Logic moved verbatim out of server.py (ADR-006, same pattern as neuron.search):
+STATE and CONFIG stay on the server module (``flash_enabled`` is toggled by the
+`flash` tool, thresholds are patched by tests via ``_srv.*``), and everything
+mutable/patchable is resolved through the server namespace AT CALL TIME via
+``_S()`` — so every existing monkeypatch keeps working with zero test changes.
+"""
+
+from __future__ import annotations
+
+from neuron.config import env_int as _env_int
+from neuron.extraction import ExtractionResult
+from neuron.models import Link
+
+# Cap on auto-links created per turn (P1 #9, configurable).
+MAX_AUTO_LINKS = _env_int("NEURON_MAX_AUTO_LINKS", 8)
+
+# Auto-link similarity thresholds
+AUTO_LINK_MIN_SIM    = 0.30   # below this: skip (too noisy)
+AUTO_LINK_MEDIUM_SIM = 0.45   # above this: medium weight
+AUTO_LINK_STRONG_SIM = 0.65   # above this: strong weight
+
+# Flash thresholds
+FLASH_MIN_TURN       = 3      # turns before flashes activate
+DORMANT_MIN_SLEEP    = 4      # min sleep threshold for dormant pulse
+DORMANT_MIN_SALIENCE = 2      # min salience for dormant node to flash
+DORMANT_MIN_SIM      = 0.38   # min similarity for dormant pulse candidate
+CROSS_DOMAIN_MIN_SIM = 0.48   # min similarity for cross-domain spark
+MAX_FLASH_CANDIDATES = 2      # top-N flash candidates shown
+# L3: Memory recall from graveyard
+MEMORY_RECALL_MIN_SIM = 0.40  # min similarity for graveyard reactivation
+MEMORY_RECALL_BASE_SALIENCE = 3  # base salience when reactivated
+
+
+def _S():
+    """The server module = the shared state/config namespace."""
+    from neuron import server as _srv
+    return _srv
+
+
+def _keyword_overlap(a: list[str], b: list[str]) -> float:
+    if not a or not b:
+        return 0.0
+    set_a, set_b = set(a), set(b)
+    inter = set_a & set_b
+    return len(inter) / max(len(set_a | set_b), 1)
+
+
+def _detect_topic_shift(new_kw: list[str], graph=None) -> tuple[bool, float]:
+    s = _S()
+    g = graph or s._g.get()
+    if not g.last_keywords:
+        return False, 0.0
+    overlap = _keyword_overlap(new_kw, g.last_keywords)
+    return overlap < s.TOPIC_SHIFT_THRESHOLD, overlap
+
+
+def _auto_link(new_kw: list[str], turn: int, graph=None) -> list[Link]:
+    """Create automatic links between new keywords and existing keywords in the graph."""
+    s = _S()
+    g = graph or s._g.get()
+    if not g.nodes:
+        return []
+    links: list[Link] = []
+    added_pairs: set[tuple[str, str]] = set()
+
+    for kw in new_kw:
+        candidates = s._search_embeddings([kw], top_n=10, graph=g)
+        for candidate_kw, sim in candidates:
+            if candidate_kw == kw or candidate_kw in new_kw:
+                continue
+            if sim < AUTO_LINK_MIN_SIM:
+                continue
+            pair = (kw, candidate_kw)
+            rev_pair = (candidate_kw, kw)
+            if pair in added_pairs or rev_pair in added_pairs:
+                continue
+            # also skip if link already exists in the graph (cross-call dedup)
+            if any((lk.source == kw and lk.target == candidate_kw) or
+                   (lk.source == candidate_kw and lk.target == kw)
+                   for lk in g.links):
+                continue
+            weight = "strong" if sim > AUTO_LINK_STRONG_SIM else "medium" if sim > AUTO_LINK_MEDIUM_SIM else "tangential"
+            links.append(Link(
+                source=kw, target=candidate_kw,
+                link_type="analogy",
+                weight=weight,
+                rationale=f"similarità vettoriale {sim:.2f}",
+                created_turn=turn, last_active_turn=turn,
+            ))
+            added_pairs.add(pair)
+        if len(links) >= MAX_AUTO_LINKS:
+            break
+
+    return links
+
+
+def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -> str:
+    """Build the optimal context window: active links + salient nodes + semantic flashes.
+
+    Flash semantici (3 types, only when flash_enabled and turn > 3):
+      1. Dormant pulse — high-salience node not mentioned in ≥ TANGENTIAL_EXPIRY_TURNS turns,
+         semantically close to current keywords. Surfaces forgotten knowledge.
+      2. Cross-domain spark — semantically similar node from a *different* loaded context graph.
+         Bridges separate knowledge domains.
+      3. Creative leap — a node reachable in exactly 2 hops from current keywords whose domain
+         differs from the active domain. The most unexpected association.
+    """
+    s = _S()
+    g = graph or s._g.get()
+    parts: list[str] = []
+    active_links = g.get_active_links()
+    if active_links:
+        top = sorted(
+            active_links,
+            key=lambda lk: (s.WEIGHT_ORDER[lk.weight], -lk.inactive_turns),
+            reverse=True,
+        )[:6]
+        parts.append("Active links:")
+        for lk in top:
+            parts.append(f"  {lk.source} ->({lk.link_type})-> {lk.target} [{lk.weight}]")
+
+    top_nodes = sorted(g.nodes, key=lambda nd: -nd.salience)[:8]
+    if top_nodes:
+        parts.append(f"\nSalient nodes (topic: {extraction.topic}):")
+        for nd in top_nodes:
+            parts.append(f"  {nd.keyword} (salience={nd.salience}, domain={nd.domain})")
+
+    if turn > 1:
+        overlap = _keyword_overlap(extraction.keywords, g.last_keywords)
+        parts.append(f"\nContinuità col turno precedente: {overlap:.0%}")
+
+    # --- Semantic flashes (E2.4) ---
+    # The three heuristics (dormant pulse / cross-domain spark / creative leap)
+    # GENERATE candidates; the stimulus engine (spreading_activation, E2.3)
+    # SCORES the in-graph ones, and only the top-2 by activation are emitted —
+    # "which association is strongest", not a dump of three.
+    # NOTE (future, "Option B"): make spreading_activation the PRIMARY generator —
+    # the highest-activation non-obvious node IS the stimulus, with dormant/leap as
+    # emergent properties — a bolder reshape kept as a maybe, to revisit on real data.
+    if s.flash_enabled and turn > FLASH_MIN_TURN:
+        active_kws = set(extraction.keywords)
+        act_map = dict(g.spreading_activation(list(active_kws), k=2))
+        max_act = max(act_map.values(), default=1.0) or 1.0
+        candidates: list[tuple[float, str]] = []   # (score ~0..1, text)
+
+        # 1. Dormant pulse: salient node silent for ≥ threshold, close to the query
+        sleep_threshold = max(s.TANGENTIAL_EXPIRY_TURNS, DORMANT_MIN_SLEEP)
+        dormant = [
+            nd for nd in g.nodes
+            if (turn - nd.turn) >= sleep_threshold
+            and nd.salience >= DORMANT_MIN_SALIENCE
+            and nd.keyword not in active_kws
+        ]
+        if dormant:
+            try:
+                sims = s._search_embeddings(extraction.keywords, top_n=8, graph=g)
+            except Exception:
+                # Fallback: pick most salient dormant node directly without vector search
+                sims = [(nd.keyword, 0.5) for nd in sorted(dormant, key=lambda n: -n.salience)]
+            dormant_set = {nd.keyword for nd in dormant}
+            for kw, sim in sims:
+                if kw in dormant_set and sim > DORMANT_MIN_SIM:
+                    nd = g.get_node(kw)
+                    dormant_since = turn - nd.turn if nd else "?"
+                    score = max(act_map.get(kw, 0.0) / max_act, sim)
+                    candidates.append((score,
+                        f"💤 Dormant pulse: '{kw}' (sim={sim:.2f}, "
+                        f"silent {dormant_since} turns, salience={nd.salience if nd else '?'})"))
+                    break  # one dormant flash is enough
+
+        # 2. Cross-domain spark: semantically close node from a different context
+        # graph. The engine is single-graph, so this stays a distinct signal,
+        # scored by its own similarity.
+        if hasattr(s._g, "_graphs"):
+            for other_ctx, other_g in list(s._g._graphs.items()):
+                if other_ctx == s._g.active or not other_g.nodes:
+                    continue
+                cross = s._search_embeddings(extraction.keywords, top_n=2, graph=other_g)
+                for kw, sim in cross:
+                    if sim > CROSS_DOMAIN_MIN_SIM and kw not in active_kws:
+                        nd = other_g.get_node(kw)
+                        dom = nd.domain if nd else other_ctx
+                        candidates.append((sim,
+                            f"🔗 Cross-domain spark [{other_ctx}]: '{kw}' "
+                            f"(sim={sim:.2f}, domain={dom})"))
+                        # E3.1: persist this cross-context co-occurrence as an
+                        # implicit drift link (other_ctx is loaded → visited;
+                        # born tangential, cooldown 5, pruned fast).
+                        if extraction.keywords:
+                            g.form_drift_link(extraction.keywords[0], kw, other_ctx, turn)
+                        break  # one spark per other context
+
+        # 3. Creative leap: 2-hop path from active keywords to a node in a different
+        # domain, scored by that far node's activation.
+        adjacency: dict[str, set[str]] = {}
+        for lk in g.links:
+            if lk.weight in ("strong", "medium"):
+                adjacency.setdefault(lk.source, set()).add(lk.target)
+                adjacency.setdefault(lk.target, set()).add(lk.source)
+
+        leap: "tuple[float, str] | None" = None
+        for kw in active_kws:
+            for mid in adjacency.get(kw, set()):
+                if mid in active_kws:
+                    continue
+                for far in adjacency.get(mid, set()):
+                    if far in active_kws or far == kw:
+                        continue
+                    nd = g.get_node(far)
+                    if nd and nd.domain != extraction.domain:
+                        leap = (act_map.get(far, 0.0) / max_act,
+                                f"⚡ Creative leap: '{kw}' → '{mid}' → '{far}' [{nd.domain}]")
+                        break
+                if leap:
+                    break
+            if leap:
+                break
+        if leap:
+            candidates.append(leap)
+
+        # 4. Memory recall: surface archived graveyard nodes (L3 long-term memory)
+        #    These are nodes that were consolidated/dropped but remain semantically
+        #    close to the current query — "I knew this but wasn't thinking about it".
+        try:
+            _path = s._g._db_path(s._g.active)  # type: ignore[attr-defined]
+            _ctx  = s._g.active  # type: ignore[attr-defined]
+            if _path:
+                graveyard = g.load_graveyard(_path, _ctx)
+                if graveyard:
+                    # Direct cosine similarity: query embedding vs graveyard keywords
+                    # Skip salience=0 ("forgotten" L4 nodes — only recall tool can revive)
+                    q_vec = s._get_embedding(" ".join(extraction.keywords))
+                    for entry in graveyard[:15]:
+                        if entry.get("salience", 0) <= 0:
+                            continue
+                        kw = entry["keyword"]
+                        if kw in active_kws:
+                            continue
+                        kw_vec = s._get_embedding(kw)
+                        # cosine similarity via dot product (vectors are normalized)
+                        sim = sum(a * b for a, b in zip(q_vec, kw_vec))
+                        if sim > MEMORY_RECALL_MIN_SIM:
+                            reason = entry.get("reason", "archived")
+                            turns_ago = turn - entry.get("turn", turn)
+                            candidates.append((sim * 0.9,  # slight penalty vs active
+                                f"💡 Memory recall: '{kw}' (sim={sim:.2f}, "
+                                f"archived {turns_ago}t ago, {reason})"))
+                            break  # one recall is enough
+        except Exception:
+            pass  # graveyard is best-effort, never block the main stimulus
+
+        if candidates:
+            candidates.sort(key=lambda x: -x[0])
+            parts.append("\nFlash semantici:")
+            for _score, fl in candidates[:MAX_FLASH_CANDIDATES]:   # top-2 by activation (E2.4)
+                parts.append(f"  {fl}")
+
+    return "\n".join(parts) if parts else ""
+
+
+# T66: anti-echo — a keyword that was just emitted as a stimulus shouldn't be
+# emitted again for a few turns (in-memory per process, like the Hebbian cooldown).
+_stim_recent: dict[str, int] = {}
+STIM_ECHO_COOLDOWN = 5
+
+
+def _stimulus_block(g, keywords) -> str:
+    """Compact one-line associative stimulus for piggybacking on tool responses
+    (E2.5, reshaped by T66). Candidates come from ``stimulus_candidates`` —
+    activation × novelty bonuses, so it serves BOTH recall (useful memory,
+    strong relations) and creative sparks (dormant / cross-domain / tangential).
+    The winning node is shown WITH its path and reasons ("java ⇢ servlet ⇢ CORS
+    (dormant 12t)") so the impulse is interpretable, and an anti-echo cooldown
+    keeps it from repeating itself. Empty below STIMULUS_MIN_ACTIVATION;
+    hard-capped to ~40 tokens."""
+    s = _S()
+    if not s.flash_enabled:
+        return ""
+    cands = g.stimulus_candidates(list(keywords), k=2)
+    turn = g.turn_count
+    pick = None
+    for c in cands:
+        # Floor on SCORE, not raw act (field test 2026-07-13): the list is
+        # score-sorted, so an act-floor here (a) broke iteration order semantics
+        # and (b) structurally silenced every 2-hop spark — decay puts their act
+        # (~0.12) under the 0.15 floor while their bonused score clears it.
+        # Score = "worth showing", which is exactly what the floor should mean.
+        if c["score"] < s.STIMULUS_MIN_ACTIVATION:
+            break   # score-sorted: everything after is lower — stop cleanly
+        if turn - _stim_recent.get(c["keyword"], -999) <= STIM_ECHO_COOLDOWN:
+            continue   # anti-echo: recently emitted, let something else surface
+        pick = c
+        break
+    if pick is None:
+        return ""
+    _stim_recent[pick["keyword"]] = turn
+    # Always show the connection (field test: a bare keyword doesn't fire the
+    # impulse) — 1 hop included: "java ⇢ spring", 2 hops: "java ⇢ servlet ⇢ cors".
+    path = " ⇢ ".join(pick["path"]) if pick["hops"] >= 1 else pick["keyword"]
+    why = ", ".join(pick["reasons"][:2])
+    return f"\n🧠 {path} ({why})"[:s.STIMULUS_MAX_CHARS]

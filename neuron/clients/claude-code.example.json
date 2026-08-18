@@ -1,0 +1,9 @@
+{
+  "_comment": "Claude Code — place as .mcp.json in project root, or merge into ~/.claude.json. The server key must be `neuron` so the SessionStart hook's tool names (mcp__neuron__help, ...) resolve.",
+  "mcpServers": {
+    "neuron": {
+      "command": "python.exe",
+      "args": ["-m", "neuron"]
+    }
+  }
+}

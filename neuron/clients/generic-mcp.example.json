@@ -1,0 +1,23 @@
+{
+  "_comment": "Generic MCP client (any OpenAI-compatible client that supports MCP stdio)",
+  "_note": "Use this as reference for any client not listed above. The MCP transport is stdio (stdin/stdout). The v5 server key is `neuron`.",
+  "mcpServers": {
+    "neuron": {
+      "transport": "stdio",
+      "command": "python.exe",
+      "args": ["-m", "neuron"]
+    }
+  },
+  "_macos_linux": {
+    "mcpServers": {
+      "neuron": {
+        "transport": "stdio",
+        "command": "python3",
+        "args": ["-m", "neuron"],
+        "env": {
+          "PYTHONPATH": "/usr/local/lib/neuron/src"
+        }
+      }
+    }
+  }
+}

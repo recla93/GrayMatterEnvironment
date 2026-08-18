@@ -1,0 +1,20 @@
+# Neuron ships WITHOUT a seed by default (see README "Seed knowledge"). IF you
+# deliberately drop a real base_knowledge.db into src/neuron/data/, this line
+# includes it in the sdist (the wheel picks it up via package-data in
+# pyproject.toml). With no .db present it matches nothing — which is intended.
+recursive-include src/neuron/data *.db
+recursive-include src/neuron/data *.png
+include assets/neuron-logo.png
+
+# Useful top-level docs/config for the sdist.
+# NOT CLAUDE.md — that's internal project/AI instructions, not a shipped doc.
+include README.md
+include CHANGELOG.md
+include docs/DEVELOPER.md
+include INSTALL.md
+include LICENSE
+
+# Keep junk out of the sdist.
+global-exclude *.py[cod]
+global-exclude __pycache__/*
+prune tests

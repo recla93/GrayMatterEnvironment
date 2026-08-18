@@ -1,0 +1,86 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+*.egg
+
+# DB / runtime data
+graphs/
+knowledge_grown/
+*.db
+*.db-wal
+*.db-shm
+
+# ...but the seed knowledge DB MUST be versioned and shipped in the package.
+# Allow it in both the legacy location and the packaged location.
+!knowledge/base_knowledge.db
+!src/neuron/data/
+!src/neuron/data/base_knowledge.db
+
+# Repair/backup snapshots of the seed are NOT shipped (re-ignore them).
+*.prerepair-*
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets — the real .env (with Turso credentials) must never be committed.
+# (.env.example ends in ".example", so it stays tracked.)
+.env
+*.env
+config.json
+~/.neuron/
+
+# Claude / Codex
+.claude/
+.codex/
+/CLAUDE.md
+/TASKLIST.md
+/HANDOFF*.md
+/handoff/
+
+# Garbage
+.fuse_hidden*
+*.bak
+*.neuron-bak
+.mount_probe.txt
+
+# Scratch/junk from local work sessions (ad-hoc check/test scripts and their
+# output) - collected here to be reviewed and deleted, never meant to be
+# committed even before that happens.
+_to_delete/
+
+# Local benchmark / perf scripts — not for distribution.
+scripts/bench_turn.py
+
+# Graphify output
+graphify-out/
+
+# Accidentally-committed extracted sdist (e.g. neuron-3.3.0/, a full duplicate
+# source tree unpacked at repo root during a local `python -m build` check).
+/neuron-[0-9]*.[0-9]*.[0-9]*/
+
+# Stray lock files (graphify/editors)
+/.lock
+
+# Launchers are install.cmd / install.sh / install.command — no compiled
+# binary is ever shipped in-tree (a stale NeuronInstaller.exe used to be).
+*.exe
