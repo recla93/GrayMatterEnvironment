@@ -36,8 +36,22 @@ def test_fastembed_is_a_hard_dependency_not_an_extra():
         "back to lexical search and never say so")
 
 
+_NEURON_PYPROJECT = ROOT.parent / "neuron" / "pyproject.toml"
+
+
+@pytest.mark.skipif(
+    not _NEURON_PYPROJECT.exists(),
+    reason="parita' con Neuron: serve il sibling, che in standalone non c'e'")
 def test_neurag_declares_the_same_embedder_as_neuron():
-    """One vector space across the suite starts with one dependency pin."""
+    """One vector space across the suite starts with one dependency pin.
+
+    Reads the SIBLING repo, so it can only run where both are checked out --
+    `ci.yml`, which is also the only place where the two pins can actually
+    diverge. The standalone job installs NeuRAG alone on purpose: there a
+    missing `neuron/pyproject.toml` is the arrangement, not a regression, and
+    letting it raise FileNotFoundError turned the one job that proves NeuRAG
+    stands alone into a job that says it cannot.
+    """
     def pin(pkg, dep):
         for d in _pyproject(pkg)["project"]["dependencies"]:
             if d.startswith(dep):
