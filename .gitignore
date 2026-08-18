@@ -1,0 +1,14 @@
+# Gray Matter Environment — root ignore (i 3 repo hanno i propri)
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+*.pyc
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+*.bak
