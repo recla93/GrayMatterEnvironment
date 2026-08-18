@@ -250,6 +250,12 @@ it manages Neuron and NeuRAG as internal workers.
 | **[GuidedUse.md](GuidedUse.md)** | **Start here after installing.** "Wow, I've got a brain: now what?" — the first half hour: what you have, memory vs knowledge, feeding it, teaching it, and what it deliberately will not do |
 | **[docs/](docs/)** | Getting started, CLI, tools, configuration, data, troubleshooting — every page in English and Italian (`*.it.md`) |
 
+### Working material
+Audits, plans, design records and past handoffs live in **[work/](work/)** —
+kept apart from the docs above because they describe a *moment*, not the current
+state. Newest first in [work/history/](work/history/). See
+[work/README.md](work/README.md) for what belongs where.
+
 ### Per-project
 | Project | Docs |
 |---|---|
