@@ -7,7 +7,10 @@ name: Release
 # wheels — a plain `python -m build` covers the artifacts.)
 on:
   push:
-    tags: ["gm-v*"]
+    # Il prefisso deve essere il nome della cartella: mirror.yml riconosce il
+    # tag confrontandolo col prefix del subtree (gray_matter), quindi un gm-v*
+    # pubblicava la Release qui e NON mirrorava il tag — uscendo verde.
+    tags: ["gray_matter-v*"]
 
 permissions:
   contents: write
