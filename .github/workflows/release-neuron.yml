@@ -57,9 +57,12 @@ jobs:
   build-pyturso-win:
     needs: test                        # red tests, no release
     runs-on: windows-latest          # already has Rust + MSVC + Windows SDK
-    defaults:
-      run:
-        working-directory: neuron
+    # NIENTE working-directory qui, e nessun checkout: questo job compila
+    # pyturso da PyPI e non tocca un solo file del repo. Col working-directory
+    # ereditato dagli altri job alla migrazione nel contenitore, ogni run
+    # moriva prima di partire -- "the directory name is invalid" -- perche' la
+    # cartella non esiste su un runner senza checkout. wheelhouse/ nasce nella
+    # radice del workspace, dove upload-artifact la cerca gia'.
     strategy:
       fail-fast: false
       matrix:
