@@ -33,6 +33,9 @@ jobs:
   push-mirrors:
     runs-on: ubuntu-latest
     strategy:
+      # Un mirror in errore non deve cancellare gli altri due: con fail-fast
+      # attivo la riga rossa non dice piu' QUALE repo ha il problema.
+      fail-fast: false
       max-parallel: 1
       matrix:
         include:
@@ -45,9 +48,16 @@ jobs:
     steps:
       # subtree split deve poter risalire tutta la storia: senza fetch-depth 0
       # ricostruirebbe da un albero tronco e il push non sarebbe fast-forward.
+      #
+      # persist-credentials: false perche' checkout lascia in git config un
+      # http.https://github.com/.extraheader col GITHUB_TOKEN, e quell'header
+      # vince sulle credenziali scritte nell'URL di push: il PAT non veniva mai
+      # usato e i tre push partivano come github-actions[bot], che la' non ha
+      # nessun permesso. Un 403 che sembrava un secret sbagliato e non lo era.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Split e push del branch
         if: startsWith(github.ref, 'refs/heads/')
