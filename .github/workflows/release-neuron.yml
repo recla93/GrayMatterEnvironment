@@ -96,7 +96,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: pyturso-win-*
-          path: dist
+          # Il path di download-artifact e' relativo alla RADICE del workspace:
+          # defaults.run.working-directory vale solo per gli step `run`. Con
+          # `path: dist` le wheel finivano in dist/ mentre `python -m build` --
+          # che il working-directory lo rispetta -- scriveva in neuron/dist/,
+          # ed e' li' che guarda il glob dei files. La Release usciva verde con
+          # solo wheel e sdist, senza le cinque pyturso: proprio gli artefatti
+          # per cui il matrix Windows esiste.
+          path: neuron/dist
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
