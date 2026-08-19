@@ -54,7 +54,7 @@ jobs:
       # vince sulle credenziali scritte nell'URL di push: il PAT non veniva mai
       # usato e i tre push partivano come github-actions[bot], che la' non ha
       # nessun permesso. Un 403 che sembrava un secret sbagliato e non lo era.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
