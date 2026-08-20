@@ -87,6 +87,14 @@ jobs:
         working-directory: neuron
     steps:
       - uses: actions/checkout@v5
+        with:
+          # fetch-depth 0: l'ultimo step fa `git subtree split`, che deve
+          # risalire tutta la storia. persist-credentials false: checkout
+          # lascerebbe in git config un extraheader col GITHUB_TOKEN, che vince
+          # sulle credenziali scritte nell'URL -- il push del tag partirebbe
+          # come github-actions[bot], che sui mirror non ha nessun permesso.
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -109,3 +117,26 @@ jobs:
         with:
           files: neuron/dist/*                # neuron wheel + sdist + pyturso win wheels
           generate_release_notes: true
+
+      # Il tag arriva sul mirror SOLO ORA, a Release pubblicata. Finche' e'
+      # stato in mirror.yml partiva in parallelo al gate: neuron-v6.4.3 e'
+      # finito come v6.4.3 su Neuron mentre il Release falliva, lasciando
+      # pubblico un tag che non corrispondeva a nessuna release.
+      #
+      # Qui il mirror NON e' una proiezione letterale: i tag sono prefissati
+      # (`neuron-v1.2.3`) perche' un `v*` nudo farebbe scattare tutti e tre i
+      # release insieme; di la' deve arrivare `v1.2.3`, o la pagina Releases di
+      # quel repo smette di avere senso.
+      - name: Tag sul mirror, rinominato
+        working-directory: .
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${TOKEN:-}" ]; then echo "  MIRROR_TOKEN assente: niente tag"; exit 0; fi
+          TAG="${GITHUB_REF#refs/tags/}"
+          SHA=$(git subtree split --prefix=neuron)
+          OUT="v${TAG#neuron-v}"
+          echo "  $TAG -> recla93/Neuron come $OUT ($SHA)"
+          URL="https://x-access-token:$TOKEN@github.com/recla93/Neuron.git"
+          git push "$URL" "$SHA:refs/tags/$OUT"
