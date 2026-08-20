@@ -137,6 +137,60 @@ guasti distinti, tutti dormienti dalla migrazione dei workflow alla radice:
   aspetta.** Nei test a due processi sincronizza su un evento (`READY`), non su
   `sleep`, e tieni il lock finché non lo ammazzi tu.
 
+### 0.8 Il contenitore è pubblico (dal 2026-08-19)
+
+Due cose migliorano da sole: `main-guard` ha smesso di essere un promemoria
+(0.7), e i minuti di Actions non si contano più — sui repo pubblici sono
+gratis, ed erano il matrix di cinque wheel Windows la voce cara, con i runner
+Windows che pesano il doppio.
+
+**Un commit su GME adesso è una pubblicazione.** Non esiste un momento
+successivo in cui riconsiderare: se entra, è pubblico, e resta raggiungibile
+nella storia anche dopo che lo togli. Quindi il controllo va fatto **prima**.
+
+- Niente percorsi della macchina: `C:\Users\<utente>`, mai il nome vero.
+- Niente referti di guasti sui tuoi dati. Un file che analizza la corruzione
+  del tuo database, letto fuori contesto da chi valuta la suite in trenta
+  secondi, dice l'opposto della cosa che la suite promette.
+- Niente appunti di sessione: gli handoff fra agenti hanno valore zero per chi
+  legge il repo e sono dove i percorsi locali si accumulano.
+
+**L'identità dei commit.** Usa l'indirizzo noreply, e rendilo definitivo su
+GitHub in *Settings → Emails → "Block command line pushes that expose my email"*:
+
+    git config --global user.email "<id>+<handle>@users.noreply.github.com"
+
+286 commit portano ancora l'indirizzo personale in chiaro. Era già pubblico dai
+tre mirror **prima** che GME lo diventasse, e non si ripara: vale solo fermarlo
+in avanti.
+
+**Cosa non si può disfare.** `git rm` toglie dal branch, non dalla storia. La
+rimozione vera vorrebbe dire riscrivere la storia e forzare il push: cambierebbe
+gli SHA di tutti i commit, romperebbe la parità con i tre mirror — che quella
+storia la condividono — e `main-guard` adesso lo vieta. Per degli appunti
+interni non è uno scambio che conviene.
+
+**Il controllo, da rifare prima di rendere pubblico qualunque altra cosa:**
+
+    # credenziali: albero e storia intera
+    git grep -InE "gh[pousr]_[A-Za-z0-9]{16,}|github_pat_|sk-ant-|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY"
+    for pat in ghp_ github_pat_ sk-ant- AKIA "PRIVATE KEY"; do
+      echo "$pat: $(git log --all --oneline -S"$pat" | wc -l)"
+    done
+
+    # percorsi della macchina -- NOTA il punto al posto del backslash
+    grep -rIoE "[A-Za-z]:.Users.[A-Za-z0-9._-]+|/home/[a-z0-9._-]+" . --exclude-dir=.git
+
+    # identita' degli autori presenti nella storia
+    git log --all --format='%ae' | sort -u
+
+Quel punto al posto del backslash non è pigrizia, ed è la trappola che è
+costata un falso "tutto pulito" il 2026-08-19: un pattern con i backslash
+sopravvive male al passaggio fra shell, heredoc e strumenti, e **un pattern
+rotto non dà errore — dà zero risultati**, che si legge esattamente come
+un repo senza problemi. Se una scansione di sicurezza torna vuota, verifica
+prima che il pattern trovi qualcosa che sai esserci.
+
 ## 1. Verifica locale (blocca tutto il resto)
 
 - [ ] Suite: `pytest Neuron/tests gray_matter/tests neurag/tests -q` (attesi ~270+35+15)
