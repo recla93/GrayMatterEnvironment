@@ -13,6 +13,124 @@
 > Nota: la cascade FK resta nello schema ma NON va usata con DELETE raw su
 > pyturso — usare sempre `delete_node()`.
 
+## 0. Procedura ricorrente (2026-08-19)
+
+> Le sezioni 1-5 qui sotto sono il verbale della **prima** release unificata di
+> luglio: restano come storico, i numeri di versione che citano sono superati.
+> Questa sezione 0 è invece la procedura da seguire **ogni volta**, scritta dopo
+> aver rilasciato neuron 6.4.3 e gray_matter 1.4.2 e aver incassato tutti gli
+> errori che si potevano incassare.
+
+### 0.1 La versione vive in quattro posti, non in uno
+
+Per ogni tool: `pyproject.toml`, `__init__.py`, il **badge del README**, e la
+**testa del CHANGELOG**. `test_version_consistency.py` li confronta tutti e
+quattro e la release si ferma al gate se uno solo non segue:
+
+    pyproject.toml says 1.4.2, but CHANGELOG top entry says 1.4.1;
+    README badge says 1.4.1; __init__.py says 1.4.1
+
+Bumpare il solo `pyproject.toml` è l'errore più facile del mondo, ed è già
+costato una release fallita. Il CHANGELOG non è un adempimento: il test
+pretende che la voce in cima **sia** la versione che stai rilasciando.
+
+- [ ] `pyproject.toml`
+- [ ] `__init__.py`
+- [ ] badge nel README
+- [ ] voce nuova in cima al CHANGELOG, con quel numero
+
+### 0.2 Se bumpi Gray Matter, tocchi anche gli altri due
+
+Il bump di GM ha un raggio più largo di quanto sembri. Oltre ai quattro posti
+di sopra servono:
+
+- [ ] **Wheel d'emergenza ricostruita** (era già scritto al §2, vale sempre):
+      `python -m pip wheel ./gray_matter --no-deps -w <tmp>`, poi la
+      `gray_matter-<ver>-py3-none-any.whl` va copiata in
+      **`neuron/src/neuron/_gm_vendor/`** e **`neurag/_gm_vendor/`**,
+      rimuovendo la vecchia. `test_gm_vendor_wheel.py` lo verifica.
+- [ ] **I quattro pin `GM_VERSION`**: `neuron/install.ps1`, `neuron/install.sh`,
+      `neurag/install.ps1`, `neurag/install.sh`. Il job `test` di
+      `release-neuron.yml` e `release-neurag.yml` verifica che combacino con la
+      versione di gray_matter **nell'albero** — quindi un bump di GM senza
+      questi rende non rilasciabili gli altri due tool, anche se non li stai
+      toccando.
+
+Attenzione con `git rm` sulle cartelle `_gm_vendor`: contengono un file solo,
+quindi git porta via anche la directory, e una `cp` successiva crea un **file**
+con quel nome al posto della cartella. Si vede da `git status`, ma un `git add`
+distratto lo committa.
+
+### 0.3 Il nome del tag è il nome della cartella
+
+    neuron-v6.4.3        neurag-v1.3.4        gray_matter-v1.4.2
+
+Il prefisso deve corrispondere al **nome della cartella del subtree**, perché è
+così che il push del tag decide a quale mirror appartiene. `release-gm.yml`
+scattava su `gm-v*` mentre il mirror cercava `gray_matter-v*`: il risultato era
+una Release pubblicata e il tag **mai** mirrorato, con tutti i job verdi.
+Corretto il 2026-08-19; la regola è una sola, non fare eccezioni.
+
+Il prefisso serve perché un `v*` nudo farebbe scattare tutti e tre i Release
+insieme. Di là arriva rinominato: `gray_matter-v1.4.2` → `v1.4.2`.
+
+### 0.4 L'ordine
+
+1. [ ] Bump completo (0.1) e, se tocca GM, wheel + pin (0.2)
+2. [ ] **Suite in locale, prima di toccare GitHub.** Attese oggi:
+       neuron ~349 · gray_matter ~550 · neurag ~378. È lo stesso gate della CI,
+       ma il giro dura secondi invece di minuti e non lascia tag da ripulire.
+3. [ ] Commit e push su `main` di GME
+4. [ ] Tag, **uno alla volta**: `git tag <prefisso>-v<ver> && git push origin <tag>`.
+       Il mirror ha `concurrency: group: mirror`, e GitHub tiene **un solo** run
+       in coda per gruppo: tre push ravvicinati fanno cancellare quello di mezzo.
+       Aspetta che il giro precedente chiuda.
+
+### 0.5 Cosa fa la pipeline, adesso
+
+    push su main       -> Mirror: split e push del branch sui tre repo. Solo branch.
+    push di un tag     -> Release: gate dei test -> build -> pubblica la Release
+                          su GME -> e SOLO ALLORA spinge il tag rinominato sul
+                          repo pubblico. Ultimo step di release-*.yml.
+
+Il push del tag stava in `mirror.yml` e partiva **in parallelo** al gate:
+`neuron-v6.4.3` è finito come `v6.4.3` su Neuron mentre il Release falliva,
+lasciando pubblico un tag che non corrispondeva a nessuna release. Spostato
+dentro il release il 2026-08-19.
+
+**Se una release fallisce**, ora il tag pubblico non nasce. Resta solo il tag su
+GME: cancellalo, correggi, ritagga. Non spostare un tag già pubblicato.
+
+### 0.6 La trappola che è costata tre guasti in un giorno
+
+**`defaults.run.working-directory` vale solo per gli step `run`.** Mai per i
+path delle action, mai per l'ambiente che `checkout` si lascia dietro. Tre
+guasti distinti, tutti dormienti dalla migrazione dei workflow alla radice:
+
+- `build-pyturso-win` non ha checkout — non gli serve, compila da PyPI — ma
+  aveva ereditato il `working-directory`: *"the directory name is invalid"*,
+  cinque wheel morte prima di eseguire una riga.
+- `download-artifact` scarica in un path relativo alla **radice** del workspace,
+  mentre `python -m build` rispetta il working-directory: le wheel finivano in
+  `dist/`, il glob guardava in `<tool>/dist/`, e la Release usciva verde con due
+  asset invece di sette.
+- `actions/checkout` lascia in `git config` un `http.https://github.com/.extraheader`
+  col `GITHUB_TOKEN`, che **vince sulle credenziali scritte nell'URL**: ogni
+  push verso i mirror partiva come `github-actions[bot]` e prendeva 403.
+  Serve `persist-credentials: false` ovunque si spinga col PAT.
+
+### 0.7 Le regole permanenti
+
+- **Non si committa sui tre repo pubblici.** Sono proiezioni. Sui cloni che
+  giri per caso: `git remote set-url --push origin DISABLED`.
+- **`main` dei tre è protetto** da un ruleset (`deletion` + `non_fast_forward`,
+  bypass vuota): il mirror è sempre fast-forward e passa, una divergenza no.
+  Su GME il ruleset esiste ma **non è applicato** finché il repo è privato in
+  piano Free — è un promemoria, non una guardia.
+- **Un'attesa a tempo contro un lavoro di durata variabile è un flaky che
+  aspetta.** Nei test a due processi sincronizza su un evento (`READY`), non su
+  `sleep`, e tieni il lock finché non lo ammazzi tu.
+
 ## 1. Verifica locale (blocca tutto il resto)
 
 - [ ] Suite: `pytest Neuron/tests gray_matter/tests neurag/tests -q` (attesi ~270+35+15)
