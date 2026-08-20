@@ -11,9 +11,16 @@ name: Mirror
 # Un commit che tocca due tool insieme si divide da solo: nel mirror di neuron
 # arriva la sola parte di neuron.
 #
-# REGOLA: non si committa sui mirror. `main` va protetto la' lasciando scrivere
-# solo il token di questo workflow. Due copie che possono divergere sono la
-# trappola che questo repo esiste per chiudere.
+# REGOLA: non si committa sui mirror. Proteggerli "lasciando scrivere solo il
+# token di questo workflow" NON e' possibile, ed e' stato verificato: MIRROR_TOKEN
+# e' un PAT del proprietario, quindi GitHub vede la stessa identita' delle sue
+# mani e nessuna regola puo' separarle. Il ruleset la' vieta invece cio' che il
+# mirror non fa mai -- force push e cancellazione di `main` -- con bypass vuota:
+# il mirror e' sempre fast-forward e passa, una divergenza si ferma. Il divieto
+# di committare a mano vive in locale, non su GitHub:
+#     git remote set-url --push origin DISABLED
+# Due copie che possono divergere sono la trappola che questo repo esiste per
+# chiudere.
 #
 # Tutti e tre i mirror hanno `main` come default. Non e' un dettaglio estetico:
 # la prima passata a vuoto pushava su `refs/heads/main` mentre Neuron stava su
