@@ -125,8 +125,14 @@ guasti distinti, tutti dormienti dalla migrazione dei workflow alla radice:
   giri per caso: `git remote set-url --push origin DISABLED`.
 - **`main` dei tre è protetto** da un ruleset (`deletion` + `non_fast_forward`,
   bypass vuota): il mirror è sempre fast-forward e passa, una divergenza no.
-  Su GME il ruleset esiste ma **non è applicato** finché il repo è privato in
-  piano Free — è un promemoria, non una guardia.
+  Su GME vale lo stesso ruleset (`main-guard`), e dal 2026-08-19 **è applicato
+  davvero**: era inerte finché il repo era privato in piano Free — i ruleset su
+  repo privati richiedono Team/Enterprise — e si è attivato da solo quando GME
+  è diventato pubblico. Se un giorno tornasse privato, tornerebbe a essere un
+  promemoria senza dirlo: l'API continua a riportare `enforcement=active` in
+  entrambi i casi. Per sapere se morde davvero si guarda
+  `GET /repos/{owner}/{repo}/rules/branches/main`, che elenca le regole
+  **effettive** ed è vuoto quando non se ne applica nessuna.
 - **Un'attesa a tempo contro un lavoro di durata variabile è un flaky che
   aspetta.** Nei test a due processi sincronizza su un evento (`READY`), non su
   `sleep`, e tieni il lock finché non lo ammazzi tu.
