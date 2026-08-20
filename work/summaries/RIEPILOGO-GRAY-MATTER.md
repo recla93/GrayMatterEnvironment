@@ -47,7 +47,6 @@
 | `GrayMatterAudit.md` | Audit specifico Gray Matter |
 | `AUDIT-INSTALL-FLOW.md` | Audit flow installazione (GM executor) |
 | `AUDIT-PERFORMANCE.md` | Audit performance (GM pulse, cache, workers) |
-| `work/audit/AUDITMAINPC.md` | Audit completo sulla main PC |
 | `audit_gray-matter_corruption.md` | Audit corruzione dati GM |
 | `DESIGN-CLOUD-MEMORY-2026-07-21.md` | Design memoria cloud: Turso dual-DB, wire senza CLI, retry/reconnect/transactions |
 | `DESIGN-FLASH-COGNITION-2026-07-22.md` | Design flash cognition: serendipitous recall su topic shift |
