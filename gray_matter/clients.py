@@ -636,9 +636,9 @@ def standalone_register_tool(name: str, dry_run: bool = False) -> list[str]:
             from neurag import clients as _rc
             results = _rc.register_all(dry_run=dry_run)
         else:
-            return [f"[!!] tool sconosciuto: {name}"]
+            return [f"[!!] unknown tool: {name}"]
     except ImportError:
-        return [f"[!!] {name} non installato: impossibile registrarlo standalone"]
+        return [f"[!!] {name} is not installed: cannot register it standalone"]
     return [r.line().strip() for r in results]
 
 
@@ -647,7 +647,7 @@ def release_tool(name: str) -> list[str]:
     (best-effort) e — SOLO se nessun peer resta gestito — rimozione dell'entry
     `gray-matter` dai client. Ritorna righe di report."""
     if name not in _STANDALONE_TOOLS:
-        return [f"[!!] tool sconosciuto: {name}"]
+        return [f"[!!] unknown tool: {name}"]
     lines = []
     un = set_unmanaged(name, True)
     lines.append(f"[OK] GM non gestisce più '{name}' (persistito)")

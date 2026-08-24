@@ -424,13 +424,13 @@ async def list_tools() -> list[Tool]:
     # Gray-Matter's own tools
     tools.append(Tool(
         name="gray_matter_pulse",
-        description="Pre-contesto + chunk knowledge + flash. Chiama neuron_get_context e neurag_query in parallelo, unisce, usa cache.",
+        description="Pre-context + knowledge chunks + flash. Calls neuron_get_context and neurag_query in parallel, merges the results, uses the cache.",
         inputSchema={
             "type": "object",
             "properties": {
-                "topic": {"type": "string", "description": "Topic da cercare"},
+                "topic": {"type": "string", "description": "Topic to search for"},
                 "top_n": {
-                    "type": "integer", "description": "Numero chunk (default 5)",
+                    "type": "integer", "description": "Number of chunks (default 5)",
                     "default": 5, "minimum": 1, "maximum": 10,
                 },
             },
@@ -457,20 +457,20 @@ async def list_tools() -> list[Tool]:
     ))
     tools.append(Tool(
         name="gray_matter_state_set",
-        description="Blackboard (GM, talamo): pubblica key=value con TTL opzionale (secondi). Chiavi 'org/componente/nome'. Ritorna l'entry con versione.",
+        description="Blackboard (GM, thalamus): publish key=value with an optional TTL in seconds. Keys are 'org/component/name'. Returns the entry with its version.",
         inputSchema={
             "type": "object",
             "properties": {
-                "key": {"type": "string", "description": "Chiave, es. 'cervello/mode'"},
-                "value": {"description": "Valore arbitrario (JSON)"},
-                "ttl": {"type": "number", "description": "Scadenza in secondi (default: mai)"},
+                "key": {"type": "string", "description": "Key, e.g. 'cervello/mode'"},
+                "value": {"description": "Arbitrary JSON value"},
+                "ttl": {"type": "number", "description": "Expiry in seconds (default: never)"},
             },
             "required": ["key", "value"],
         },
     ))
     tools.append(Tool(
         name="gray_matter_state_get",
-        description="Blackboard: legge key. None se assente o scaduta (lo stato decade da solo).",
+        description="Blackboard: read key. None if missing or expired — state decays on its own.",
         inputSchema={
             "type": "object",
             "properties": {"key": {"type": "string"}},
@@ -479,23 +479,23 @@ async def list_tools() -> list[Tool]:
     ))
     tools.append(Tool(
         name="gray_matter_state_delta",
-        description="Blackboard: cambi dalla versione since in poi, filtro per prefisso di chiave (scadute incluse).",
+        description="Blackboard: changes from version `since` onwards, filtered by key prefix (expired entries included).",
         inputSchema={
             "type": "object",
             "properties": {
-                "prefix": {"type": "string", "description": "Prefisso chiave (default '')"},
-                "since_version": {"type": "integer", "description": "Versione da cui elencare i cambi (default 0)"},
+                "prefix": {"type": "string", "description": "Key prefix (default '')"},
+                "since_version": {"type": "integer", "description": "Version to list changes from (default 0)"},
             },
         },
     ))
     tools.append(Tool(
         name="gray_matter_brainstorm",
-        description="Cervello (GM, talamo): combina un seed con gli elementi piu' DISTANTI (bassa similarita') di Neuron (nodi) e NeuRAG (chunk) — candidati inattesi, ordinati per distanza. Serve 'seed'.",
+        description="Brain (GM, thalamus): pairs a seed with the most DISTANT items (lowest similarity) from Neuron (nodes) and NeuRAG (chunks) — unexpected candidates, ordered by distance. Requires 'seed'.",
         inputSchema={
             "type": "object",
             "properties": {
-                "seed": {"type": "string", "description": "Concetto da cui generare idee"},
-                "n": {"type": "integer", "description": "Numero candidati (default 5, max 10)"},
+                "seed": {"type": "string", "description": "Concept to generate ideas from"},
+                "n": {"type": "integer", "description": "Number of candidates (default 5, max 10)"},
             },
             "required": ["seed"],
         },
