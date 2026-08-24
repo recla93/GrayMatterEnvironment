@@ -85,3 +85,66 @@ jobs:
       - name: Run tests
         working-directory: ${{ runner.temp }}/solo/${{ matrix.tool }}
         run: python -m pytest tests -q
+
+  # GRAY MATTER DEVE FUNZIONARE SENZA NEURAG.
+  #
+  # Il job `alone` copre i due peer senza il gateway. Il verso opposto non era
+  # coperto: il gateway con UN SOLO peer. E' una configurazione reale — chi
+  # vuole la memoria e non la knowledge base installa GM + Neuron — ma sulla
+  # macchina di chi sviluppa NeuRAG c'e' sempre, quindi un `import neurag` non
+  # protetto in gray_matter/ passerebbe ogni CI e si romperebbe solo a casa
+  # sua. Stessa classe di regressione che `alone` esiste per intercettare,
+  # semplicemente nell'altra direzione.
+  gateway-without-neurag:
+    name: Gray Matter + Neuron, senza NeuRAG
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache fastembed ONNX model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-all-MiniLM-L6-v2-v1
+
+      # Stessa ragione di `alone`: fuori dall'albero, senza il fratello che si
+      # vuole assente. Qui i vicini ammessi sono due, non uno.
+      - name: GM e Neuron da soli, fuori dall'albero
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/duo"
+          cp -r "$GITHUB_WORKSPACE/gray_matter" "$GITHUB_WORKSPACE/neuron" "$RUNNER_TEMP/duo/"
+          echo "  vicini di casa:"; ls "$RUNNER_TEMP/duo"
+
+      - name: Install neuron
+        working-directory: ${{ runner.temp }}/duo/neuron
+        run: pip install -e .[dev]
+
+      - name: Install gray_matter
+        working-directory: ${{ runner.temp }}/duo/gray_matter
+        run: pip install -e .[dev]
+
+      - name: NeuRAG non deve essere qui
+        shell: bash
+        working-directory: ${{ runner.temp }}/duo/gray_matter
+        run: |
+          if python -c "import neurag" 2>/dev/null; then
+            echo "::error::neurag e' importabile: il job non prova piu' niente"
+            exit 1
+          fi
+          python -c "import neuron, gray_matter"   # questi DEVONO esserci
+          echo "  ok: neurag assente, gli altri due presenti"
+
+      # Il grosso del contratto: un import non protetto muore su questa riga.
+      - name: Import di ogni modulo di gray_matter
+        working-directory: ${{ runner.temp }}/duo/gray_matter
+        run: python -c "import importlib,pkgutil,gray_matter as p; [importlib.import_module(m.name) for m in pkgutil.walk_packages(p.__path__, p.__name__ + '.')]"
+
+      - name: Run tests
+        working-directory: ${{ runner.temp }}/duo/gray_matter
+        run: python -m pytest tests -q

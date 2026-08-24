@@ -9,11 +9,21 @@ stops discovery from handing out a venv path that no longer exists.
 gme_root() is monkeypatched instead of the platform env vars so the same test
 file is valid on Windows, macOS and Linux.
 """
+import importlib.util
 import json
 
 import pytest
 
 from gray_matter import gme, uninstaller
+
+# `register_installed` registra CIO' CHE QUESTO VENV DICHIARA — "si tocca solo
+# cio' che dichiara di essere nostro". L'atteso era invece la terna fissa, che
+# vale solo sulla macchina di chi sviluppa (dove i tre ci sono sempre) e rendeva
+# rosso il job `gateway-without-neurag` su un comportamento corretto. Chiedere
+# quali peer siano davvero importabili verifica lo stesso contratto in ogni
+# installazione, e continua a fallire se register_installed ne salta uno.
+_SUITE = (("gray-matter", "gray_matter"), ("neuron", "neuron"), ("neurag", "neurag"))
+_IMPORTABLE = {key for key, mod in _SUITE if importlib.util.find_spec(mod) is not None}
 
 
 @pytest.fixture(autouse=True)
@@ -243,7 +253,7 @@ def test_register_installed_covers_every_importable_tool():
     import sys
 
     keys = gme.register_installed(source="/src")
-    assert set(keys) == {"gray-matter", "neuron", "neurag"}, keys
+    assert set(keys) == _IMPORTABLE, keys
 
     for key in keys:
         t = gme.read_tool(key)
@@ -269,7 +279,7 @@ def test_register_installed_skips_what_it_cannot_import(monkeypatch):
 def test_register_installed_is_idempotent(_gme_in_tmp):
     gme.register_installed()
     gme.register_installed()
-    assert len(list(_gme_in_tmp.glob("*.json"))) == 3
+    assert len(list(_gme_in_tmp.glob("*.json"))) == len(_IMPORTABLE)
 
 
 def test_install_plan_registers_gme_after_the_manifest():
@@ -288,7 +298,7 @@ def test_executor_register_gme(_gme_in_tmp):
     assert dry["ok"] and not _gme_in_tmp.exists()      # dry-run writes nothing
 
     res = executor._register_gme(dry_run=False)
-    assert res["ok"] and set(res["keys"]) == {"gray-matter", "neuron", "neurag"}
+    assert res["ok"] and set(res["keys"]) == _IMPORTABLE
 
 
 # --- uninstall wiring ------------------------------------------------------

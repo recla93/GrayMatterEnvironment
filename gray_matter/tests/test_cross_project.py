@@ -7,12 +7,24 @@ pyturso's exclusive lock doesn't leak across tests.
 """
 import asyncio
 import importlib
+import importlib.util
 import json
 import os
 import sys
 from pathlib import Path
 
 import pytest
+
+
+# Alcuni di questi test esercitano codice DI NeuRAG (`neurag.clients`,
+# `neurag.cli`, `neurag.paths`) o danno per scontati due sub-server. In una
+# installazione GM + Neuron senza NeuRAG non hanno un soggetto: vanno saltati,
+# non falliti. Dichiararlo qui e' cio' che permette al job
+# `gateway-without-neurag` di essere verde senza spegnere i 38 test di questo
+# file che il gateway con un solo peer deve continuare a superare.
+_needs_neurag = pytest.mark.skipif(
+    importlib.util.find_spec("neurag") is None,
+    reason="richiede NeuRAG installato (integrazione a tre)")
 
 
 # ---------------------------------------------------------------------------
@@ -22,6 +34,7 @@ import pytest
 class TestPathsDiscovery:
     """gray_matter.paths delegates to neuron.paths / neurag.paths for data."""
 
+    @_needs_neurag
     def test_neurag_db_uses_peer_paths(self, monkeypatch):
         """neurag_db() calls neurag.paths.db_path() when neurag is installed."""
         from gray_matter import paths as gm
@@ -30,6 +43,7 @@ class TestPathsDiscovery:
         monkeypatch.setattr(rp, "db_path", lambda: fake_db)
         assert gm.neurag_db() == fake_db
 
+    @_needs_neurag
     def test_neurag_db_fallback_when_peer_missing(self, monkeypatch):
         """neurag_db() falls back to a default when neurag.paths import fails."""
         from gray_matter import paths as gm
@@ -69,6 +83,7 @@ class TestPathsDiscovery:
 class TestClientDetection:
     """gray_matter.clients.installed_servers finds neuron/neurag/gray-matter."""
 
+    @_needs_neurag
     def test_installed_servers_finds_all_three(self):
         """All three packages are importable in the GM venv."""
         from gray_matter.clients import installed_servers
@@ -97,6 +112,7 @@ class TestClientDetection:
 class TestStandaloneRegistration:
     """gray_matter.clients.standalone_register_tool delegates to the peer."""
 
+    @_needs_neurag
     def test_register_neurag_delegates_to_rc(self, monkeypatch):
         """registering 'neurag' calls neurag.clients.register_all."""
         from gray_matter import clients as gm_clients
@@ -150,6 +166,7 @@ class TestStandaloneRegistration:
 # 4. gm_still_manages — neurag checks if GM still controls it
 # ---------------------------------------------------------------------------
 
+@_needs_neurag
 class TestGmStillManages:
     """neurag.clients.gm_still_manages checks gray_matter.settings."""
 
@@ -188,6 +205,7 @@ class TestGmStillManages:
 # 5. _run_via_gm routing — neurag CLI routes writes through GM when active
 # ---------------------------------------------------------------------------
 
+@_needs_neurag
 class TestRunViaGm:
     """neurag.cli._run_via_gm routes commands through GM IPC."""
 
@@ -383,6 +401,7 @@ class TestGMPlusSingleTool:
         assert "neuron" in result
         assert "neurag" not in result
 
+    @_needs_neurag
     def test_detect_subservers_includes_all_when_no_unmanaged(self, monkeypatch):
         """detect_subservers includes both when neither is unmanaged."""
         from gray_matter import server as srv
