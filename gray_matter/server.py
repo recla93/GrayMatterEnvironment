@@ -779,6 +779,19 @@ async def _prewarm_workers():
     if _daemon_reachable():
         return
     while True:
+        # Re-probe EVERY sweep, and bypass the backoff in _daemon_reachable():
+        # that backoff exists so a missing daemon isn't probed per tool call,
+        # but here it is the bug. Two clients starting in the same second both
+        # find no daemon, both set the 30 s backoff; the one that loses the
+        # election then pre-warms a full local set inside its own blind window
+        # — and those workers hold the graph files for the rest of the process.
+        # Measured: two Claude Desktop surfaces 1 s apart, two worker sets, one
+        # of them permanently degraded to sqlite3. A 0.4 s probe every 2 s at
+        # startup is cheaper than a duplicate 1.1 GB model and a second writer.
+        if not _IS_DAEMON and gm_answers(GRAY_MATTER_HOST, resolve_port()):
+            _shutdown_workers()          # dismiss anything this sweep spawned
+            _prewarmed.clear()
+            return
         for s in _registry.alive_servers():
             if s.name in _prewarmed or not s.collaborative:
                 continue
@@ -1420,6 +1433,12 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                         conn.sendall(struct.pack("!I", len(json.dumps(response).encode("utf-8"))) + json.dumps(response).encode("utf-8"))
                         conn.close()
                         server_sock.close()
+                        # os._exit skips atexit AND the cleanup at the end of
+                        # _run(), so the workers this daemon owns outlived it:
+                        # orphan writers on the same graph files, with no final
+                        # checkpoint. That is the accumulation pids.py was
+                        # written to mop up — better not to create it.
+                        _shutdown_workers()
                         os._exit(0)
                     else:
                         response = {"error": f"Unknown action: {action}"}
