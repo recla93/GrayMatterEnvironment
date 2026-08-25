@@ -1122,8 +1122,15 @@ def _tag_of(line: str) -> str:
 
 def _build_server(api: Api):
     import http.server
+    import hmac
+    import secrets
 
     holder: dict = {}
+    # Capability token: la pagina è servita dallo stesso server con il token
+    # incorporato, e ogni POST deve rispedirlo. Senza, qualsiasi sito aperto
+    # nel browser potrebbe comandare l'Api (che spawna subprocess veri) con un
+    # semplice fetch su 127.0.0.1 — il CORS non impedisce la *sending*.
+    token = secrets.token_urlsafe(24)
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a):        # niente rumore su stdout
@@ -1133,15 +1140,8 @@ def _build_server(api: Api):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
-
-        def do_OPTIONS(self):
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
 
         def do_GET(self):
             # The page is served over http, not file://, so a relative path to
@@ -1157,6 +1157,10 @@ def _build_server(api: Api):
             self._send(200, holder["html"].encode("utf-8"), "text/html; charset=utf-8")
 
         def do_POST(self):
+            got = self.headers.get("X-GM-Token", "")
+            if not hmac.compare_digest(got.encode(), token.encode()):
+                self._send(403, b'{"error":"forbidden"}', "application/json")
+                return
             name = self.path.rsplit("/", 1)[-1]
             # Guard BEFORE getattr: the attribute lookup must not run on arbitrary
             # input (non-/api/ paths, names that start with "_").
@@ -1188,7 +1192,8 @@ def _build_server(api: Api):
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = srv.server_address[1]
     holder["html"] = _HTML.read_text(encoding="utf-8").replace(
-        "__GM_API_BASE__", f"http://127.0.0.1:{port}")
+        "__GM_API_BASE__", f"http://127.0.0.1:{port}").replace(
+        "__GM_TOKEN__", token)
     return srv, port, holder["html"]
 
 

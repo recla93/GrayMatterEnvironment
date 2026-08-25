@@ -273,6 +273,11 @@
 
 <script>
 const API = "__GM_API_BASE__";
+// Capability token: ogni pagina servita dal server lo porta incorporato e lo
+// rispedisce su ogni POST. Un sito qualsiasi aperto nel browser può SEMPRE
+// inviare richieste a 127.0.0.1 (il CORS non blocca la sending), ma senza il
+// token la richiesta è rifiutata prima di toccare l'Api.
+const TOKEN = "__GM_TOKEN__";
 let CATALOG = [], current = null, openCmd = null;
 
 // ── i18n ─────────────────────────────────────────────────────────
@@ -472,7 +477,7 @@ async function call(method, payload){
     return await window.pywebview.api[method](payload ? JSON.stringify(payload) : "");
   }
   const r = await fetch(API + "/api/" + method, {
-    method:"POST", headers:{"Content-Type":"application/json"},
+    method:"POST", headers:{"Content-Type":"application/json", "X-GM-Token":TOKEN},
     body: payload ? JSON.stringify(payload) : ""
   });
   return await r.json();
