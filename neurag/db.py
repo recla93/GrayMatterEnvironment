@@ -186,33 +186,47 @@ class RemoteTursoConnection:
     def rollback(self) -> None:
         self._tx = None
 
-    def commit(self) -> None:
-        if self._tx is None:
-            return
+    def _flush_tx(self) -> None:
+        """Send the buffered statements as ONE atomic batch."""
         stmts, self._tx = self._tx, None
         if stmts:
             _with_retry(lambda: self._client.batch(stmts),
                         on_retry=self._reconnect)
 
+    def commit(self) -> None:
+        if self._tx is None:
+            return
+        self._flush_tx()
+
     # -- statement execution ------------------------------------------------
     def execute(self, sql: str, params=()):
         if self._is_noop_pragma(sql):
             return _RemoteCursor(None)
-        if self._tx is not None and _is_write_sql(sql):
+        if _is_write_sql(sql):
+            # Auto-begin (2026-08-25): writes buffer until commit()/a read/
+            # close(). Until now begin() had ZERO callers, so commit() was a
+            # permanent no-op and every multi-statement sequence (delete_node,
+            # rebuild_links, index replace) went to the network statement by
+            # statement — a dropped socket left HALF a deletion behind.
+            if self._tx is None:
+                self._tx = []
             self._tx.append(_libsql.Statement(sql, list(params) if params else None))
             return _RemoteCursor(None)
+        if self._tx:
+            # A reader must never see stale state: land buffered writes first.
+            # (Splits a long run into batches at read boundaries — still
+            # correct, just less granular atomicity.)
+            self._flush_tx()
         return _with_retry(
             lambda: _RemoteCursor(self._client.execute(sql, list(params) if params else None)),
             on_retry=self._reconnect)
 
     def executemany(self, sql: str, seq_of_params):
         stmts = [_libsql.Statement(sql, list(p)) for p in seq_of_params]
-        if self._tx is not None:
-            self._tx.extend(stmts)
-            return _RemoteCursor(None)
         if stmts:
-            _with_retry(lambda: self._client.batch(stmts),
-                        on_retry=self._reconnect)
+            if self._tx is None:
+                self._tx = []
+            self._tx.extend(stmts)
         return _RemoteCursor(None)
 
     def executescript(self, script: str):
@@ -221,9 +235,15 @@ class RemoteTursoConnection:
 
     def close(self):
         try:
-            self._client.close()
-        except Exception:
-            pass
+            if self._tx:
+                # Safety net: a caller that wrote and closed without committing
+                # must not lose its work.
+                self._flush_tx()
+        finally:
+            try:
+                self._client.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _without_vector(row: dict) -> dict:
@@ -1128,10 +1148,17 @@ class KnowledgeGraph:
         self._conn.execute("UPDATE nodes SET name = ?, path = ? WHERE id = ?",
                            (new_name, new_path, node_id))
         # substr è 1-based: si tiene tutto ciò che segue il vecchio prefisso.
+        # ESCAPE: un nome con % o _ non deve matchare percorsi estranei.
         self._conn.execute(
-            "UPDATE nodes SET path = ? || substr(path, ?) WHERE path LIKE ?",
-            (new_path, len(old_path) + 1, old_path + "/%"))
+            "UPDATE nodes SET path = ? || substr(path, ?) WHERE path LIKE ? ESCAPE '\\'",
+            (new_path, len(old_path) + 1, self._like_escape(old_path) + "/%"))
         self._conn.commit()
+
+    @staticmethod
+    def _like_escape(text: str) -> str:
+        r"""Escape LIKE wildcards so '100%_done' matches itself, not everything.
+        Pair with `ESCAPE '\'` in the SQL."""
+        return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     def get_descendants(self, node_id: int) -> list[dict]:
         """Breadth-first descendants via path prefix."""
@@ -1143,17 +1170,18 @@ class KnowledgeGraph:
         base = row["path"]
         base = base + "/" if not base.endswith("/") else base
         rows = self._conn.execute(
-            "SELECT * FROM nodes WHERE path LIKE ? ORDER BY path",
-            (f"{base}%",)
+            "SELECT * FROM nodes WHERE path LIKE ? ESCAPE '\\' ORDER BY path",
+            (self._like_escape(base) + "%",)
         ).fetchall()
         return [dict(r) for r in rows]
 
     def find_node_by_trigger(self, keyword: str) -> Optional[dict]:
         """Find a node whose triggers list contains the given keyword."""
-        # SQLite JSON array search
+        # SQLite JSON array search. ESCAPE: a keyword with %/_ must not match
+        # every trigger in the vault.
         rows = self._conn.execute(
-            "SELECT * FROM nodes WHERE triggers LIKE ?",
-            (f'%"{"%s" % keyword}"%',)
+            "SELECT * FROM nodes WHERE triggers LIKE ? ESCAPE '\\'",
+            (f'%"{self._like_escape(keyword)}"%',)
         ).fetchall()
         if rows:
             return dict(rows[0])

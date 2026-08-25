@@ -92,6 +92,14 @@ def ensure_vault(corpus: pathlib.Path, vault: pathlib.Path,
     fresh = rebuild or not vault.exists()
     if rebuild and vault.exists():
         vault.unlink()
+        # A fresh DB next to stale -wal/-shm sidecars is the classic recipe for
+        # "file is not a database" on the next open: remove them together.
+        for sidecar in (vault.with_name(vault.name + "-wal"),
+                        vault.with_name(vault.name + "-shm")):
+            try:
+                sidecar.unlink(missing_ok=True)
+            except OSError:
+                pass
     vault.parent.mkdir(parents=True, exist_ok=True)
     kg = KnowledgeGraph(vault)
     if fresh:

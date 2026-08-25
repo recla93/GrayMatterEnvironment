@@ -56,8 +56,37 @@ def test_remote_pragma_is_noop(monkeypatch):
     conn = db.RemoteTursoConnection("libsql://x", "tok")
     # WAL/foreign_keys pragmas are meaningless remote — must not hit the client
     assert conn.execute("PRAGMA journal_mode=WAL").fetchall() == []
+    # Auto-begin (2026-08-25): writes buffer until commit(), then land as ONE
+    # atomic batch. Before, every statement went to the network alone.
     conn.executemany("INSERT INTO t(x) VALUES (?)", [(1,), (2,)])
-    assert conn._client.batches, "executemany should batch"
+    assert not conn._client.batches, "buffered: nothing on the wire before commit"
+    assert conn._tx and len(conn._tx) == 2
+    conn.commit()
+    assert len(conn._client.batches) == 1, "one atomic batch"
+    assert len(conn._client.batches[0]) == 2
+    conn.close()
+
+
+def test_read_flushes_buffered_writes(monkeypatch):
+    """A reader must never see stale state: pending writes land before any
+    SELECT goes out."""
+    client = _FakeClient()
+
+    class _Spy(_FakeEmptyClient):
+        def __init__(self):
+            self.batches = []
+        def batch(self, stmts):
+            self.batches.append(stmts)
+
+    spy = _Spy()
+    monkeypatch.setattr(db, "_libsql", _FakeLibsql)
+    monkeypatch.setattr(db._libsql, "create_client_sync",
+                        staticmethod(lambda url, auth_token: spy))
+    conn = db.RemoteTursoConnection("libsql://x", "tok")
+    conn.execute("DELETE FROM nodes WHERE id = 1")
+    assert not spy.batches, "still buffered"
+    conn.execute("SELECT COUNT(*) FROM nodes")
+    assert len(spy.batches) == 1, "read must flush pending writes first"
     conn.close()
 
 
