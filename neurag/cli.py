@@ -932,15 +932,21 @@ def _dispatch() -> None:
     elif args.command == "query":
         node = db.find_node_by_trigger(args.query)
         chunks = []
+        touched: list[int] = []
         if node:
             print(f"Trigger match: {node['name']} (type={node['node_type']})")
+            touched.append(node["id"])
             chunks = db.get_chunks(node["id"])
             if not chunks:
                 rows = db._conn.execute("SELECT id FROM nodes WHERE parent_id = ?", (node["id"],)).fetchall()
                 for r in rows:
+                    touched.append(r["id"])
                     chunks.extend(db.get_chunks(r["id"]))
         if not chunks:
+            # search registra già l'uso dei suoi risultati: qui non si tocca nulla
             chunks = db.search(args.query, args.top_n, deep=args.deep)
+        elif touched:
+            db.touch_nodes(touched)
         chunks = chunks[:args.top_n]
 
         if not chunks:

@@ -549,6 +549,10 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
         top_n = min(int(arguments.get("top_n", 5)), 10)
         node = db.find_node_by_trigger(query)
         if node:
+            # Il match da trigger era l'unica strada che non registrava l'uso:
+            # i nodi più consultati accumulavano zero touch e diventavano
+            # candidati al parcheggio come dormienti.
+            db.touch_nodes([node["id"]])
             children = db.get_children(node["id"])
             node_chunks = db.get_chunks(node["id"])
             lines = [f"Trigger match: {node['path']} ({len(children)} children, {len(node_chunks)} chunks)"]
