@@ -661,6 +661,12 @@ class KnowledgeGraph:
 
     def _connect(self) -> None:
         db_str = str(self._db_path)
+        # Defaults for EVERY tier: the remote branch returns early, and both
+        # _init_schema (line ~860) and search(touch=True) read _read_only —
+        # before 2026-08-25 they were only assigned on the local path, so a
+        # cloud-tier construction crashed with AttributeError.
+        self._open_errors: list[str] = []
+        self._read_only = False
         # Tier order: cloud Turso (shared, multi-machine) -> local pyturso
         # (native vector_distance_cos). Reads from other processes work fine
         # via shared lock; writes route through GM (_run_via_gm in cli.py).
@@ -670,8 +676,6 @@ class KnowledgeGraph:
             self._engine_name = "Turso (cloud)"
             return  # remote: pragmas are no-ops, rows already name-accessible
         _ensure_parent_dir(db_str)
-        self._open_errors: list[str] = []
-        self._read_only = False
         conn = _open_local_turso(db_str, self._open_errors) if TURSO_AVAILABLE else None
         if conn is not None:
             self._conn = conn
@@ -1646,6 +1650,11 @@ class KnowledgeGraph:
         """Record that these nodes just answered something, and reinforce the
         tags that got there. This is the only writer of `salience`: without it
         decay would be halving a number nothing ever raises."""
+        # Il guard sta QUI e non nei chiamanti: ogni strada che serve un nodo
+        # (search, match da trigger, CLI) deve poter toccare senza ricordarsi
+        # il tier — su read-only l'UPDATE è vietato, non inutile.
+        if getattr(self, "_read_only", False):
+            return
         ids = sorted({int(n) for n in node_ids})
         if not ids:
             return

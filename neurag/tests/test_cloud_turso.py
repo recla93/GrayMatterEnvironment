@@ -75,3 +75,37 @@ def test_local_open_degrades_to_none(monkeypatch):
         raise OSError("open: NotFound")
     monkeypatch.setattr(db, "turso_connect", _boom, raising=False)
     assert db._open_local_turso("/tmp/does/not/matter.db") is None  # caller logs error
+
+
+class _FakeEmptyClient:
+    """Accepts anything, returns nothing: enough to run construction."""
+
+    def execute(self, sql, params=None):
+        return _FakeResult([], [])
+
+    def batch(self, stmts):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_cloud_tier_constructs_and_is_writable(monkeypatch):
+    # Regression (2026-08-25): _read_only was assigned only AFTER the
+    # REMOTE_TURSO early-return in _connect(), so cloud-tier construction
+    # crashed with AttributeError in _init_schema. The whole remote mode was
+    # dead on arrival and no test noticed.
+    monkeypatch.setattr(db, "_libsql", _FakeLibsql)
+    monkeypatch.setattr(db._libsql, "create_client_sync",
+                        staticmethod(lambda url, auth_token: _FakeEmptyClient()))
+    monkeypatch.setattr(db, "REMOTE_TURSO", True)
+    monkeypatch.setattr(db, "TURSO_DATABASE_URL", "libsql://fake")
+    monkeypatch.setattr(db, "TURSO_AUTH_TOKEN", "tok")
+
+    kg = db.KnowledgeGraph(db_path=pathlib.Path(":memory:"))
+    try:
+        assert kg._engine_name == "Turso (cloud)"
+        assert kg._read_only is False      # _init_schema / search(touch) read this
+        assert kg._vector_sql is True
+    finally:
+        kg.close()
