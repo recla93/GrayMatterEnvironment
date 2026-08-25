@@ -78,15 +78,11 @@ def _send_heartbeat(name: str) -> dict:
 
 
 def _is_gray_matter_running() -> bool:
-    """Check if a Gray-Matter process is listening on the IPC port."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.5)
-            s.connect((GRAY_MATTER_HOST, resolve_port()))
-            s.close()
-            return True
-    except (ConnectionRefusedError, TimeoutError, OSError):
-        return False
+    """True solo se su (host, port) risponde un GM (probe ping, non un TCP
+    connect qualunque): il file `port` può essere stantio dopo un reboot, e
+    un estraneo su quella porta faceva dire "already running" a start/ping
+    mentre ogni chiamata IPC reale falliva."""
+    return gm_answers(GRAY_MATTER_HOST, resolve_port())
 
 
 def autoregister(name: str, tool_names: list[str]) -> bool:
@@ -1275,6 +1271,23 @@ async def _recv_message(loop, conn) -> bytes:
     return payload or b""
 
 
+def _gm_answers_with_startup_grace(host: str, port: int,
+                                   tries: int = 6, delay: float = 0.3) -> bool:
+    """gm_answers ripetuto: tollera la finestra bind→accept di un GM che sta
+    partendo sulla stessa porta (race del singleton, 2026-08-25).
+
+    Due daemon avviati insieme: A fa il bind ma non è ancora in `listen`; il
+    probe singolo di B scadeva, B concludeva "processo estraneo", saliva di
+    porta, sovrascriveva il rendezvous file → DUE daemon vivi, doppio writer
+    sul grafo. Un GM risponde appena raggiunge accept; un estraneo non
+    risponde MAI, quindi il costo peggiore è tries*delay su una porta morta."""
+    for _ in range(tries):
+        if gm_answers(host, port):
+            return True
+        time.sleep(delay)
+    return False
+
+
 async def _ipc_listener(*, exit_on_busy: bool = True):
     """Background task: listens for incoming IPC connections (registrations, heartbeats).
 
@@ -1302,8 +1315,10 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
             s.bind((GRAY_MATTER_HOST, port))
         except OSError:
             s.close()
-            # occupata: se è un GM è un duplicato (muori), altrimenti prova la prossima
-            if gm_answers(GRAY_MATTER_HOST, port):
+            # occupata: se è un GM è un duplicato (muori), altrimenti prova la
+            # prossima. Con grazia di startup: il probe singolo perde la corsa
+            # contro un GM che ha fatto il bind un istante prima (vedi helper).
+            if _gm_answers_with_startup_grace(GRAY_MATTER_HOST, port):
                 if exit_on_busy:
                     raise SystemExit(0)
                 return
@@ -1326,128 +1341,161 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
     server_sock.listen(5)
     server_sock.setblocking(False)
 
-    while True:
-        try:
-            conn, addr = await loop.sock_accept(server_sock)
-            conn.setblocking(False)
-            data = await _recv_message(loop, conn)
-            if data:
-                try:
-                    msg = json.loads(data.decode("utf-8"))
-                    action = msg.get("action")
-                    response = {}
+    async def _handle_ipc_conn(conn) -> None:
+        """Una connessione = un task (2026-08-25).
 
-                    if action == "ping":
-                        # Probe di identità: distingue un GM da un'app estranea
-                        # sulla stessa porta (usato dal singleton + rendezvous).
-                        # Volutamente SENZA token: il probe deve funzionare prima
-                        # che chiunque conosca il segreto, e rivela solo "c'è un GM".
-                        response = {"status": "ok", "gm": True}
-                    elif not hmac.compare_digest(str(msg.get("token", "")), ipc_token):
-                        # Ogni altra azione tocca la memoria (`call` esegue tool
-                        # arbitrari, `knowledge_cmd` scrive nel vault). Loopback
-                        # non è una barriera su una macchina multi-utente.
-                        response = {"error": "unauthorized"}
-                    elif action == "register":
-                        _registry.register(
-                            name=msg["name"],
-                            tool_names=msg["tool_names"],
-                            socket_path=msg["socket_path"],
-                            pid=msg["pid"],
-                        )
-                        response = {"status": "ok", "message": f"Registered {msg['name']}"}
-                    elif action == "heartbeat":
-                        ok = _registry.heartbeat(msg["name"])
-                        response = {"status": "ok" if ok else "unknown"}
-                    elif action == "unregister":
-                        _registry.unregister(msg["name"])
-                        response = {"status": "ok"}
-                    elif action == "isolate":
-                        ok = _registry.set_collaborative(msg["name"], False)
-                        response = {"status": "ok" if ok else "unknown"}
-                    elif action == "collaborate":
-                        ok = _registry.set_collaborative(msg["name"], True)
-                        response = {"status": "ok" if ok else "unknown"}
-                    elif action == "mode":
-                        want = msg.get("mode") == "collaborate"
-                        for s in _registry.all_servers():
-                            s.collaborative = want
-                        response = {"status": "ok"}
-                    elif action == "status":
-                        response = _registry.to_dict()
-                    elif action == "stats":
-                        response = _build_stats()
-                    elif action == "doctor":
-                        response = await _build_doctor()
-                    elif action in ("call", "knowledge_cmd"):
-                        # ONE shared worker set per machine: a stdio gateway does
-                        # not spawn its own, it asks here. `knowledge_cmd` is the
-                        # older NeuRAG-only spelling of the same thing, kept so an
-                        # older CLI/GUI in the venv still works.
-                        srv = "neurag" if action == "knowledge_cmd" else msg.get("server", "")
-                        tool_name = msg.get("tool", "knowledge_status")
-                        tool_args = msg.get("args", {})
+        Due bug nello schema seriale precedente: (1) ogni richiesta era attesa
+        fino in fondo — un `call` lungo (fino a IPC_TOOL_TIMEOUT=60s) accodava
+        ping e heartbeat di TUTTI, e il monitor segnava dead i server che
+        invece erano solo in coda; (2) qualsiasi eccezione fuori da
+        (json.JSONDecodeError, KeyError) — un TypeError su un campo impazzito,
+        un errore SQLite in _build_stats — usciva dal while, propagava per
+        gather e ABBATTEVA il daemon. Ora il dispatch non può uccidere il
+        listener, e le chiamate lungi dal bloccare gli altri girano in
+        parallelo (la serializzazione resta nel lock per-server di
+        _call_server_async)."""
+        loop = asyncio.get_running_loop()
+        try:
+            try:
+                conn.setblocking(False)
+                data = await _recv_message(loop, conn)
+                if not data:
+                    return
+                msg = json.loads(data.decode("utf-8"))
+                action = msg.get("action")
+                response = {}
+
+                if action == "ping":
+                    # Probe di identità: distingue un GM da un'app estranea
+                    # sulla stessa porta (usato dal singleton + rendezvous).
+                    # Volutamente SENZA token: il probe deve funzionare prima
+                    # che chiunque conosca il segreto, e rivela solo "c'è un GM".
+                    response = {"status": "ok", "gm": True}
+                elif not hmac.compare_digest(str(msg.get("token", "")), ipc_token):
+                    # Ogni altra azione tocca la memoria (`call` esegue tool
+                    # arbitrari, `knowledge_cmd` scrive nel vault). Loopback
+                    # non è una barriera su una macchina multi-utente.
+                    response = {"error": "unauthorized"}
+                elif action == "register":
+                    _registry.register(
+                        name=msg["name"],
+                        tool_names=msg["tool_names"],
+                        socket_path=msg["socket_path"],
+                        pid=msg["pid"],
+                    )
+                    response = {"status": "ok", "message": f"Registered {msg['name']}"}
+                elif action == "heartbeat":
+                    ok = _registry.heartbeat(msg["name"])
+                    response = {"status": "ok" if ok else "unknown"}
+                elif action == "unregister":
+                    _registry.unregister(msg["name"])
+                    response = {"status": "ok"}
+                elif action == "isolate":
+                    ok = _registry.set_collaborative(msg["name"], False)
+                    response = {"status": "ok" if ok else "unknown"}
+                elif action == "collaborate":
+                    ok = _registry.set_collaborative(msg["name"], True)
+                    response = {"status": "ok" if ok else "unknown"}
+                elif action == "mode":
+                    want = msg.get("mode") == "collaborate"
+                    for s in _registry.all_servers():
+                        s.collaborative = want
+                    response = {"status": "ok"}
+                elif action == "status":
+                    response = _registry.to_dict()
+                elif action == "stats":
+                    response = _build_stats()
+                elif action == "doctor":
+                    response = await _build_doctor()
+                elif action in ("call", "knowledge_cmd"):
+                    # ONE shared worker set per machine: a stdio gateway does
+                    # not spawn its own, it asks here. `knowledge_cmd` is the
+                    # older NeuRAG-only spelling of the same thing, kept so an
+                    # older CLI/GUI in the venv still works.
+                    srv = "neurag" if action == "knowledge_cmd" else msg.get("server", "")
+                    tool_name = msg.get("tool", "knowledge_status")
+                    tool_args = msg.get("args", {})
+                    try:
+                        result = await _call_server_async(srv, tool_name, tool_args)
+                        response = {"result": result}
+                    except Exception as e:
+                        response = {"error": str(e)}
+                elif action == "schemas":
+                    # Same reason: the bootstrap must not spawn a local worker
+                    # just to learn the tool list.
+                    try:
+                        response = {"result": await _fetch_tool_schemas(msg.get("server", ""))}
+                    except Exception as e:
+                        response = {"error": str(e)}
+                elif action == "promote":
+                    # CLS (§5.3): memory that proved itself becomes
+                    # knowledge. Runs HERE, in the daemon, because it needs
+                    # both workers — and because GM must never open someone
+                    # else's vault itself (I3, and the single-writer lock).
+                    response = await _do_promote(bool(msg.get("apply")))
+                elif action == "gm-neuron":
+                    tool_name = msg.get("tool")
+                    tool_args = msg.get("args", {})
+                    if not tool_name:
+                        response = {"error": "Missing 'tool' parameter"}
+                    else:
                         try:
-                            result = await _call_server_async(srv, tool_name, tool_args)
+                            result = await _call_server_async("neuron", tool_name, tool_args)
                             response = {"result": result}
                         except Exception as e:
                             response = {"error": str(e)}
-                    elif action == "schemas":
-                        # Same reason: the bootstrap must not spawn a local worker
-                        # just to learn the tool list.
+                elif action == "gm-neurag":
+                    tool_name = msg.get("tool")
+                    tool_args = msg.get("args", {})
+                    if not tool_name:
+                        response = {"error": "Missing 'tool' parameter"}
+                    else:
                         try:
-                            response = {"result": await _fetch_tool_schemas(msg.get("server", ""))}
+                            result = await _call_server_async("neurag", tool_name, tool_args)
+                            response = {"result": result}
                         except Exception as e:
                             response = {"error": str(e)}
-                    elif action == "promote":
-                        # CLS (§5.3): memory that proved itself becomes
-                        # knowledge. Runs HERE, in the daemon, because it needs
-                        # both workers — and because GM must never open someone
-                        # else's vault itself (I3, and the single-writer lock).
-                        response = await _do_promote(bool(msg.get("apply")))
-                    elif action == "gm-neuron":
-                        tool_name = msg.get("tool")
-                        tool_args = msg.get("args", {})
-                        if not tool_name:
-                            response = {"error": "Missing 'tool' parameter"}
-                        else:
-                            try:
-                                result = await _call_server_async("neuron", tool_name, tool_args)
-                                response = {"result": result}
-                            except Exception as e:
-                                response = {"error": str(e)}
-                    elif action == "gm-neurag":
-                        tool_name = msg.get("tool")
-                        tool_args = msg.get("args", {})
-                        if not tool_name:
-                            response = {"error": "Missing 'tool' parameter"}
-                        else:
-                            try:
-                                result = await _call_server_async("neurag", tool_name, tool_args)
-                                response = {"result": result}
-                            except Exception as e:
-                                response = {"error": str(e)}
-                    elif action == "shutdown":
-                        response = {"status": "ok"}
-                        # Graceful shutdown
-                        conn.sendall(struct.pack("!I", len(json.dumps(response).encode("utf-8"))) + json.dumps(response).encode("utf-8"))
-                        conn.close()
-                        server_sock.close()
-                        # os._exit skips atexit AND the cleanup at the end of
-                        # _run(), so the workers this daemon owns outlived it:
-                        # orphan writers on the same graph files, with no final
-                        # checkpoint. That is the accumulation pids.py was
-                        # written to mop up — better not to create it.
-                        _shutdown_workers()
-                        os._exit(0)
-                    else:
-                        response = {"error": f"Unknown action: {action}"}
-
+                elif action == "shutdown":
+                    response = {"status": "ok"}
+                    # Graceful shutdown. Sulla socket non-blocking va usato lo
+                    # sendall del loop: il sendall sincero poteva sollevare
+                    # BlockingIOError e chiudere la risposta in gola.
                     resp = json.dumps(response).encode("utf-8")
                     await loop.sock_sendall(conn, struct.pack("!I", len(resp)) + resp)
-                except (json.JSONDecodeError, KeyError) as e:
+                    conn.close()
+                    server_sock.close()
+                    # os._exit skips atexit AND the cleanup at the end of
+                    # _run(), so the workers this daemon owns outlived it:
+                    # orphan writers on the same graph files, with no final
+                    # checkpoint. That is the accumulation pids.py was
+                    # written to mop up — better not to create it.
+                    _shutdown_workers()
+                    os._exit(0)
+                else:
+                    response = {"error": f"Unknown action: {action}"}
+
+                resp = json.dumps(response).encode("utf-8")
+                await loop.sock_sendall(conn, struct.pack("!I", len(resp)) + resp)
+            except (json.JSONDecodeError, KeyError):
+                return          # richiesta malformata: nessuna risposta possibile
+            except Exception as e:  # noqa: BLE001 — il daemon non muore per una richiesta
+                try:
+                    resp = json.dumps({"error": f"internal error: {e!r}"}).encode("utf-8")
+                    await loop.sock_sendall(conn, struct.pack("!I", len(resp)) + resp)
+                except OSError:
                     pass
-            conn.close()
+        except OSError:
+            pass
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    while True:
+        try:
+            conn, addr = await loop.sock_accept(server_sock)
+            asyncio.create_task(_handle_ipc_conn(conn))
         except OSError:
             await asyncio.sleep(0.1)
 

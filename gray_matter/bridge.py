@@ -121,8 +121,11 @@ def _launch_tunnel(host: str, port: int) -> subprocess.Popen | None:
         print("  [!] Neither neuron.tunnel nor cloudflared found — cannot auto-launch tunnel.")
         return None
     try:
+        # DEVNULL, non PIPE: il tunnel logga in continuo e nessuno drena la
+        # pipe — a ~64KB il figlio si blocca sulla write e il tunnel muore in
+        # silenzio, esattamente il sintomo che questo modulo dice di evitare.
         return subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
         )
     except Exception as exc:
         print(f"  ✗ Could not launch tunnel: {exc}", file=sys.stderr)
