@@ -245,6 +245,8 @@
   <nav>
     <h2 id="nav-title"></h2>
     <div id="envs"></div>
+    <input id="cmd-filter" type="search" autocomplete="off"
+           style="margin-top:10px;padding:5px 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg-2,var(--bg));color:inherit;width:100%;box-sizing:border-box">
   </nav>
   <section id="body"><div class="empty" id="loading-msg"></div></section>
 </main>
@@ -303,6 +305,19 @@ const STRINGS = {
     copy_fail: "Copia fallita",
     no_backend: "Non raggiungo il backend",
     retrying: "\u2014 riprovo\u2026",
+    memoria_title: "Memoria",
+    mem_offline: "offline (daemon non attivo)",
+    mem_ctx: "Contesto",
+    mem_turns: "Turni",
+    mem_nodes: "Nodi",
+    mem_links: "Link attivi",
+    mem_engine: "Motore",
+    mem_loop: "Loop pre/store",
+    mem_chunks: "Chunks",
+    mem_topics: "Argomenti",
+    mem_embedder: "Embedding",
+    filter_placeholder: "Filtra comandi\u2026",
+    processes_title: "Processi dei comandi",
     not_installed_detail: " non \u00e8 installato \u2014 usa il pulsante nella barra a sinistra.",
     no_commands: " \u00e8 installato ma non espone nessun comando: quasi sempre \u00e8 una versione vecchia nel venv. Rilancia l\u2019installer (install.ps1) e riapri.",
     settings_hint: "Impostazioni \u2014 ogni modifica si salva subito (persistente).",
@@ -395,6 +410,19 @@ const STRINGS = {
     copy_fail: "Copy failed",
     no_backend: "Cannot reach backend",
     retrying: "\u2014 retrying\u2026",
+    memoria_title: "Memory",
+    mem_offline: "offline (daemon not running)",
+    mem_ctx: "Context",
+    mem_turns: "Turns",
+    mem_nodes: "Nodes",
+    mem_links: "Active links",
+    mem_engine: "Engine",
+    mem_loop: "pre/store loop",
+    mem_chunks: "Chunks",
+    mem_topics: "Topics",
+    mem_embedder: "Embedding",
+    filter_placeholder: "Filter commands\u2026",
+    processes_title: "Command processes",
     not_installed_detail: " is not installed \u2014 use the button in the left panel.",
     no_commands: " is installed but exposes no commands: usually an outdated venv. Re-run the installer (install.ps1) and reopen.",
     settings_hint: "Settings \u2014 every change is saved immediately (persistent).",
@@ -562,14 +590,31 @@ function render(){
     return;
   }
   const procCard = el("div", {class:"cmds"});
-  procCard.append(el("div", {class:"hint"}, "carico…"));
+  procCard.append(el("div", {class:"hint"}, T("loading")));
   setTimeout(() => processPanel(env, procCard), 50);
-  body.append(el("div", {class:"grp"}, el("h3", {}, "Processi"), procCard));
+  body.append(el("div", {class:"grp"}, el("h3", {}, T("processes_title")), procCard));
   for (const g of env.groups){
     const cards = el("div", {class:"cmds"});
     for (const c of g.commands) cards.append(commandCard(env, c));
     body.append(el("div", {class:"grp"}, el("h3", {}, g.label), cards));
   }
+  applyCmdFilter();
+}
+
+// Command filter (nav search box): hides command cards whose name+help do not
+// match the query, then hides groups left with no visible card. Runs on every
+// render because render() rebuilds #body from scratch.
+function applyCmdFilter(){
+  const q = document.getElementById("cmd-filter").value.trim().toLowerCase();
+  document.querySelectorAll("#body .grp").forEach(grp => {
+    let anyVisible = false;
+    grp.querySelectorAll(".cmd").forEach(card => {
+      const show = !q || card.textContent.toLowerCase().includes(q);
+      card.style.display = show ? "" : "none";
+      if (show) anyVisible = true;
+    });
+    grp.style.display = anyVisible ? "" : "none";
+  });
 }
 
 function commandCard(env, c){
@@ -1188,7 +1233,61 @@ async function refreshInfra(){
       }
     }
     container.append(cCard);
+
+    // Memory card: real numbers from both knowledge tools, via the daemon's
+    // warm workers (IPC, no subprocess). Neuron answers with formatted text —
+    // parsed here with regexes; NeurAG answers with JSON — used as-is.
+    try {
+      const mem = await call("mem_stats");
+      const mCard = infraCard("memoria", T("memoria_title"));
+      const row = (label, value, cls) => mCard.append(el("div", {class:"infra-row"},
+        el("span", {class:"label"}, label),
+        el("span", {class:"value " + (cls || "")}, value)));
+
+      const n = mem.neuron && !mem.neuron.error ? parseNeuronStats(mem.neuron.raw) : null;
+      if (n){
+        row(T("mem_ctx"), n.ctx || "?");
+        row(T("mem_turns"), n.turn ?? "?");
+        row(T("mem_nodes"), n.nodes ?? "?");
+        row(T("mem_links"), n.links ? `${n.active}/${n.links}` : "?");
+        row(T("mem_engine"), n.engine || "?");
+        if (n.loop) row(T("mem_loop"), n.loop);
+      } else {
+        mCard.append(el("div", {class:"infra-row"},
+          el("span", {class:"value warn"}, T("mem_offline"))));
+      }
+
+      const r = mem.neurag && mem.neurag.json;
+      if (r && !mem.neurag.error){
+        row("NeuRAG · " + T("mem_topics"), r.nodes ?? "?");
+        row("NeuRAG · " + T("mem_chunks"), r.chunks ?? "?");
+        if (r.embedder) row("NeuRAG · " + T("mem_embedder"),
+          `${r.embedder} (${r.embedding_dim ?? "?"}d)`);
+      } else {
+        mCard.append(el("div", {class:"infra-row"},
+          el("span", {class:"value warn"}, "NeuRAG: " + T("mem_offline"))));
+      }
+      container.append(mCard);
+    } catch(e){ /* stats are best-effort, never fatal */ }
   } catch(e){ /* backend down */ }
+}
+
+// Parse the formatted text `neuron status` returns. The worker renders it
+// either multi-line or as a single "a | b | c" line, so every field stops at
+// the first "|" or newline; anything unmatched stays null and renders "?".
+function parseNeuronStats(raw){
+  const g = (re) => { const m = raw.match(re); return m ? m[1].trim() : null; };
+  const core = raw.match(/Turn (\d+) \| Nodes: (\d+) \| Links: (\d+) \(active (\d+)\)/);
+  return {
+    ctx: g(/Context:\s*([^|\n]+)/),
+    turn: core ? core[1] : null,
+    nodes: core ? core[2] : null,
+    links: core ? core[3] : null,
+    active: core ? core[4] : null,
+    engine: g(/Engine:\s*([^|\n]+?)\s*(?:\|\s*Embedding|$)/),
+    loop: (() => { const l = raw.match(/pre_turn (\d+)\s*\|\s*store_turn (\d+)/);
+                   return l ? `${l[1]}/${l[2]}` : null; })(),
+  };
 }
 
 async function poll(){
@@ -1349,6 +1448,7 @@ function applyLang(){
   document.documentElement.lang = LANG;
   document.getElementById("loading-msg").textContent = T("loading_catalog");
   document.getElementById("nav-title").textContent = T("envs_title");
+  document.getElementById("cmd-filter").placeholder = T("filter_placeholder");
   document.getElementById("console-title").textContent = T("console_title");
   applyConsoleCollapsed();
   document.getElementById("btn-start").textContent = T("btn_start");
@@ -1392,6 +1492,8 @@ document.getElementById("btn-clients-hide").onclick = () =>
   document.getElementById("clients-panel").classList.remove("show");
 setTimeout(loadClients, 1000);
 setTimeout(refreshInfra, 1200);
+// Command filter lives outside #body so it survives render() rebuilds.
+document.getElementById("cmd-filter").addEventListener("input", applyCmdFilter);
 applyLang(); // initial apply
 </script>
 </body>

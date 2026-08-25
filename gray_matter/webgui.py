@@ -834,6 +834,40 @@ class Api:
         
         return {"ok": True, "tools": tools}
 
+    def mem_stats(self, _args: str = "") -> dict:
+        """Memory stats for both knowledge tools, via daemon IPC (warm workers).
+
+        Near-zero cost: no subprocess spawn, one loopback request per tool with
+        a short timeout. When the daemon is down the panel shows "offline"
+        instead of spawning anything — stats are a luxury, never a reason to
+        boot half a gigabyte of models."""
+        try:
+            from gray_matter import cli as _cli
+        except ImportError:
+            return {"ok": False, "error": "gray_matter.cli unavailable"}
+        out: dict = {"ok": True}
+        for key, action, tool in (("neuron", "gm-neuron", "status"),
+                                  ("neurag", "gm-neurag", "knowledge_status")):
+            resp = None
+            try:
+                resp = _cli._send_ipc({"action": action, "tool": tool,
+                                       "args": {}}, timeout=8.0)
+            except Exception as e:  # noqa: BLE001 — daemon down / token missing
+                out[key] = {"error": str(e)}
+                continue
+            if not resp or "result" not in resp:
+                out[key] = {"error": (resp or {}).get("error", "no daemon")}
+            else:
+                raw = resp["result"]
+                data = None
+                if isinstance(raw, str) and raw.lstrip().startswith("{"):
+                    try:
+                        data = json.loads(raw)
+                    except ValueError:
+                        data = None
+                out[key] = {"raw": raw} if data is None else {"json": data}
+        return out
+
     # -- infrastructure ---------------------------------------------------
     def tunnel_state(self, _args: str = "") -> dict:
         """Tunnel status: backend detection, public URL, config."""
