@@ -1650,9 +1650,10 @@ class KnowledgeGraph:
         """Record that these nodes just answered something, and reinforce the
         tags that got there. This is the only writer of `salience`: without it
         decay would be halving a number nothing ever raises."""
-        # Il guard sta QUI e non nei chiamanti: ogni strada che serve un nodo
-        # (search, match da trigger, CLI) deve poter toccare senza ricordarsi
-        # il tier — su read-only l'UPDATE è vietato, non inutile.
+        # The guard lives HERE, not at the call sites: every path that serves a
+        # node (search, trigger match, CLI) must be able to touch without
+        # remembering the tier — on read-only the UPDATE is forbidden, not
+        # pointless.
         if getattr(self, "_read_only", False):
             return
         ids = sorted({int(n) for n in node_ids})

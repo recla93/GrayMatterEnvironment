@@ -1160,10 +1160,10 @@ def _build_server(api: Api):
     import secrets
 
     holder: dict = {}
-    # Capability token: la pagina è servita dallo stesso server con il token
-    # incorporato, e ogni POST deve rispedirlo. Senza, qualsiasi sito aperto
-    # nel browser potrebbe comandare l'Api (che spawna subprocess veri) con un
-    # semplice fetch su 127.0.0.1 — il CORS non impedisce la *sending*.
+    # Capability token: the page is served by this same server with the token
+    # embedded, and every POST must send it back. Without it, any website open
+    # in the browser could command the Api (which spawns real subprocesses)
+    # with a plain fetch to 127.0.0.1 — CORS does not stop the *sending*.
     token = secrets.token_urlsafe(24)
 
     class Handler(http.server.BaseHTTPRequestHandler):

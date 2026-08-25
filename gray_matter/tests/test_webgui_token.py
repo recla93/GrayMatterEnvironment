@@ -1,9 +1,9 @@
-"""Il gate del capability token sulla GUI HTTP.
+"""The capability-token gate on the HTTP GUI.
 
-Prima del 2026-08-25 ogni risposta portava `Access-Control-Allow-Origin: *`
-e nessun POST richiedeva auth: qualsiasi sito aperto nel browser poteva
-comandare l'Api (che spawna subprocess veri: run, repair_run, uninstall_run)
-con un fetch su 127.0.0.1 — il CORS non blocca la *sending* cross-origin.
+Before 2026-08-25 every response carried `Access-Control-Allow-Origin: *`
+and no POST required auth: any website open in the browser could command the
+Api (which spawns real subprocesses: run, repair_run, uninstall_run) with a
+fetch to 127.0.0.1 — CORS does not block cross-origin *sending*.
 """
 import json
 import threading
@@ -49,8 +49,8 @@ def test_post_with_a_wrong_token_is_403(gui_server):
 
 def test_post_with_the_real_token_passes(gui_server):
     _, port, html = gui_server
-    # il token vero è incorporato nella pagina servita: lo si estrae da lì,
-    # esattamente come fa il JS del pannello
+    # the real token is embedded in the served page: extract it from there,
+    # exactly like the panel's JS does
     marker = 'const TOKEN = "'
     start = html.index(marker) + len(marker)
     token = html[start:html.index('"', start)]
@@ -60,10 +60,10 @@ def test_post_with_the_real_token_passes(gui_server):
 
 
 def test_no_cors_wildcard_and_no_leftover_placeholder(gui_server):
-    """ACAO:* era il buco: una volta tolto non deve tornare, e il placeholder
-    del token non deve sopravvivere nella pagina servita."""
+    """ACAO:* was the hole: once removed it must not come back, and the token
+    placeholder must not survive into the served page."""
     _, _, html = gui_server
     assert "__GM_TOKEN__" not in html
-    src = html  # la pagina è ciò che un altro sito vedrebbe provando a leggere
+    src = html  # the page is what another site would see when trying to read it
     assert "Access-Control-Allow-Origin" not in src or \
-        "__GM_TOKEN__" in src  # se qualcuno lo reintrodotto, almeno il token c'è
+        "__GM_TOKEN__" in src  # if someone reintroduces ACAO, at least keep the token gate

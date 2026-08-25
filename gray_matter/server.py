@@ -78,10 +78,10 @@ def _send_heartbeat(name: str) -> dict:
 
 
 def _is_gray_matter_running() -> bool:
-    """True solo se su (host, port) risponde un GM (probe ping, non un TCP
-    connect qualunque): il file `port` può essere stantio dopo un reboot, e
-    un estraneo su quella porta faceva dire "already running" a start/ping
-    mentre ogni chiamata IPC reale falliva."""
+    """True only when a GM actually answers on (host, port) (ping probe, not a
+    blind TCP connect): the `port` file can be stale after a reboot, and a
+    foreign listener on that port made start/ping say "already running" while
+    every real IPC call failed."""
     return gm_answers(GRAY_MATTER_HOST, resolve_port())
 
 
@@ -1273,14 +1273,15 @@ async def _recv_message(loop, conn) -> bytes:
 
 def _gm_answers_with_startup_grace(host: str, port: int,
                                    tries: int = 6, delay: float = 0.3) -> bool:
-    """gm_answers ripetuto: tollera la finestra bind→accept di un GM che sta
-    partendo sulla stessa porta (race del singleton, 2026-08-25).
+    """Repeated gm_answers: tolerates the bind→accept window of a GM starting
+    on the same port (singleton race, 2026-08-25).
 
-    Due daemon avviati insieme: A fa il bind ma non è ancora in `listen`; il
-    probe singolo di B scadeva, B concludeva "processo estraneo", saliva di
-    porta, sovrascriveva il rendezvous file → DUE daemon vivi, doppio writer
-    sul grafo. Un GM risponde appena raggiunge accept; un estraneo non
-    risponde MAI, quindi il costo peggiore è tries*delay su una porta morta."""
+    Two daemons launched together: A binds but has not reached `listen` yet;
+    B's single-shot probe timed out, B concluded "foreign process", moved to
+    the next port and overwrote the rendezvous file → TWO live daemons,
+    double writer on the graph. A GM answers as soon as it reaches accept; a
+    foreign process NEVER answers, so the worst case is tries*delay on a dead
+    port."""
     for _ in range(tries):
         if gm_answers(host, port):
             return True
@@ -1315,9 +1316,9 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
             s.bind((GRAY_MATTER_HOST, port))
         except OSError:
             s.close()
-            # occupata: se è un GM è un duplicato (muori), altrimenti prova la
-            # prossima. Con grazia di startup: il probe singolo perde la corsa
-            # contro un GM che ha fatto il bind un istante prima (vedi helper).
+            # occupied: if a GM owns it we are a duplicate (die), else try the
+            # next port. With startup grace: the single-shot probe loses the
+            # race against a GM that bound an instant earlier (see helper).
             if _gm_answers_with_startup_grace(GRAY_MATTER_HOST, port):
                 if exit_on_busy:
                     raise SystemExit(0)
@@ -1342,18 +1343,17 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
     server_sock.setblocking(False)
 
     async def _handle_ipc_conn(conn) -> None:
-        """Una connessione = un task (2026-08-25).
+        """One connection = one task (2026-08-25).
 
-        Due bug nello schema seriale precedente: (1) ogni richiesta era attesa
-        fino in fondo — un `call` lungo (fino a IPC_TOOL_TIMEOUT=60s) accodava
-        ping e heartbeat di TUTTI, e il monitor segnava dead i server che
-        invece erano solo in coda; (2) qualsiasi eccezione fuori da
-        (json.JSONDecodeError, KeyError) — un TypeError su un campo impazzito,
-        un errore SQLite in _build_stats — usciva dal while, propagava per
-        gather e ABBATTEVA il daemon. Ora il dispatch non può uccidere il
-        listener, e le chiamate lungi dal bloccare gli altri girano in
-        parallelo (la serializzazione resta nel lock per-server di
-        _call_server_async)."""
+        Two bugs in the previous serial shape: (1) every request was awaited to
+        completion — a long `call` (up to IPC_TOOL_TIMEOUT=60s) queued pings and
+        heartbeats for EVERYONE, and the monitor marked servers dead that were
+        merely waiting in line; (2) any exception outside
+        (json.JSONDecodeError, KeyError) — a TypeError on a runaway field, a
+        SQLite error in _build_stats — escaped the while loop, propagated
+        through gather and KILLED the daemon. Dispatch can no longer kill the
+        listener, and long calls run in parallel instead of blocking everyone
+        (serialization stays in _call_server_async's per-server lock)."""
         loop = asyncio.get_running_loop()
         try:
             try:
@@ -1457,9 +1457,9 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                             response = {"error": str(e)}
                 elif action == "shutdown":
                     response = {"status": "ok"}
-                    # Graceful shutdown. Sulla socket non-blocking va usato lo
-                    # sendall del loop: il sendall sincero poteva sollevare
-                    # BlockingIOError e chiudere la risposta in gola.
+                    # Graceful shutdown. On a non-blocking socket use the loop's
+                    # sendall: the plain sync sendall could raise
+                    # BlockingIOError and choke on the goodbye.
                     resp = json.dumps(response).encode("utf-8")
                     await loop.sock_sendall(conn, struct.pack("!I", len(resp)) + resp)
                     conn.close()
@@ -1477,8 +1477,8 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                 resp = json.dumps(response).encode("utf-8")
                 await loop.sock_sendall(conn, struct.pack("!I", len(resp)) + resp)
             except (json.JSONDecodeError, KeyError):
-                return          # richiesta malformata: nessuna risposta possibile
-            except Exception as e:  # noqa: BLE001 — il daemon non muore per una richiesta
+                return          # malformed request: no reply is possible
+            except Exception as e:  # noqa: BLE001 — the daemon must not die for one request
                 try:
                     resp = json.dumps({"error": f"internal error: {e!r}"}).encode("utf-8")
                     await loop.sock_sendall(conn, struct.pack("!I", len(resp)) + resp)

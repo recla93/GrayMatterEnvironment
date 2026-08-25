@@ -1,8 +1,8 @@
-"""Il bridge HTTP non si pubblica aperto senza chiave.
+"""The HTTP bridge must not publish itself open without a key.
 
-`--host 0.0.0.0` e i tunnel espongono tool distruttivi (knowledge_remove_node,
-knowledge_ingest): senza shared secret il bind va rifiutato all'avvio, non
-pubblicato pregando che nessuno lo trovi.
+`--host 0.0.0.0` and tunnels expose destructive tools (knowledge_remove_node,
+knowledge_ingest): without a shared secret, refuse the bind at startup instead
+of publishing it and hoping nobody finds it.
 """
 import pathlib
 import sys

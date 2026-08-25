@@ -943,7 +943,7 @@ def _dispatch() -> None:
                     touched.append(r["id"])
                     chunks.extend(db.get_chunks(r["id"]))
         if not chunks:
-            # search registra già l'uso dei suoi risultati: qui non si tocca nulla
+            # search already records usage for its own results: touch nothing here
             chunks = db.search(args.query, args.top_n, deep=args.deep)
         elif touched:
             db.touch_nodes(touched)
