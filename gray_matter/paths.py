@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 # Must match neuron/config.py:resolve_slug(), which defaults to "neuron". It
@@ -292,22 +293,90 @@ def env_file() -> Path:
     return gm_home() / "paths.json"          # record del sorgente DI GM
 
 
+# ---------------------------------------------------------------------------
+# Shared-JSON write discipline (2026-08-25)
+# ---------------------------------------------------------------------------
+# The GME registry, pids.json, user settings and the manifest are written by
+# SEVERAL processes at unpredictable times (installer, GUI, daemon, tools).
+# Two failure modes lost entries before: a FIXED tmp filename (two concurrent
+# writers sharing neuron.tmp — one replace moves the file away, the other
+# raises FileNotFoundError or wins wholesale) and unlocked read-modify-write
+# (A and B read the same state, both append; the second save erases A's entry).
+
+@contextmanager
+def json_lock(target: Path, timeout: float = 5.0):
+    """Cross-process lock for read-modify-write on a shared JSON file.
+
+    The lock is an O_EXCL lockfile next to the target; a lock older than
+    `timeout` seconds is treated as dead (crashed writer) and taken over.
+    Best-effort by design: if the lock cannot be acquired we proceed unlocked
+    anyway — losing one rare concurrent registration beats crashing every
+    writer."""
+    lock = target.with_name(target.name + ".lock")
+    deadline = time.time() + timeout
+    fd = None
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > timeout:
+                    lock.unlink(missing_ok=True)   # stale: crashed writer
+                    continue
+            except OSError:
+                pass
+            if time.time() >= deadline:
+                yield                              # give up locking, still work
+                return
+            time.sleep(0.02)
+        except OSError:
+            yield                                  # e.g. read-only dir: degrade
+            return
+    try:
+        try:
+            os.write(fd, str(os.getpid()).encode())
+        except OSError:
+            pass
+        yield
+    finally:
+        os.close(fd)
+        try:
+            lock.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def atomic_write_json(path: Path, payload: str) -> None:
+    """Write via a UNIQUE per-process tmp name + os.replace (atomic rename).
+
+    The old fixed `.tmp` name made two concurrent writers collide on the same
+    scratch file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def record_self(source: "str | Path | None" = None) -> dict:
     """GM registra la propria cartella sorgente (repo). La chiama l'installer.
     I peer registrano sé stessi con i loro `record-paths`. Idempotente."""
+    f = env_file()
     data = {}
     try:
-        data = json.loads(env_file().read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        data = {}
-    if source and (Path(source) / "pyproject.toml").exists():
-        data["source"] = str(Path(source).resolve())
-    data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    try:
-        f = env_file()
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    except OSError:
+        with json_lock(f):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                data = {}
+            if source and (Path(source) / "pyproject.toml").exists():
+                data["source"] = str(Path(source).resolve())
+            data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            try:
+                atomic_write_json(f, json.dumps(data, indent=2, ensure_ascii=False))
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001 — lock best-effort, il record non è critico
         pass
     return data
 
@@ -380,10 +449,12 @@ class Manifest:
 
     def save(self, path=None) -> None:
         p = Path(path or manifest_path())
-        p.parent.mkdir(parents=True, exist_ok=True)
         self.data["schema"] = MANIFEST_SCHEMA
         self.data["updated"] = time.time()
-        p.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # The manifest is written by installer AND GUI concurrently: locked RMW
+        # + unique tmp, same discipline as every other shared JSON.
+        with json_lock(p):
+            atomic_write_json(p, json.dumps(self.data, ensure_ascii=False, indent=2))
 
     def record_component(self, name: str, **info) -> None:
         self.data.setdefault("components", {})[name] = info

@@ -821,6 +821,26 @@ def _worker_for(server_name: str):
     return p
 
 
+def _reap_worker(p: "subprocess.Popen") -> None:
+    """kill() alone is not enough: without wait() the child lingers as a
+    zombie (POSIX) / leaked handles, and its PIPE buffers stay open."""
+    try:
+        p.kill()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        p.wait(timeout=3)
+    except Exception:  # noqa: BLE001
+        pass
+    for fh in (getattr(p, "stdin", None), getattr(p, "stdout", None),
+               getattr(p, "stderr", None)):
+        try:
+            if fh is not None:
+                fh.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _shutdown_workers() -> None:
     """Flush sincrono dei worker prima di morire (checkpoint finale).
 
@@ -955,10 +975,7 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict) 
             # First Neuron call loads fastembed -> allow headroom.
             resp_line = await asyncio.wait_for(loop.run_in_executor(None, _io), timeout=60)
         except Exception as e:  # noqa: BLE001 — timeout or pipe error: drop the worker
-            try:
-                p.kill()
-            except Exception:
-                pass
+            _reap_worker(p)
             _workers.pop(server_name, None)
             _registry.mark_dead(server_name)
             return f"[{server_name}] error: {e}"
@@ -1108,10 +1125,7 @@ async def _reap_dead_workers():
                 continue
             p = _workers.pop(server.name, None)
             if p is not None:
-                try:
-                    p.kill()
-                except Exception:  # noqa: BLE001
-                    pass
+                _reap_worker(p)
 
 
 def _build_stats() -> dict:

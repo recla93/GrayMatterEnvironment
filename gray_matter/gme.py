@@ -53,6 +53,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from gray_matter import paths
+
 
 __all__ = [
     "gme_root",
@@ -245,24 +247,24 @@ def write_tool(data: dict[str, Any], *, merge: bool = True) -> None:
         raise ValueError("JSON must have a 'key' field")
     ensure_gme()                      # the only place that creates the folder
     path = tool_json_path(key)
-    if merge:
-        existing = read_tool(key)
-        if existing is None and path.exists():
-            # File presente ma illeggibile (JSON rotto, troncato a meta' da un
-            # crash). Sovrascriverlo in silenzio significa distruggere l'unica
-            # copia di quello che c'era: si mette da parte, poi si riscrive.
-            try:
-                path.replace(path.with_suffix(".json.corrupt"))
-            except OSError:
-                pass
-        elif existing:
-            data = _merge_entry(existing, data)
-    tmp = path.with_suffix(".tmp")
-    _ensure_defaults(data)
-    data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
-                   encoding="utf-8")
-    tmp.replace(path)  # atomic on same filesystem
+    # The registry is multi-writer: lock the read-merge-write sequence, then
+    # land the file with a unique per-process tmp (shared .tmp collisions).
+    with paths.json_lock(path):
+        if merge:
+            existing = read_tool(key)
+            if existing is None and path.exists():
+                # File presente ma illeggibile (JSON rotto, troncato a meta' da un
+                # crash). Sovrascriverlo in silenzio significa distruggere l'unica
+                # copia di quello che c'era: si mette da parte, poi si riscrive.
+                try:
+                    path.replace(path.with_suffix(".json.corrupt"))
+                except OSError:
+                    pass
+            elif existing:
+                data = _merge_entry(existing, data)
+        _ensure_defaults(data)
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        paths.atomic_write_json(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def list_tools() -> list[dict[str, Any]]:

@@ -126,10 +126,13 @@ def set(key, value, path=None) -> dict:
     """Set one known knob (type-coerced), persist only the overrides, return merged."""
     if key not in DEFAULTS:
         raise KeyError(f"unknown setting '{key}' (known: {', '.join(sorted(DEFAULTS))})")
-    cfg = load(path)
-    cfg[key] = _coerce(DEFAULTS[key], value)
+    from gray_matter import paths
     p = Path(_config_path(path))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    overrides = {k: v for k, v in cfg.items() if v != DEFAULTS[k]}
-    p.write_text(json.dumps(overrides, ensure_ascii=False, indent=2), encoding="utf-8")
+    # GUI and CLI can set knobs at the same time: the READ belongs inside the
+    # lock too, otherwise this is still an unlocked read-modify-write.
+    with paths.json_lock(p):
+        cfg = load(path)
+        cfg[key] = _coerce(DEFAULTS[key], value)
+        overrides = {k: v for k, v in cfg.items() if v != DEFAULTS[k]}
+        paths.atomic_write_json(p, json.dumps(overrides, ensure_ascii=False, indent=2))
     return cfg

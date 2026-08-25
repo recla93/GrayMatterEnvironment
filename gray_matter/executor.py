@@ -712,7 +712,9 @@ def _scrub_claude_settings(dry_run: bool) -> None:
     """Drop our SessionStart entry from ~/.claude/settings.json (only ours)."""
     settings = _claude_dir() / "settings.json"
     try:
-        cfg = json.loads(settings.read_text(encoding="utf-8"))
+        # utf-8-sig: a BOM'd settings.json (common on Windows editors) failed
+        # json.loads, the hook entry survived every uninstall.
+        cfg = json.loads(settings.read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001
         return
     groups = (cfg.get("hooks") or {}).get("SessionStart")
@@ -727,7 +729,10 @@ def _scrub_claude_settings(dry_run: bool) -> None:
             new_groups.append(g)
     if new_groups != groups and not dry_run:
         cfg["hooks"]["SessionStart"] = new_groups
-        settings.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        # atomic: a crash mid-write left Claude Desktop with no settings at all
+        tmp = settings.with_name(f".{settings.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        os.replace(tmp, settings)
 
 
 def _scrub_opencode_config(dry_run: bool) -> None:

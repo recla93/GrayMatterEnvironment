@@ -68,10 +68,7 @@ def _read() -> "list[dict]":
 def _write(entries: "list[dict]") -> None:
     p = paths.pids_path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(entries, indent=1), encoding="utf-8")
-        os.replace(tmp, p)               # atomico: mai un pids.json mezzo scritto
+        paths.atomic_write_json(p, json.dumps(entries, indent=1))
     except OSError:
         pass                             # il registro è un aiuto, non un vincolo
 
@@ -84,29 +81,37 @@ def record_self(role: str) -> None:
     :func:`tracked`, che scarta le voci di processi morti.
     """
     me = os.getpid()
-    entries = [e for e in _read() if e["pid"] != me and alive(e["pid"])]
-    entries.append({"pid": me, "ppid": os.getppid(), "role": role,
-                    "started": int(time.time())})
-    _write(entries)
+    p = paths.pids_path()
+    # Locked read-modify-write: daemon and workers register at the same time,
+    # an unlocked RMW made the second save erase the first's entry.
+    with paths.json_lock(p):
+        entries = [e for e in _read() if e["pid"] != me and alive(e["pid"])]
+        entries.append({"pid": me, "ppid": os.getppid(), "role": role,
+                        "started": int(time.time())})
+        _write(entries)
     atexit.register(forget, me)
 
 
 def forget(pid: "int | None" = None) -> None:
     """Toglie un processo dal registro (default: questo)."""
     target = os.getpid() if pid is None else pid
-    entries = _read()
-    kept = [e for e in entries if e["pid"] != target]
-    if len(kept) != len(entries):
-        _write(kept)
+    p = paths.pids_path()
+    with paths.json_lock(p):
+        entries = _read()
+        kept = [e for e in entries if e["pid"] != target]
+        if len(kept) != len(entries):
+            _write(kept)
 
 
 def tracked() -> "list[dict]":
     """Le voci ancora vive. Pota le morte dal file mentre passa: un registro
     che accumula fantasmi è peggio di nessun registro."""
-    entries = _read()
-    live = [e for e in entries if alive(e["pid"])]
-    if len(live) != len(entries):
-        _write(live)
+    p = paths.pids_path()
+    with paths.json_lock(p):
+        entries = _read()
+        live = [e for e in entries if alive(e["pid"])]
+        if len(live) != len(entries):
+            _write(live)
     return live
 
 

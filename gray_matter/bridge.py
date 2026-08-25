@@ -59,10 +59,9 @@ def resolve_gm_cmd(override: list[str] | None) -> list[str]:
             return [venv_py, "-m", "gray_matter.server"]
     except (ImportError, OSError):
         pass
-    if importlib.util.find_spec("gray_matter.server") is not None:
-        return [sys.executable, "-m", "gray_matter.server"]
+    # The find_spec check that used to sit here was dead code: both branches
+    # returned the identical value.
     return [sys.executable, "-m", "gray_matter.server"]
-
 
 def resolve_proxy_runner() -> list[str] | None:
     """Find a way to run mcp-proxy."""
@@ -91,6 +90,15 @@ def preflight(server_cmd: list[str], seconds: float = 3.0) -> bool:
     time.sleep(seconds)
     if proc.poll() is None:
         proc.kill()
+        try:
+            proc.wait(timeout=5)      # reap: no zombie, no leaked handles
+        except Exception:  # noqa: BLE001
+            pass
+        for fh in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                fh and fh.close()
+            except Exception:  # noqa: BLE001
+                pass
         print("  ✓ Gray Matter starts and stays alive.")
         return True
     err = (proc.stderr.read() or b"").decode(errors="replace").strip()

@@ -808,7 +808,9 @@ class Api:
                     health["uptime_s"] = int(time.time() - proc.create_time())
                     health["status"] = "running"
                 except ImportError:
-                    health["status"] = "running" if pid else "stopped"
+                    # psutil absent: a stale recorded pid proves nothing. The
+                    # panel's whole job is truthful status — say "unknown".
+                    health["status"] = "unknown" if pid else "stopped"
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     health["status"] = "stopped"
                     health["pid"] = None
