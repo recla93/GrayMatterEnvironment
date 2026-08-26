@@ -31,6 +31,17 @@ WINDOWS = (".cmd", ".ps1")          # CRLF, native Windows tooling
 POSIX = (".sh", ".command")         # LF, or `sh` chokes on the CR
 
 
+def pytest_collection_modifyitems(config, items):
+    """I mirror ridotti (CI 'GM + Neuron senza NeuRAG') non contengono tutti i
+    progetti: una regola di parity sul progetto assente non ha soggetto."""
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        project = callspec.params.get("project") if callspec else None
+        if project and not (ROOT / str(project)).is_dir():
+            item.add_marker(pytest.mark.skip(
+                reason=f"{project} assente in questo albero ridotto"))
+
+
 def _read(project: str, suffix: str) -> str:
     return (ROOT / project / f"install{suffix}").read_text(encoding="utf-8")
 

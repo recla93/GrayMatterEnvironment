@@ -56,22 +56,16 @@ def test_remote_pragma_is_noop(monkeypatch):
     conn = db.RemoteTursoConnection("libsql://x", "tok")
     # WAL/foreign_keys pragmas are meaningless remote — must not hit the client
     assert conn.execute("PRAGMA journal_mode=WAL").fetchall() == []
-    # Auto-begin (2026-08-25): writes buffer until commit(), then land as ONE
-    # atomic batch. Before, every statement went to the network alone.
-    conn.executemany("INSERT INTO t(x) VALUES (?)", [(1,), (2,)])
-    assert not conn._client.batches, "buffered: nothing on the wire before commit"
-    assert conn._tx and len(conn._tx) == 2
-    conn.commit()
-    assert len(conn._client.batches) == 1, "one atomic batch"
-    assert len(conn._client.batches[0]) == 2
+    # Default = autocommit: a write OUTSIDE an explicit transaction must reach
+    # the wire immediately (cross-process readers rely on it).
+    conn.execute("INSERT INTO t(x) VALUES (3)")
+    assert conn._tx is None, "no implicit buffering outside begin()"
     conn.close()
 
 
-def test_read_flushes_buffered_writes(monkeypatch):
-    """A reader must never see stale state: pending writes land before any
-    SELECT goes out."""
-    client = _FakeClient()
-
+def test_explicit_tx_batches_rollback_and_close(monkeypatch):
+    """begin():ed writes land as ONE atomic batch at commit(); rollback drops
+    them; close() flushes an open tx instead of silently dropping it."""
     class _Spy(_FakeEmptyClient):
         def __init__(self):
             self.batches = []
@@ -83,11 +77,23 @@ def test_read_flushes_buffered_writes(monkeypatch):
     monkeypatch.setattr(db._libsql, "create_client_sync",
                         staticmethod(lambda url, auth_token: spy))
     conn = db.RemoteTursoConnection("libsql://x", "tok")
-    conn.execute("DELETE FROM nodes WHERE id = 1")
-    assert not spy.batches, "still buffered"
-    conn.execute("SELECT COUNT(*) FROM nodes")
-    assert len(spy.batches) == 1, "read must flush pending writes first"
-    conn.close()
+
+    conn.begin()
+    conn.executemany("INSERT INTO t(x) VALUES (?)", [(1,), (2,)])
+    assert not spy.batches, "buffered: nothing on the wire before commit"
+    conn.commit()
+    assert len(spy.batches) == 1 and len(spy.batches[0]) == 2
+
+    conn.begin()
+    conn.execute("DELETE FROM t WHERE x = 1")
+    conn.rollback()
+    conn.commit()   # tx già chiusa: no-op
+    assert len(spy.batches) == 1, "rollback must discard buffered statements"
+
+    conn.begin()
+    conn.execute("UPDATE t SET x = 9")
+    conn.close()    # safety net: flush instead of drop
+    assert len(spy.batches) == 2 and len(spy.batches[1]) == 1
 
 
 def test_url_candidates_normalisation():

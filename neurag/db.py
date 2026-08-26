@@ -202,31 +202,26 @@ class RemoteTursoConnection:
     def execute(self, sql: str, params=()):
         if self._is_noop_pragma(sql):
             return _RemoteCursor(None)
-        if _is_write_sql(sql):
-            # Auto-begin (2026-08-25): writes buffer until commit()/a read/
-            # close(). Until now begin() had ZERO callers, so commit() was a
-            # permanent no-op and every multi-statement sequence (delete_node,
-            # rebuild_links, index replace) went to the network statement by
-            # statement — a dropped socket left HALF a deletion behind.
-            if self._tx is None:
-                self._tx = []
+        if self._tx is not None and _is_write_sql(sql):
+            # Explicit transaction (begin():ed): buffer until commit().
+            # NOT auto-begin: buffering every write by default broke writers
+            # that rely on immediate execution without an explicit commit
+            # (cross-process lock test, 2026-08-26 — the borrower saw an empty
+            # vault because the seeder's writes were still in the buffer).
             self._tx.append(_libsql.Statement(sql, list(params) if params else None))
             return _RemoteCursor(None)
-        if self._tx:
-            # A reader must never see stale state: land buffered writes first.
-            # (Splits a long run into batches at read boundaries — still
-            # correct, just less granular atomicity.)
-            self._flush_tx()
         return _with_retry(
             lambda: _RemoteCursor(self._client.execute(sql, list(params) if params else None)),
             on_retry=self._reconnect)
 
     def executemany(self, sql: str, seq_of_params):
         stmts = [_libsql.Statement(sql, list(p)) for p in seq_of_params]
-        if stmts:
-            if self._tx is None:
-                self._tx = []
+        if self._tx is not None:
             self._tx.extend(stmts)
+            return _RemoteCursor(None)
+        if stmts:
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
         return _RemoteCursor(None)
 
     def executescript(self, script: str):
@@ -236,8 +231,7 @@ class RemoteTursoConnection:
     def close(self):
         try:
             if self._tx:
-                # Safety net: a caller that wrote and closed without committing
-                # must not lose its work.
+                # Safety net: an open explicit tx must not be silently dropped.
                 self._flush_tx()
         finally:
             try:
@@ -1109,6 +1103,7 @@ class KnowledgeGraph:
         # try/finally so FK enforcement is ALWAYS restored, even if a DELETE
         # raises — otherwise the connection would silently keep FK disabled.
         self._conn.execute("PRAGMA foreign_keys=OFF")
+        self._tx_begin()   # remoto: l'intero subtree-delete parte come UN batch
         try:
             freed: set[int] = set()
             for nid in doomed:
@@ -1159,6 +1154,16 @@ class KnowledgeGraph:
         r"""Escape LIKE wildcards so '100%_done' matches itself, not everything.
         Pair with `ESCAPE '\'` in the SQL."""
         return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    def _tx_begin(self) -> None:
+        """Explicit transaction on the REMOTE facade only: there a write goes
+        to the network statement-by-statement unless batched, so multi-statement
+        sequences (subtree deletes, link rebuilds) need one atomic batch. Local
+        engines already give per-commit atomicity via their own transactions,
+        and an explicit begin() would make SQLite ignore the PRAGMA foreign_keys
+        dance delete_node does around its loop."""
+        if isinstance(self._conn, RemoteTursoConnection):
+            self._conn.begin()
 
     def get_descendants(self, node_id: int) -> list[dict]:
         """Breadth-first descendants via path prefix."""
@@ -1259,12 +1264,18 @@ class KnowledgeGraph:
         source = str(filepath)
         # chunk_tags has no FK cascade (pyturso 0.6.1, see delete_node), so the
         # join rows go first or a re-ingest leaves them pointing at dead ids.
-        self._conn.execute(
-            "DELETE FROM chunk_tags WHERE chunk_id IN "
-            "(SELECT id FROM chunks WHERE node_id = ? AND source = ?)",
-            (node_id, source))
-        self._conn.execute("DELETE FROM chunks WHERE node_id = ? AND source = ?",
-                           (node_id, source))
+        # Remoto: replace-per-file atomico (delete vecchi + insert nuovi).
+        self._tx_begin()
+        try:
+            self._conn.execute(
+                "DELETE FROM chunk_tags WHERE chunk_id IN "
+                "(SELECT id FROM chunks WHERE node_id = ? AND source = ?)",
+                (node_id, source))
+            self._conn.execute("DELETE FROM chunks WHERE node_id = ? AND source = ?",
+                               (node_id, source))
+        except Exception:
+            self._conn.rollback()
+            raise
         chunks = self._chunk_file(filepath, self._max_chunk_chars)
         count = 0
         tag_pool: list[str] = []
@@ -1982,10 +1993,18 @@ class KnowledgeGraph:
         one re-ingest (§5.1)."""
         kept = self._conn.execute(
             "SELECT COUNT(*) FROM node_links WHERE origin != 'auto'").fetchone()[0]
-        self._conn.execute("DELETE FROM node_links WHERE origin = 'auto'")
-        self._conn.commit()
-        tag_count = self.build_tag_links()
-        xref_count = self.build_crossref_links()
+        # Remoto: lo svuotamento e la ricostruzione partono come UN batch —
+        # prima un socket caduto lasciava il grafo dei link MEZZO ricostruito.
+        self._tx_begin()
+        try:
+            self._conn.execute("DELETE FROM node_links WHERE origin = 'auto'")
+            self._conn.commit()
+            tag_count = self.build_tag_links()
+            xref_count = self.build_crossref_links()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
         return {"tag_overlap": tag_count, "cross_ref": xref_count,
                 "kept": kept, "total": tag_count + xref_count}
 
