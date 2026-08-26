@@ -26,6 +26,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECTS = ("gray_matter", "neuron", "neurag")
+# I mirror ridotti (CI 'GM + Neuron senza NeuRAG') spediscono solo parte degli
+# alberi: le regole di parity sul progetto assente non hanno soggetto. Si
+# parametrizza su chi c'e' davvero — un hook di collection qui non verrebbe
+# chiamato (vale solo per conftest/plugin).
+PRESENT = tuple(p for p in PROJECTS if (ROOT / p).is_dir())
 
 WINDOWS = (".cmd", ".ps1")          # CRLF, native Windows tooling
 POSIX = (".sh", ".command")         # LF, or `sh` chokes on the CR
@@ -53,13 +58,13 @@ def _bytes(project: str, suffix: str) -> bytes:
     return (ROOT / project / f"install{suffix}").read_bytes()
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 @pytest.mark.parametrize("suffix", WINDOWS + POSIX)
 def test_every_project_ships_every_launcher(project, suffix):
     assert (ROOT / project / f"install{suffix}").is_file()
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 @pytest.mark.parametrize("suffix", WINDOWS + POSIX)
 def test_line_endings(project, suffix):
     raw = _bytes(project, suffix)
@@ -72,7 +77,7 @@ def test_line_endings(project, suffix):
             f"install{suffix} must be LF — CRLF gives 'bad interpreter: ^M' on Linux")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_cmd_has_no_bom_and_is_pure_ascii(project):
     r"""cmd.exe does not understand a UTF-8 BOM: it becomes part of the first
     token, so `@echo off` turns into an unknown command and every later `rem`
@@ -92,7 +97,7 @@ def test_cmd_has_no_bom_and_is_pure_ascii(project):
             f"codepage, so anything else is mojibake): {e}") from None
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_ps1_keeps_its_bom(project):
     """The mirror rule. Windows PowerShell 5.1 decodes a BOM-less script as
     ANSI, so the accented comments and box-drawing output come out wrong."""
@@ -100,7 +105,7 @@ def test_ps1_keeps_its_bom(project):
         "install.ps1 must keep its UTF-8 BOM for PowerShell 5.1")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 @pytest.mark.parametrize("suffix", POSIX)
 def test_posix_launchers_have_no_bom(project, suffix):
     """`sh` would try to execute the BOM as part of the shebang line."""
@@ -108,7 +113,7 @@ def test_posix_launchers_have_no_bom(project, suffix):
         f"install{suffix} must not have a BOM")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_cmd_forwards_args_and_exit_code(project):
     body = _read(project, ".cmd")
     assert "%*" in body, "must forward its arguments to install.ps1"
@@ -116,35 +121,35 @@ def test_cmd_forwards_args_and_exit_code(project):
         "pause alone returns 0 — a failed install must not report success")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_command_forwards_args_and_exit_code(project):
     body = _read(project, ".command")
     assert '"$@"' in body, "must forward its arguments to install.sh"
     assert "exit $RC" in body, "read alone returns its own status, not the installer's"
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_both_launchers_document_the_same_flags(project):
     cmd, command = _read(project, ".cmd"), _read(project, ".command")
     assert "-Force" in cmd and "-Clear" in cmd
     assert "--force" in command and "--clear" in command
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_ps1_accepts_clear_and_clear_implies_force(project):
     body = _read(project, ".ps1")
     assert "[switch]$Clear" in body
     assert "$Force = $true" in body, "-Clear must imply -Force"
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_sh_accepts_clear_and_clear_implies_force(project):
     body = _read(project, ".sh")
     assert "-c|--clear)" in body
     assert "CLEAR=1; FORCE=1" in body, "--clear must imply --force"
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_clear_never_touches_user_data(project):
     """-Clear removes the venv. It must not reach a graph store or a DB."""
     for suffix in (".ps1", ".sh"):
@@ -155,7 +160,7 @@ def test_clear_never_touches_user_data(project):
             assert not wipes, f"install{suffix} deletes user data: {wipes}"
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_processes_are_stopped_before_pip_writes(project):
     """INSTALLER-UX §5.3. On Windows a loaded .pyd cannot be replaced, so pip
     fails with WinError 5 when a server is still running from the venv."""
@@ -181,6 +186,8 @@ def test_gm_stops_processes_again_after_every_prompt():
         assert len(calls) >= 3, f"gray_matter/install{suffix}: only {len(calls)} stop call(s)"
 
     for project in ("neuron", "neurag"):
+        if not (ROOT / project).is_dir():
+            continue          # albero ridotto: il progetto non e' qui
         ps1 = _read(project, ".ps1").splitlines()
         stop = next(i for i, l in enumerate(ps1) if "VenvPids" in l)
         prompt = max(i for i, l in enumerate(ps1) if "Read-Host" in l)
@@ -211,13 +218,13 @@ SH_FEATURES = {
 }
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 @pytest.mark.parametrize("why,token", sorted(PS1_FEATURES.items()))
 def test_every_ps1_has_every_feature(project, why, token):
     assert token in _read(project, ".ps1"), f"{project}/install.ps1 is missing {why}"
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 @pytest.mark.parametrize("why,token", sorted(SH_FEATURES.items()))
 def test_every_sh_has_every_feature(project, why, token):
     assert token in _read(project, ".sh"), f"{project}/install.sh is missing {why}"
@@ -234,7 +241,7 @@ def _offered_models(project: str, suffix: str) -> list[str]:
             for ln in body.splitlines() if re.match(r'^(GM_)?EM_\d+="', ln)]
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 @pytest.mark.parametrize("suffix", (".ps1", ".sh"))
 def test_no_installer_offers_to_skip_the_embedder(project, suffix):
     """Embedding is mandatory in all three: fastembed and pyturso are hard
@@ -260,7 +267,7 @@ def test_no_installer_offers_to_skip_the_embedder(project, suffix):
         f"{project}/install{suffix} still advertises a lexical-only install")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_the_two_pickers_of_a_project_offer_the_same_models(project):
     """The `.ps1` list and the `.sh` list are hand-maintained copies of each
     other — the comment says "keep in sync" and nothing checked it. Renumbering
@@ -270,7 +277,7 @@ def test_the_two_pickers_of_a_project_offer_the_same_models(project):
         f"{project}: install.ps1 and install.sh offer different models")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_every_installer_agrees_on_one_vector_space(project):
     """Vectors from different models are not comparable, so the three tools must
     land in ONE space. Two legitimate ways to say that:
@@ -292,7 +299,7 @@ def test_every_installer_agrees_on_one_vector_space(project):
             f"({default}) nor defers to Neuron — that is a third vector space")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_no_installer_defaults_to_the_retired_neuron5_slug(project):
     for suffix in (".ps1", ".sh", ".cmd", ".command"):
         body = _read(project, suffix)
@@ -301,7 +308,7 @@ def test_no_installer_defaults_to_the_retired_neuron5_slug(project):
             "the code paths that recognise it as legacy")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_gme_registry_is_written_by_the_single_python_writer(project):
     """The 40-line hand-written JSON is gone from all six shell scripts; the BOM
     and the macOS path bug were only possible because it existed six times."""
@@ -321,7 +328,7 @@ CLIENT_MODULES = {
 }
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_no_client_config_is_created_for_an_app_that_is_not_installed(project):
     """Registration must never invent a config file. Neuron created one for
     Cursor, Codex and OpenCode, NeuRAG for Cursor and OpenCode — on a machine
@@ -370,7 +377,7 @@ def _code_only(body: str) -> str:
                      if not ln.lstrip().startswith("#"))
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_no_deprecated_stdlib_api_in_source(project):
     """Trovato per davvero: install.ps1 leggeva d.metadata["Name"] e su 3.14
     l'installer stampava un DeprecationWarning a ogni run."""
@@ -386,7 +393,7 @@ def test_no_deprecated_stdlib_api_in_source(project):
     assert not bad, "API deprecate a sorgente:\n" + "\n".join(bad)
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_no_deprecated_api_in_the_installers(project):
     for suffix in (".ps1", ".sh"):
         body = _code_only(_read(project, suffix))
@@ -396,7 +403,7 @@ def test_no_deprecated_api_in_the_installers(project):
 
 # --- cross-project: robustezza degli installer --------------------------------
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_venv_is_validated_not_just_present(project):
     r"""`Test-Path $Venv` / `[ -d $VENV ]` non è un test di salute. Una rimozione
     interrotta (processo che tiene un .pyd) lascia Lib\ e Scripts\ senza
@@ -409,7 +416,7 @@ def test_venv_is_validated_not_just_present(project):
     assert "venv_healthy" in sh and "pyvenv.cfg" in sh
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_a_damaged_venv_is_rebuilt_not_inherited(project):
     for suffix, token in ((".ps1", "Test-VenvHealthy $Venv"), (".sh", "venv_healthy")):
         body = _code_only(_read(project, suffix))
@@ -417,7 +424,7 @@ def test_a_damaged_venv_is_rebuilt_not_inherited(project):
             f"install{suffix}: un mezzo-venv viene ereditato invece che ricostruito")
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_no_native_stderr_redirect_in_powershell(project):
     """In PowerShell 5.1 redirigere lo stderr di un ESEGUIBILE avvolge ogni riga
     in un ErrorRecord (NativeCommandError): sotto ErrorActionPreference=Stop
@@ -433,7 +440,7 @@ def test_no_native_stderr_redirect_in_powershell(project):
     assert not offenders, "redirezioni native fatali:\n" + "\n".join(offenders)
 
 
-@pytest.mark.parametrize("project", PROJECTS)
+@pytest.mark.parametrize("project", PRESENT)
 def test_interpreter_output_is_never_cast_unguarded(project):
     """Il probe di versione non deve poter UCCIDERE l'installer.
 
