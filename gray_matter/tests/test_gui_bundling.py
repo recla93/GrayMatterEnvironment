@@ -23,6 +23,13 @@ VENDOR_DIRS = {
 }
 
 
+def _skip_if_tree_absent(tool: str) -> None:
+    """I mirror per-suite (CI 'GM + Neuron senza NeuRAG') contengono solo parte
+    degli alberi: i test di bundling sul tool assente non hanno soggetto."""
+    if not VENDOR_DIRS[tool].parent.exists():
+        pytest.skip(f"{tool} non è in questo albero ridotto")
+
+
 def _gm_version() -> str:
     body = (ROOT / "gray_matter" / "__init__.py").read_text(encoding="utf-8")
     m = re.search(r'__version__\s*=\s*"([^"]+)"', body)
@@ -33,6 +40,7 @@ def _gm_version() -> str:
 @pytest.mark.parametrize("tool", sorted(VENDOR_DIRS))
 def test_each_tool_bundles_the_control_center(tool):
     """A standalone install must be able to open the GUI with no network."""
+    _skip_if_tree_absent(tool)
     wheels = list(VENDOR_DIRS[tool].glob("gray_matter-*.whl"))
     assert wheels, (
         f"{tool} ships no Gray Matter wheel — `{tool} gui` would need PyPI, so a "
@@ -44,6 +52,7 @@ def test_each_tool_bundles_the_control_center(tool):
 def test_the_bundled_wheel_matches_the_current_gray_matter(tool):
     """THE stale-release guard. Bumping GM without rebuilding these wheels ships
     peers that bootstrap an older control center and never mention it."""
+    _skip_if_tree_absent(tool)
     wheel = next(iter(VENDOR_DIRS[tool].glob("gray_matter-*.whl")))
     bundled = wheel.name.split("-")[1]
     current = _gm_version()
@@ -56,6 +65,7 @@ def test_the_bundled_wheel_matches_the_current_gray_matter(tool):
 @pytest.mark.parametrize("tool", sorted(VENDOR_DIRS))
 def test_the_wheel_actually_ships_in_the_package(tool):
     """A wheel on disk that setuptools does not package is not bundled at all."""
+    _skip_if_tree_absent(tool)
     toml = (ROOT / tool / "pyproject.toml").read_text(encoding="utf-8")
     assert "_gm_vendor" in toml, (
         f"{tool}/pyproject.toml does not declare _gm_vendor in package-data — "
@@ -65,6 +75,7 @@ def test_the_wheel_actually_ships_in_the_package(tool):
 @pytest.mark.parametrize("tool,module", [("neuron", "neuron"), ("neurag", "neurag")])
 def test_there_is_no_second_gui(tool, module):
     """One GUI. A tool-local GUI module is the thing that drifts."""
+    _skip_if_tree_absent(tool)
     pkg = ROOT / ("neuron/src/neuron" if tool == "neuron" else "neurag")
     strays = [p.name for p in pkg.glob("*gui*.py")]
     assert not strays, f"{tool} has its own GUI module(s) {strays} — the control center is Gray Matter's"
