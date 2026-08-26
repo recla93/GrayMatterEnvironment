@@ -276,8 +276,9 @@ PY
     fi
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling NeuRAG (forced)..."
     FL=""; [ -d "$HERE/vendor" ] && FL="--find-links $HERE/vendor"
+    CONS=""; [ -f "$HERE/constraints.txt" ] && CONS="-c $HERE/constraints.txt"  # caps the majors
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FL $(repair_args) "$HERE" || "$VPY" -m pip install $(repair_args) "$HERE" \
+    "$VPY" -m pip install $FL $CONS $(repair_args) "$HERE" || "$VPY" -m pip install $CONS $(repair_args) "$HERE" \
         || { echo "ERROR: NeuRAG install failed — check network, or try: pip install --upgrade pip"; exit 1; }
     save_embed_model "$VPY"
     # Ship our OWN copy of gray_matter (the vendored wheel) into the standalone

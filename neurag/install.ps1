@@ -412,6 +412,8 @@ function Install-Standalone {
     $Drifted = (-not $Force) -and (-not (Test-CodeMatches "neurag" $Here))
     if ($Drifted) { Write-Host "NeuRAG: the installed code is NOT this source - forcing a refresh." }
     $Vendor = Join-Path $Here "vendor"
+    $Cons = @(); $cf = Join-Path $Here "constraints.txt"
+    if (Test-Path $cf) { $Cons = @("-c", $cf) }   # caps the majors — see constraints.txt
     $Repair = if ($Drifted) { Get-RepairArgs -Always } else { Get-RepairArgs }
     if (Test-Path $Vendor) { & $Vpy -m pip install --find-links $Vendor @Repair $Here }
     else { & $Vpy -m pip install @Repair $Here }
