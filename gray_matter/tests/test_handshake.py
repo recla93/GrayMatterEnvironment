@@ -42,14 +42,23 @@ def _hook():
     return mod
 
 
+def _present_tools() -> "list[str]":
+    """I mirror per-suite (CI 'GM + Neuron senza NeuRAG') non contengono
+    l'albero asset dei tool assenti: la parity si verifica su chi c'e'."""
+    return [t for t, d in ASSET_DIRS.items() if d.exists()]
+
+
 # --- the copies must never drift ---------------------------------------------
 
 @pytest.mark.parametrize("asset", SHARED)
 def test_every_tool_ships_the_same_asset(asset):
     """Byte-identical, so 'keep in sync' is enforced rather than hoped for."""
+    tools = _present_tools()
+    if len(tools) < 2:
+        pytest.skip(f"un solo albero presente ({tools}): niente parity da fare")
     blobs = {}
-    for tool, d in ASSET_DIRS.items():
-        p = d / asset
+    for tool in tools:
+        p = ASSET_DIRS[tool] / asset
         assert p.is_file(), f"{tool} is missing {asset}"
         blobs[tool] = p.read_bytes()
     first = next(iter(blobs.values()))
