@@ -33,13 +33,16 @@ POSIX = (".sh", ".command")         # LF, or `sh` chokes on the CR
 
 def pytest_collection_modifyitems(config, items):
     """I mirror ridotti (CI 'GM + Neuron senza NeuRAG') non contengono tutti i
-    progetti: una regola di parity sul progetto assente non ha soggetto."""
+    progetti: una regola di parity sul progetto assente non ha soggetto.
+    Matcha sull'ID dell'item ([neurag-.cmd]...) e non su callspec: l'attributo
+    è privato e si è mosso tra le major di pytest."""
+    absent = [p for p in PROJECTS if not (ROOT / p).is_dir()]
+    if not absent:
+        return
     for item in items:
-        callspec = getattr(item, "callspec", None)
-        project = callspec.params.get("project") if callspec else None
-        if project and not (ROOT / str(project)).is_dir():
+        if any(f"[{p}-" in item.name or f"[{p}]" in item.name for p in absent):
             item.add_marker(pytest.mark.skip(
-                reason=f"{project} assente in questo albero ridotto"))
+                reason=f"progetto assente in questo albero ridotto ({item.name})"))
 
 
 def _read(project: str, suffix: str) -> str:
