@@ -50,6 +50,16 @@ def _python_of(venv: Path) -> Path:
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
+def _is_standalone_python(python: str) -> bool:
+    """True se l'interprete appartiene a un venv standalone di Neuron/NeuRAG
+    (layout attuale o storico): registrazioni volutamente dirette."""
+    s = python.replace("\\", "/").lower()
+    return any(seg in s for seg in (
+        "/neuron/.venv/", "/neurag/.venv/",
+        "/programs/neuron/.venv/", "/programs/neurag/.venv/",
+    ))
+
+
 def _versions(python: Path) -> dict:
     """Versioni dei tre pacchetti in QUEL venv. {} se l'interprete non parte."""
     code = (
@@ -122,6 +132,15 @@ def client_interpreters() -> list[dict]:
     return out
 
 
+def _venv_kind(v: Path) -> str:
+    """"suite" = il venv condiviso del gateway; "standalone" = i venv propri di
+    Neuron/NeuRAG installati con --no-gm. Sono legittimi in parallelo: contarli
+    come 'multiple_venvs' era un falso allarme."""
+    s = str(v).replace("\\", "/").lower()
+    tail = s.rsplit("/", 2)[-2] if "/" in s else ""
+    return "standalone" if tail in ("neuron", "neurag") else "suite"
+
+
 def scan() -> dict:
     """Fotografia PURA della macchina. Non scrive niente, non decide niente."""
     venvs = []
@@ -131,22 +150,27 @@ def scan() -> dict:
             continue
         vers = _versions(py)
         venvs.append({"venv": str(v), "python": str(py), "versions": vers,
-                      "usable": bool(vers)})
+                      "usable": bool(vers), "kind": _venv_kind(v)})
 
     src = source_versions()
     clients = client_interpreters()
-    target = str(_python_of(paths._user_base() / "graymatter" / ".venv"))
+    # Il target è il venv che QUESTO install userà davvero. L'install.ps1 può
+    # ADOTTARE un venv storico (un venv non si sposta): senza l'override qui
+    # sotto il report prometteva riscritture verso il path canonico che la
+    # registrazione non avrebbe mai scritto (visto in produzione, 2026-08-26).
+    env_target = os.environ.get("GM_TARGET_PYTHON", "").strip()
+    target = env_target or str(_python_of(paths._user_base() / "graymatter" / ".venv"))
 
     problems = []
-    live = [v for v in venvs if v["usable"]]
-    if len(live) > 1:
+    suite_live = [v for v in venvs if v["usable"] and v["kind"] == "suite"]
+    if len(suite_live) > 1:
         problems.append({
             "kind": "multiple_venvs",
-            "detail": f"{len(live)} venv della suite vivi: " +
-                      ", ".join(v["venv"] for v in live),
+            "detail": f"{len(suite_live)} venv della suite vivi: " +
+                      ", ".join(v["venv"] for v in suite_live),
             "fix": "usa -Clear per rifare quello corrente, poi rimuovi gli altri",
         })
-    for v in live:
+    for v in (v for v in venvs if v["usable"] and v["kind"] == "suite"):
         skew = {n: (v["versions"].get(n), src.get(n))
                 for n in TOOLS
                 if n in v["versions"] and n in src and v["versions"][n] != src[n]}
@@ -173,7 +197,11 @@ def scan() -> dict:
             })
         elif c["alive"] and c["python"] and target and \
                 os.path.normcase(os.path.normpath(c["python"])) != \
-                os.path.normcase(os.path.normpath(target)):
+                os.path.normcase(os.path.normpath(target)) and \
+                not _is_standalone_python(c["python"]):
+            # Un interprete standalone (venv proprio di Neuron/NeuRAG) e' una
+            # scelta, non un disallineamento: segnalarlo come "punta altrove"
+            # generava il falso allarme permanente visto col venv adottato.
             problems.append({
                 "kind": "client_points_elsewhere",
                 "detail": f"{c['client']} punta a {c['python']}, non a {target}",

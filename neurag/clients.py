@@ -679,15 +679,21 @@ def deregister_all(slug: str = SLUG) -> list[Result]:
 def default_server_python() -> str:
     """Il python che DEVE lanciare il server: il venv installato se esiste
     (standalone NeuRAG o venv condiviso GM), altrimenti l'interprete corrente
-    (che sta già eseguendo NeuRAG, quindi lo sa importare)."""
+    (che sta già eseguendo NeuRAG, quindi lo sa importare). Candidati in ordine:
+    NEURAG_HOME, layout suite attuale (GrayMatterEnvironment\<slug>), poi i due
+    storici — specchio di ciò che gli installer creano davvero."""
     home = os.environ.get("NEURAG_HOME")
     bases = []
     if home:
         bases.append(os.path.join(home, ".venv"))
     if os.name == "nt":
         la = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        bases += [os.path.join(la, "neurag", ".venv"),
+        bases += [os.path.join(la, "GrayMatterEnvironment", "neurag", ".venv"),
+                  os.path.join(la, "neurag", ".venv"),
                   os.path.join(la, "gray-matter", ".venv")]
+    else:
+        share = os.environ.get("XDG_DATA_HOME") or _home(".local", "share")
+        bases += [os.path.join(share, "GrayMatterEnvironment", "neurag", ".venv")]
     bases += [_home(".local", "share", "neurag", ".venv"),
               _home(".local", "share", "gray-matter", ".venv")]
     exe = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")

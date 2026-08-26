@@ -681,6 +681,13 @@ def execute_install(state: dict | None = None, *, assets_root=None,
                 picked = (list(only) if only is not None
                           else [c for c in act["clients"] if c in _clients.CLIENTS] or None)
                 regs = _clients.register(gateway=True, only=picked)
+                # The gateway owns every managed tool again: without this,
+                # `cli install` left stale 'unmanaged' entries behind (only the
+                # fallback `register --gateway` path cleared them).
+                try:
+                    _clients.clear_unmanaged()
+                except Exception:  # noqa: BLE001 — best-effort bookkeeping
+                    pass
                 # "skipped: client not found" is not a failure of the install
                 ok = all(r.get("ok") or r.get("action") == "skipped" for r in regs)
                 results.append({"action": "register", "ok": ok, "clients": regs})

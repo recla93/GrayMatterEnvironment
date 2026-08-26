@@ -494,7 +494,8 @@ for r in migrate_to_suite_root():
     print(('  [OK] ' if r['ok'] else '  [!] ') + r['from'] + ' -> ' + r['to'] + '  ' + r['detail'])" || true
 
 # Cosa c'era gia' e se e' allineato — vedi la nota in install.ps1.
-"$VPY" -m gray_matter.preflight || true
+# GM_TARGET_PYTHON: quale venv questo install ha adottato davvero.
+GM_TARGET_PYTHON="$VPY" "$VPY" -m gray_matter.preflight || true
 
 export GM_INSTALLER=1
 "$VPY" -m gray_matter.cli install --client "$CLIENT_SEL" \

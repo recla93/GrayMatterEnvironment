@@ -551,6 +551,22 @@ function Install-Peer([string]$dir, [string]$label) {
     if ($peerVer) {
         $choice = Prompt-InstallChoice $label $peerVer $pkg $dir
         Stop-VenvProcesses $Venv        # same respawn window as above
+        if ($choice -eq "wipe") {
+            # [W]ipe per un PEER cancellerebbe la memoria semantica del tool:
+            # quella decisione spetta a `gray-matter uninstall` (che sa cosa
+            # rimuovere). Qui il menu mostrava W e poi non cancellava NIENTE.
+            Write-Host "  [W]ipe is not available for peers here — use 'gray-matter uninstall' (data decisions live there)."
+            return
+        }
+        if ($choice -eq "deps") {
+            # Solo dipendenze: senza --force pip ripara i mancanti e tocca il
+            # codice solo se davvero diverso. Prima questa voce eseguiva un
+            # reinstall FORZATO del codice, l'opposto dell'etichetta.
+            Write-Host "Repairing $label dependencies..."
+            & $VPy -m pip install @Find @Cons $dir
+            if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: dependency repair failed - continuing." }
+            return
+        }
         if ($choice -ne "skip") {
             if ($choice -eq "clean") {
                 Write-Host "Removing venv and reinstalling from scratch..."
@@ -887,6 +903,10 @@ for r in migrate_to_suite_root():
 # venv da cui importare) ma PRIMA di registrare i client, cosi' un interprete
 # morto o una suite incompleta si leggono qui e non come `spawn ... ENOENT`
 # tre giorni dopo. Non aggiusta niente da solo: dice cosa e come.
+# GM_TARGET_PYTHON dice al preflight QUALE venv questo install ha adottato
+# (l'adozione puo' redirigere $Venv su un layout storico): senza, il report
+# prometteva riscritture verso il path canonico mai realmente scritto.
+$env:GM_TARGET_PYTHON = $VPy
 Invoke-BestEffort "controllo dell'esistente" { & $VPy -m gray_matter.preflight }
 
 Write-Host "Installing the gateway (register + hooks + manifest)..."
@@ -895,6 +915,15 @@ Write-Host "Installing the gateway (register + hooks + manifest)..."
 $ClientSel = if ($Client) { $Client } elseif ($Ask) { "ask" } else { "detected" }
 try { & $VPy -m gray_matter.cli install --client $ClientSel }
 catch { & $VPy -m gray_matter.cli register --gateway --client $ClientSel }
+# A nonzero exit here means NO clients were registered (or half): declaring
+# INSTALL COMPLETE after this was the lie that cost a debugging session.
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "  ============================================================"
+    Write-Host "  [FAIL] registration step exited $LASTEXITCODE - install NOT complete."
+    Write-Host "  ============================================================"
+    exit 1
+}
 
 # Embedding model for Neuron (full-suite users never see neuron/install.ps1).
 if ($NeuronDir) {

@@ -420,6 +420,30 @@ function Install-Standalone {
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: NeuRAG install failed — check network, or try: pip install --upgrade pip"; exit 1 }
     }
     Save-EmbedModel $Vpy $Chosen
+    # Ship our OWN copy of gray_matter (the wheel we vendor) into the standalone
+    # venv. Without it `import gray_matter` fails here, which silently disabled:
+    # the direct-register guard, go-standalone/release_tool, and the GME write
+    # below (it logged nothing and wrote nothing). Best-effort.
+    $GmWheelDir = Join-Path $Here "_gm_vendor"
+    $GmWheel = Get-ChildItem -Path $GmWheelDir -Filter "gray_matter-*.whl" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($GmWheel) {
+        try { & $Vpy -m pip install -q --no-deps --no-index "$($GmWheel.FullName)" } catch { }
+    }
+    # Coming FROM a gateway install? Release NeuRAG from GM's management BEFORE
+    # the direct registration, otherwise every client ends up double-registered
+    # (gateway entry keeps proxying these same tools) and GM still considers us
+    # managed. Requires the wheel above; skipped when GM was never installed.
+    $La = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
+    $Suite = if ($env:GM_HOME) { $env:GM_HOME } else { Join-Path $La "GrayMatterEnvironment" }
+    $WasGateway = (Test-Path (Join-Path $Suite "graymatter\manifest.json")) -or `
+                  (Test-Path (Join-Path $Suite "graymatter\settings.json"))
+    if ($WasGateway) {
+        Write-Host "Gray Matter detected: releasing NeuRAG from gateway management..."
+        try { & $Vpy -c "from gray_matter.clients import release_tool; [print('  ' + l) for l in release_tool('neurag')]" } catch { }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  (!) automatic release failed — complete the switch with: neurag go-standalone"
+        }
+    }
     # Handshake assets (see neuron/install.ps1 for the why). Idempotent.
     try {
         $HookSrc = Join-Path $Venv "Lib\site-packages\neurag\clients\deploy_hooks.py"
@@ -431,14 +455,21 @@ function Install-Standalone {
     # does not have. -Yes / non-interactive never prompts.
     $ClientSel = if ($Ask) { "ask" } else { "detected" }
     Invoke-Tool $Venv "neurag.exe" "neurag.cli" register --client $ClientSel
+    # Truthful banner: a failed registration must not print INSTALL COMPLETE.
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "  ============================================================"
+        Write-Host "  [FAIL] registration exited $LASTEXITCODE - install NOT complete."
+        Write-Host "  ============================================================"
+        exit 1
+    }
     Invoke-Tool $Venv "neurag.exe" "neurag.cli" doctor
     
     # --- GME Registry ---
     # One line instead of ~30 of hand-written JSON: gray_matter/gme.py is the
     # single writer (and the reader). Six shell copies in two languages is what
     # let the PowerShell BOM and the macOS path divergence ship unnoticed.
-    # Best-effort — standalone means Gray Matter may be absent, and then there
-    # is no registry to write and nothing that would read it.
+    # Works thanks to the vendored wheel installed above; best-effort anyway.
     try { & $Vpy -m gray_matter.gme register "$Here" } catch { }
     
     # Desktop icon "NeuRAG" → doppio click apre il control center (bootstrappa GM
