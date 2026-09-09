@@ -65,7 +65,7 @@ Seven files normalized to LF; `gray_matter/tests` went from 9 failures to 2.
 **Known environment issue (not a code defect).** The remaining 2 failures in
 `gray_matter/tests/test_version_parity.py`, and 4 in `neuron/tests/test_cli_dispatch.py`,
 all spawn `python -m neuron` and get *"No module named neuron.__main__"*. Cause: the
-venv's editable install points at `C:\Users\recla\Desktop\Gray Matter Enviroment\neuron\src`,
+venv's editable install points at `C:\Users\<utente>\Desktop\Gray Matter Enviroment\neuron\src`,
 which no longer exists — the workspace moved to `D:\`. `import neuron` works under pytest
 only because the root `conftest.py` injects the correct path; a subprocess inherits
 nothing. **Every subprocess-based test in the suite is currently inert.** Repair with a

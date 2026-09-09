@@ -7,7 +7,7 @@
 ## Stack
 Tre server MCP: **Neuron** (memoria semantica a grafo, Turso), **NeuRAG** (knowledge
 base), **Gray-Matter/GM** (orchestratore + proxy). Repo root:
-`C:\Users\recla\Desktop\Gray Matter Enviroment` — 3 repo git separati
+`C:\Users\<utente>\Desktop\Gray Matter Enviroment` — 3 repo git separati
 (`Neuron`, `gray_matter`, `neurag`).
 Regole ambiente: git solo in locale; un fix in sandbox NON è "verde" finché non
 gira in locale. Neuron è installato **editable** sia in `C:\Python314` sia in

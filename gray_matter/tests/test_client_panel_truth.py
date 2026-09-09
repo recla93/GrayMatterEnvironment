@@ -45,8 +45,8 @@ def test_a_missing_path_does_not_match_everything():
 @pytest.mark.skipif(os.name != "nt", reason="pythonw is Windows-only")
 def test_the_real_pair_this_was_reported_for():
     """Regression on the exact shapes seen on the user's machine."""
-    reg = r"C:\Users\recla\AppData\Local\gray-matter\.venv\Scripts\python.exe"
-    gui = r"C:\Users\recla\AppData\Local\gray-matter\.venv\Scripts\pythonw.exe"
+    reg = r"C:\Users\dev\AppData\Local\gray-matter\.venv\Scripts\python.exe"
+    gui = r"C:\Users\dev\AppData\Local\gray-matter\.venv\Scripts\pythonw.exe"
     assert _same_interpreter(reg, gui)
 
 

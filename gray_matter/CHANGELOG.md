@@ -1,5 +1,22 @@
 ﻿# Changelog — Gray Matter
 
+## 1.4.2 (2026-08-19)
+- **Tre pulsanti della GUI erano morti, e il self-test usciva 0.** `call(nome,
+  payload)` fa `JSON.stringify(payload)`: tre chiamate gli passavano una stringa
+  GIA' serializzata, quindi al server arrivava un JSON che si deserializza in
+  `str` e `req.get(...)` moriva con "'str' object has no attribute 'get'".
+  Colpiti tutti e due i pulsanti del pannello di migrazione -- il pannello dove
+  si finisce quando l'installazione e' gia' messa male -- e la registrazione dei
+  client. Il self-test stampava il traceback e usciva 0: la pagina si carica,
+  quindi per lui andava bene.
+- **La regola del corpo della richiesta stava scritta sedici volte.**
+  `json.loads` accetta qualunque JSON valido, non solo un oggetto, e
+  `req = json.loads(args) if args else {}` era ripetuto in sedici punti.
+  L'errore era gia' stato pagato una volta e tappato con un `isinstance` locale,
+  lasciando scoperti gli altri quindici. Ora c'e' `_req()`: la regola in un posto
+  solo, e un corpo sbagliato torna "richiesta non valida" invece di un
+  AttributeError che punta a una riga che non c'entra. 550 test (erano 540).
+
 ## 1.4.1 (2026-08-05)
 - **`doctor` controlla i puntatori sul disco, senza bisogno di un server vivo.**
   Faceva `_send_ipc` come prima cosa e usciva con "Gray-Matter not running":

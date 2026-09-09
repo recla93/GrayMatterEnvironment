@@ -23,6 +23,33 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _hold_the_vault(script, env=None):
+    """Avvia il processo che tiene il vault e torna quando ha DAVVERO il lock.
+
+    Prima la sincronizzazione era un `time.sleep(1)` dentro il processo che
+    prende in prestito: un'attesa fissa contro un lavoro di durata variabile
+    (apertura del vault, add_node, add_chunk). Il READY c'era gia', ma veniva
+    letto DOPO che il secondo processo aveva finito, quindi non aspettava
+    niente. Su un runner sotto carico il primo processo stava ancora scrivendo
+    quando il secondo leggeva, e sqlite rispondeva `database is locked`:
+    OperationalError, rosso intermittente, verde al rerun senza toccare una
+    riga. Visto sul run 32311091896.
+
+    E la corsa opposta: chi tiene il lock lo mollava dopo 3-4 secondi fissi,
+    quindi un secondo processo lento trovava il vault gia' libero e prendeva il
+    tier Turso, facendo cadere le asserzioni sul tier prestato. Ora tiene finche'
+    non lo si ammazza -- il chiamante lo fa nel `finally`.
+    """
+    proc = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, env=env)
+    ready = proc.stdout.readline()
+    if "READY" not in ready:
+        proc.kill()
+        raise AssertionError(f"il processo che tiene il vault non e' partito: "
+                             f"stdout={ready!r} stderr={proc.stderr.read()!r}")
+    return proc
+
+
 def test_cache_prevents_duplicate_connections(tmp_path):
     """Two KnowledgeGraph instances on the same path share one pyturso connection
     via _turso_conn_cache — the second open reuses the cached handle."""
@@ -58,14 +85,13 @@ def test_second_process_degrades_to_sqlite_instead_of_having_no_connection(tmp_p
         "from neurag.db import KnowledgeGraph\n"
         "kg = KnowledgeGraph(db_path=Path(r'%s'))\n"
         "print('READY', flush=True)\n"
-        "time.sleep(3)\n"
+        "time.sleep(600)\n"          # tiene finche' non lo ammazzano
         "kg.close()\n"
     ) % str(path)
     script_b = textwrap.dedent(
         "import time\n"
         "from pathlib import Path\n"
         "from neurag.db import KnowledgeGraph\n"
-        "time.sleep(1)\n"
         "kg = KnowledgeGraph(db_path=Path(r'%s'))\n"
         "print('ENGINE', kg._engine_name, flush=True)\n"
         "print('CORRUPT', kg._corrupt, flush=True)\n"
@@ -76,13 +102,13 @@ def test_second_process_degrades_to_sqlite_instead_of_having_no_connection(tmp_p
         "except Exception as e:\n"
         "    print('WROTE no', type(e).__name__, flush=True)\n"
     ) % str(path)
-    a = subprocess.Popen([sys.executable, "-c", script_a], stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True)
-    b = subprocess.run([sys.executable, "-c", script_b], capture_output=True, text=True,
-                       timeout=15)
-    a_out = a.stdout.read()
-    a.wait(timeout=10)
-    assert "READY" in a_out, f"process A failed: {a.stderr.read()!r}"
+    a = _hold_the_vault(script_a)
+    try:
+        b = subprocess.run([sys.executable, "-c", script_b], capture_output=True,
+                           text=True, timeout=15)
+    finally:
+        a.kill()
+        a.wait(timeout=10)
     ctx = f"stdout={b.stdout!r} stderr={b.stderr!r}"
     # The lock still holds: B does not get the Turso tier...
     assert "Turso (local)" not in b.stdout, f"expected the lock to hold: {ctx}"
@@ -123,13 +149,12 @@ def test_borrowed_vault_answers_a_search_instead_of_returning_the_lock_error(tmp
         "kg.add_chunk(nid, 'the quorum threshold guards the parking rule',\n"
         "             source='docs/parking.md')\n"
         "print('READY', flush=True)\n"
-        "time.sleep(4)\n"
+        "time.sleep(600)\n"          # tiene finche' non lo ammazzano
     ) % str(path)
     borrower = textwrap.dedent(
         "import time\n"
         "from pathlib import Path\n"
         "from neurag.db import KnowledgeGraph\n"
-        "time.sleep(1)\n"
         "kg = KnowledgeGraph(db_path=Path(r'%s'))\n"
         "print('ENGINE', kg._engine_name, flush=True)\n"
         "try:\n"
@@ -138,13 +163,13 @@ def test_borrowed_vault_answers_a_search_instead_of_returning_the_lock_error(tmp
         "except Exception as e:\n"
         "    print('RAISED', type(e).__name__, flush=True)\n"
     ) % str(path)
-    a = subprocess.Popen([sys.executable, "-c", seed], stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True, env=env)
-    b = subprocess.run([sys.executable, "-c", borrower], capture_output=True,
-                       text=True, timeout=20, env=env)
-    a_out = a.stdout.read()
-    a.wait(timeout=10)
-    assert "READY" in a_out, f"seeding process failed: {a.stderr.read()!r}"
+    a = _hold_the_vault(seed, env=env)
+    try:
+        b = subprocess.run([sys.executable, "-c", borrower], capture_output=True,
+                           text=True, timeout=20, env=env)
+    finally:
+        a.kill()
+        a.wait(timeout=10)
     ctx = f"stdout={b.stdout!r} stderr={b.stderr!r}"
     assert "read-only" in b.stdout, f"expected the borrowed tier: {ctx}"
     assert "RAISED" not in b.stdout, (

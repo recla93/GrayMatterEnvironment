@@ -135,7 +135,6 @@ Il `knowledge.db` corrente è corrotto: `PRAGMA integrity_check` per stimare il 
 | `neurag/tests/*` | 0-4 | test_concurrency, test_hybrid_search, test_ann_index, reranker |
 | `neurag/__init__.py` + `CHANGELOG.md` | tutte | bump versione + changelog |
 | `docs/TECHNOLOGY.md`, `docs/DATA.md`, `GRAY-MATTER-COMPENDIUM.md` | tutte | aggiornare architettura retrieval |
-| `audit_gray-matter_corruption.md` | — | correggere: `store_turn` scrive su Neuron (non co-writer); su knowledge.db 1 writer + letture concorrenti |
 
 ## Zero nuove dipendenze runtime
 FTS5 e ANN sono nativi (SQLite/libsql già in uso). Il reranker riusa `fastembed` già presente. Nessun servizio esterno, resta single-file locale.
