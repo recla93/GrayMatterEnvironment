@@ -1,5 +1,23 @@
 ﻿# Changelog — Gray Matter
 
+## 1.4.3 (2026-09-09)
+- **Il control center mostrava la targa, non il codice.** La sidebar diceva
+  neuron v6.4.2 e gray-matter v1.4.1 su una macchina con 6.4.4 e 1.4.2
+  installati e funzionanti, e la pagina si contraddiceva da sola: 1.4.2
+  nell'intestazione, 1.4.1 due centimetri piu' sotto. Due strati, entrambi che
+  guardavano un'etichetta invece del motore. `environments()` preferiva il
+  registro GME, scritto una volta all'installazione e mai aggiornato; ora e' il
+  ripiego, per il tool installato ma non importabile da questo interprete. La
+  causa vera stava sotto: `_version()` chiedeva al dist-info, che con
+  `pip install -e` viene scritto all'install mentre il codice avanza col repo
+  (misurato: dist-info 6.4.2 contro `__version__` 6.4.4). Ora prima il modulo
+  importato. Vale anche nel verso opposto, quello patologico: un install
+  interrotto lascia il dist-info NUOVO sopra i file VECCHI. E' il principio
+  della 6.4.2 di Neuron -- l'installer chiede al codice, non alla targa --
+  applicato a chi quel numero lo mostra. Trovato guardando la GUI: i suoi 38
+  test passavano, e passano ancora, perche' verificano che la pagina si disegni,
+  non che dica il vero.
+
 ## 1.4.2 (2026-08-19)
 - **Tre pulsanti della GUI erano morti, e il self-test usciva 0.** `call(nome,
   payload)` fa `JSON.stringify(payload)`: tre chiamate gli passavano una stringa
