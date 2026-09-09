@@ -550,14 +550,35 @@ ENVIRONMENTS = (
 
 
 def _version(module: str) -> str:
+    """La versione che il CODICE dichiara, e solo in mancanza quella del dist-info.
+
+    L'ordine era il contrario, e il dist-info e' una targa: `pip install -e` la
+    scrive una volta e poi il codice va avanti da solo. Misurato 2026-09-09 su
+    un'installazione editable sana: dist-info 6.4.2 contro `__version__` 6.4.4,
+    e 1.4.1 contro 1.4.2 per Gray Matter. Nessuno dei due era rotto -- il
+    dist-info diceva semplicemente la verita' di due settimane prima.
+
+    Vale anche nel caso opposto, quello patologico: un install interrotto lascia
+    il dist-info NUOVO sopra i file VECCHI, e li' la targa mente al rialzo. In
+    entrambe le direzioni la risposta onesta e' il modulo importato, che e' il
+    codice che gira davvero. E' lo stesso principio del CHANGELOG 6.4.2,
+    "l'installer chiede al codice, non alla targa", qui applicato a chi quel
+    numero lo mostra.
+
+    Il dist-info resta il ripiego per il pacchetto che non espone
+    `__version__`, e la stringa vuota per quello che non c'e' affatto.
+    """
+    try:
+        v = getattr(importlib.import_module(module), "__version__", "")
+        if v:
+            return str(v)
+    except Exception:  # noqa: BLE001 — non importabile: ci pensa il dist-info
+        pass
     try:
         import importlib.metadata as md
         return md.version(module.replace("_", "-"))
     except Exception:  # noqa: BLE001 — non installato (es. checkout sorgente)
-        try:
-            return getattr(importlib.import_module(module), "__version__", "") or ""
-        except Exception:  # noqa: BLE001
-            return ""
+        return ""
 
 
 def _installed(module: str) -> bool:
@@ -673,13 +694,27 @@ def environments(lang: str = "it") -> list[dict]:
             c["when"] = when
             c["interactive"] = key in INTERACTIVE
         
-        # Version: prefer GME, fallback to _version()
-        if gme and gme.get("version"):
+        # Versione: prima il CODICE, il registro solo come ripiego.
+        #
+        # Era il contrario, e il registro GME e' un'etichetta scritta una volta
+        # sola all'installazione: non lo aggiorna nessuno. Osservato 2026-09-09
+        # su una macchina con neuron 6.4.4 installato e funzionante — la GUI
+        # diceva 6.4.2, la versione del 17 agosto, e per Gray Matter si
+        # contraddiceva da sola: 1.4.2 nell'intestazione (letta dal codice) e
+        # 1.4.1 in sidebar (letta dal registro).
+        #
+        # E' lo stesso difetto per cui esiste `test_wiring_catches_a_label_that
+        # _lies_about_the_code`: chi si fida della targa invece che del motore
+        # vede aggiornato cio' che non lo e'. Su un pannello che serve a capire
+        # SE un aggiornamento e' andato a buon fine, e' il numero peggiore da
+        # sbagliare.
+        #
+        # Il registro resta il ripiego: un tool installato ma non importabile
+        # da QUESTO interprete non ha un `_version()` da offrire, e li' l'unica
+        # cosa che sappiamo e' quello che il registro ricorda.
+        version = _version(env["module"]) if present else ""
+        if not version and gme and gme.get("version"):
             version = gme["version"]
-        elif present:
-            version = _version(env["module"])
-        else:
-            version = ""
         
         out.append({
             "key": env["key"], "label": env["label"], "subtitle": env["subtitle"],

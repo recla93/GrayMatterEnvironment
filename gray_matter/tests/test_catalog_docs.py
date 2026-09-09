@@ -68,3 +68,37 @@ def test_language_selection_changes_the_text():
     assert it_what != en_what and it_when != en_when
     # lingua sconosciuta -> italiano, il default storico della GUI
     assert catalog.doc_for(("gray-matter", "doctor"), "kl") == (it_what, it_when)
+
+
+def test_version_comes_from_the_code_not_from_the_registry(monkeypatch):
+    """La sidebar della GUI mostrava la versione di QUANDO hai installato.
+
+    Il registro GME e' un'etichetta scritta una volta all'installazione e mai
+    piu' toccata. Osservato 2026-09-09: neuron 6.4.4 installato e funzionante,
+    la GUI diceva 6.4.2 (17 agosto), e Gray Matter si contraddiceva da solo —
+    1.4.2 nell'intestazione, 1.4.1 in sidebar.
+
+    Su un pannello che serve proprio a capire se un aggiornamento e' andato a
+    buon fine, e' il numero peggiore da sbagliare: mostra come vecchio cio' che
+    e' stato appena aggiornato, e non c'e' modo di accorgersene da li'.
+    """
+    monkeypatch.setattr(catalog, "_version", lambda mod: "9.9.9")
+    monkeypatch.setattr(catalog, "_gme_map",
+                        lambda: {"neuron": {"key": "neuron", "version": "0.0.1"}},
+                        raising=False)
+    for env in catalog.environments():
+        if env["key"] == "neuron" and env["installed"]:
+            assert env["version"] == "9.9.9", \
+                f"vince il codice, non il registro: {env['version']}"
+            break
+
+
+def test_the_registry_still_answers_for_what_the_code_cannot(monkeypatch):
+    """Il ripiego non e' sparito: un tool installato ma non importabile da
+    QUESTO interprete non ha un `_version()` da offrire, e il registro e'
+    l'unica cosa che resta."""
+    monkeypatch.setattr(catalog, "_version", lambda mod: "")
+    envs = catalog.environments()
+    assert envs, "il catalogo deve comunque rispondere"
+    for env in envs:
+        assert isinstance(env["version"], str), env
