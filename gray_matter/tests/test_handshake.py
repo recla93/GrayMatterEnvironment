@@ -204,6 +204,39 @@ def test_only_one_hook_speaks_per_session(tmp_path):
     assert m.claim("sess-abc", tmp_path / "non" / "esiste") is True
 
 
+def test_an_updated_hook_speaks_again_in_a_session_already_open(tmp_path, monkeypatch):
+    """Il rovescio del test sopra, e costa piu' caro del doppio handshake.
+
+    Il marker sopravvive alla sessione che lo ha creato, quindi una sessione
+    lunga restava congelata sull'handshake con cui era nata. Osservato
+    2026-09-09: sessione aperta il 4, `active_context` deployato il 7, ripresa
+    il 9 — il marker del 4 era ancora li', l'hook e' uscito muto, e il blocco in
+    contesto non ha mai avuto la riga che nomina il grafo attivo. Che e'
+    esattamente la riga scritta per evitare un salvataggio nel contesto
+    sbagliato, ed e' poi quello che e' successo.
+
+    L'impronta dell'hook entra nel nome del marker: stesso file = un solo
+    parlante (il guard sul duplicato regge), file aggiornato = una voce sola in
+    piu', una volta.
+    """
+    m = _hook()
+    assert m.claim("sess-lunga", tmp_path) is True
+    assert m.claim("sess-lunga", tmp_path) is False, "stesso hook: il duplicato tace"
+
+    monkeypatch.setattr(m, "_fingerprint", lambda: "deadbeef")
+    assert m.claim("sess-lunga", tmp_path) is True, "hook aggiornato: deve riparlare"
+    assert m.claim("sess-lunga", tmp_path) is False, "ma una volta sola"
+
+
+def test_fingerprint_is_stable_and_short():
+    """Se cambiasse a ogni chiamata, ogni avvio sarebbe un hook 'nuovo' e il
+    guard sul doppio handshake non varrebbe piu' niente."""
+    m = _hook()
+    fp = m._fingerprint()
+    assert fp == m._fingerprint(), "deve dipendere dal file, non dal momento"
+    assert len(fp) == 8 and fp.isalnum(), fp
+
+
 def test_hook_imports_no_tool_package():
     """stdlib only: importing neuron/gray_matter here would make a broken venv
     able to slow down or fail every session start."""
