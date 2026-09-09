@@ -11,6 +11,7 @@ and the disk. In the sandbox only static checks and tmp-dir tests are valid
 """
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import shutil
@@ -172,8 +173,21 @@ def check_wiring() -> list[dict]:
         if not dst.exists():
             rec("hook_file", False, f"non deployato: {dst}", "gray-matter repair")
         elif src.exists() and src.read_bytes() != dst.read_bytes():
-            rec("hook_file", False, f"{dst} e' diverso dal sorgente",
-                "gray-matter repair (ri-deploya l'hook)")
+            # "Diverso" non vuol dire STANTIO. Il deployato puo' essere piu'
+            # AVANTI del sorgente: modificato in loco e mai portato nel repo.
+            # Nei due casi il rimedio e' opposto, e mandarli allo stesso
+            # consiglio significa proporre di cancellare l'unica copia di un
+            # lavoro (vedi _hook_drift).
+            added, removed = _hook_drift(src, dst)
+            if added and not removed:
+                rec("hook_file", False,
+                    f"{dst} ha {added} righe che il sorgente non ha: il deploy "
+                    f"e' PIU' AVANTI del repo",
+                    "NON riparare (perderesti quelle righe): portale nel "
+                    "sorgente, poi gray-matter repair")
+            else:
+                rec("hook_file", False, f"{dst} e' diverso dal sorgente",
+                    "gray-matter repair (ri-deploya l'hook)")
         else:
             rec("hook_file", True, str(dst))
     except OSError as exc:
@@ -411,6 +425,28 @@ def _entry_is_dead(cmd: str) -> bool:
     """
     exe = _hook_interpreter(cmd)
     return bool(exe) and os.path.isabs(exe) and not os.path.exists(exe)
+
+
+def _hook_drift(src: Path, dst: Path) -> tuple[int, int]:
+    """(righe aggiunte, righe rimosse) del DEPLOYATO rispetto al sorgente.
+
+    Serve la DIREZIONE della differenza, non il fatto che ci sia: "diverso dal
+    sorgente" manda lo stesso consiglio a due casi opposti, e in uno dei due
+    quel consiglio distrugge lavoro. Osservato 2026-09-09: l'hook deployato
+    aveva 57 righe in piu' del sorgente -- un rimedio scritto in loco e mai
+    portato nel repo -- e il doctor diceva "repair", che le avrebbe cancellate.
+
+    Confronto per RIGHE, non per byte: chi chiama sa gia' che i byte
+    differiscono, e una differenza di soli fine-riga deve risultare 0/0 (va
+    ri-deployata, ma non e' un deploy piu' avanti). splitlines() normalizza
+    CRLF/LF da solo.
+    """
+    a = src.read_text(encoding="utf-8", errors="replace").splitlines()
+    b = dst.read_text(encoding="utf-8", errors="replace").splitlines()
+    diff = list(difflib.unified_diff(a, b, n=0))
+    added = sum(1 for ln in diff if ln.startswith("+") and not ln.startswith("+++"))
+    removed = sum(1 for ln in diff if ln.startswith("-") and not ln.startswith("---"))
+    return added, removed
 
 
 def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:

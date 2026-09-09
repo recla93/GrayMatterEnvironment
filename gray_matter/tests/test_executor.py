@@ -322,3 +322,49 @@ def test_deregister_scrubs_json_client(env):
     data = json.loads(cfgp.read_text(encoding="utf-8"))
     assert set(data["mcpServers"]) == {"other"}
     assert (home / ".cursor" / "mcp.json.bak").exists()
+
+
+def test_wiring_does_not_tell_you_to_delete_a_newer_deployed_hook(env):
+    """Il caso opposto a quello sopra, e il piu' pericoloso dei due.
+
+    Osservato 2026-09-09: l'hook deployato aveva 57 righe che il sorgente non
+    aveva -- un rimedio scritto in loco e mai portato nel repo, vivo solo li'.
+    Il doctor diceva "diverso dal sorgente -> gray-matter repair", cioe'
+    proponeva di sovrascrivere l'unica copia esistente di quel lavoro.
+
+    Il controllo non e' "sono diversi" ma "in che verso": solo aggiunte
+    significa che il DEPLOY e' avanti, e il rimedio e' l'inverso del repair.
+    """
+    home = env / "home"
+    dst = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src = ASSETS / "claude-code-hook" / "neuron_sessionstart_hook.py"
+    dst.write_text(src.read_text(encoding="utf-8") + "\n\ndef nuova_funzione():\n    return 1\n",
+                   encoding="utf-8")
+
+    r = _wiring(env)["hook_file"]
+    assert r["ok"] is False, "una divergenza va comunque segnalata"
+    assert "PIU' AVANTI" in r["detail"], r
+    assert "NON riparare" in r["fix"], r
+    assert "repair (ri-deploya" not in r["fix"], "consiglierebbe di cancellarle"
+
+
+def test_hook_drift_conta_il_verso_non_i_byte(env):
+    """Fine-riga diversi non sono un deploy piu' avanti: 0 aggiunte, 0 rimozioni.
+
+    write_bytes e non write_text: su Windows write_text traduce ogni \\n in
+    \\r\\n, quindi una stringa gia' CRLF finisce sul disco come CRCRLF e il
+    caso in prova non e' piu' quello che si voleva provare.
+    """
+    from gray_matter import executor
+    a, b = env / "a.py", env / "b.py"
+    a.write_bytes(b"uno\ndue\n")
+    b.write_bytes(b"uno\r\ndue\r\n")
+    assert a.read_bytes() != b.read_bytes(), "i byte devono differire davvero"
+    assert executor._hook_drift(a, b) == (0, 0)
+
+    b.write_bytes(b"uno\ndue\ntre\n")
+    assert executor._hook_drift(a, b) == (1, 0)      # solo aggiunte
+
+    b.write_bytes(b"uno\n")
+    assert executor._hook_drift(a, b) == (0, 1)      # solo rimozioni
