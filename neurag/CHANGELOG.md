@@ -1,4 +1,11 @@
-# Changelog — NeuRAG
+﻿# Changelog — NeuRAG
+
+## 1.3.4 (2026-09-10)
+- **Il deployer degli hook spedisce la coppia.** `deploy_hooks.py` e'
+  byte-identico fra i tre tool, ma il promemoria di claude-code viveva nel solo
+  albero di Neuron: la stessa copia del deployer aveva un ramo morto in meta'
+  delle sue case. Ora l'asset viaggia anche qui, la parity lo tiene allineato, e
+  il deployer registra SessionStart, UserPromptSubmit e PreCompact.
 
 ## 1.3.3 (2026-08-05)
 - **L'handshake non e' mai partito sulle installazioni col layout nuovo.** Il

@@ -1,5 +1,44 @@
 ﻿# Changelog — Gray Matter
 
+## 1.4.4 (2026-09-10)
+- **`-Clear` dichiarava fallita una rimozione riuscita.** `Remove-Venv`
+  chiudeva su `Test-Path`, ma una cartella VUOTA sopravvive alla propria
+  cancellazione finche' un processo la tiene come working directory: il
+  controllo restava vero, l'installer stampava "could not fully remove" ed
+  usciva 1 senza reinstallare niente. Da qui il sintomo con cui e' arrivata la
+  segnalazione, "il Clear non fa nulla". Ora si conta il CONTENUTO, e un guscio
+  vuoto agganciato viene detto invece che trattato come errore.
+- **Il kill dei server non reggeva il respawn.** Un client MCP riavvia il suo
+  server stdio entro poche centinaia di ms e quello rigenera daemon e worker:
+  otto processi uccisi, ventisei vivi un minuto dopo. E la finestra vera non e'
+  il kill ma la cancellazione — 280 MB richiedono secondi, e chi rispawna
+  durante ri-blocca file gia' passati: una passata sola ha lasciato 8422
+  elementi dove lo stesso `Remove-Item` a mano, un minuto dopo, puliva tutto
+  con zero errori. Ora kill e remove ciclano, e se i processi continuano a
+  tornare l'installer NOMINA il processo padre invece di dire "chiudi le tue
+  app AI" lasciando indovinare quale.
+- **`-Clear` rimuove i venv delle posizioni precedenti.** Finora li guardava
+  soltanto, per ereditarne uno e non spostare un'installazione esistente, e non
+  li rimuoveva mai: restavano su disco a vita, centinaia di MB ognuno, senza
+  che nessun comando li nominasse. `-Clear` e' il solo momento in cui si
+  converge sulla posizione nuova, quindi e' anche il solo in cui i vecchi vanno
+  buttati — e sotto `-Clear` la posizione vecchia non si eredita piu'.
+- **L'uninstall li offre.** `gm_venv()` ne conosce uno solo, quello del
+  manifest: gli altri non comparivano nel pannello, non venivano chiesti e non
+  venivano rimossi. Ora `paths.legacy_venvs()` li elenca e finiscono nella
+  stessa riga e sotto lo stesso `--venv` del venv condiviso, ma senza peer —
+  "rimuovo il runtime di Neuron" e "butto 283 MB che non servono a niente" non
+  sono la stessa domanda.
+- **Il promemoria esterno non lo deployava nessuno.** Il secondo hook di
+  claude-code era in repo dalla 6.4.4 e nessun deployer lo copiava. Ora GM
+  copia entrambi i file e registra SessionStart, UserPromptSubmit e PreCompact;
+  l'uninstall ripulisce tutti e tre gli eventi, invece di lasciarne due che
+  puntano a un file appena cancellato.
+- **La console del control center non si chiudeva, si svuotava.** Il footer ha
+  un'altezza fissa: il collapse nascondeva il log e lasciava la fascia alta
+  uguale. Una riga di CSS, e tutte le altre regole di collapse smettono di
+  essere decorative.
+
 ## 1.4.3 (2026-09-09)
 - **Il control center mostrava la targa, non il codice.** La sidebar diceva
   neuron v6.4.2 e gray-matter v1.4.1 su una macchina con 6.4.4 e 1.4.2
