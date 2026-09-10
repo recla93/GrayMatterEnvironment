@@ -27,6 +27,11 @@ ASSET_DIRS = {
 }
 SHARED = [
     "claude-code-hook/neuron_sessionstart_hook.py",
+    # The reminder travels with the handshake: it imports the sessionstart
+    # hook, and deploy_hooks.py (shared too) looks for it in this folder. If a
+    # single tree ships it, the same copy of the deployer has a dead branch in
+    # half of its homes.
+    "claude-code-hook/neuron_reminder_hook.py",
     "opencode-plugin/neuron-handshake.mjs",
     "deploy_hooks.py",
     "cowork-plugin/neuron-guard/hooks/hooks.json",
@@ -428,3 +433,95 @@ def test_deploy_never_rewrites_an_unparseable_settings_file(monkeypatch, tmp_pat
     msg = _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
     assert "SKIPPED" in msg
     assert settings.read_text(encoding="utf-8") == original, "clobbered a config it could not parse"
+
+
+# --- the two hooks travel together --------------------------------------------
+
+def _cmds(body: dict, event: str) -> "list[str]":
+    return [h.get("command", "") for e in (body.get("hooks", {}).get(event) or [])
+            for h in (e.get("hooks") or [])]
+
+
+@pytest.mark.parametrize("who", ["gm", "standalone"])
+def test_the_reminder_hook_is_deployed_too(monkeypatch, tmp_path, who):
+    """The external reminder had been in the repo since 6.4.4, with its own
+    test, and NEITHER deployer copied it: shipped and never once on a real
+    machine. The memory loop is self-referential, so UserPromptSubmit is the
+    only trigger outside the cycle — without this hook, skipping one link also
+    skips the reminder for the next one, and the loop never restarts."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+
+    if who == "gm":
+        executor._deploy_claude_code(
+            ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py",
+            dry_run=False)
+    else:
+        _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
+
+    # 1. The file sits NEXT TO the other one: it imports
+    #    neuron_sessionstart_hook, so deploying it elsewhere breaks the import.
+    hooks_dir = home / ".claude" / "hooks"
+    assert (hooks_dir / "neuron_reminder_hook.py").exists(), sorted(p.name for p in hooks_dir.iterdir())
+    assert (hooks_dir / "neuron_sessionstart_hook.py").exists()
+
+    # 2. Registered on BOTH events the hook knows how to handle.
+    body = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8-sig"))
+    for event in ("UserPromptSubmit", "PreCompact"):
+        ours = [c for c in _cmds(body, event) if "neuron_reminder_hook" in c]
+        assert len(ours) == 1, f"{event}: {ours}"
+    assert [c for c in _cmds(body, "SessionStart") if "neuron_sessionstart_hook" in c]
+
+
+@pytest.mark.parametrize("who", ["gm", "standalone"])
+def test_deploying_twice_does_not_duplicate_the_reminder(monkeypatch, tmp_path, who):
+    """Same rule as the handshake: two deployers with different interpreters
+    must not append two entries for the same hook."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    src = ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py"
+    for _ in range(2):
+        if who == "gm":
+            executor._deploy_claude_code(src, dry_run=False)
+        else:
+            _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
+    executor._deploy_claude_code(src, dry_run=False)      # and mixed, too
+
+    body = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8-sig"))
+    for event in ("UserPromptSubmit", "PreCompact"):
+        assert len([c for c in _cmds(body, event) if "neuron_reminder_hook" in c]) == 1
+
+
+def test_uninstall_scrubs_every_event_we_registered(monkeypatch, tmp_path):
+    """Cleaning one event out of three leaves two commands pointing at a file
+    just deleted: an error on every user prompt, forever."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    settings = home / ".claude" / "settings.json"
+    executor._deploy_claude_code(
+        ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py",
+        dry_run=False)
+
+    # A hook of the user's own, which uninstall must not touch.
+    body = json.loads(settings.read_text(encoding="utf-8-sig"))
+    body["hooks"].setdefault("UserPromptSubmit", []).append(
+        {"hooks": [{"type": "command", "command": "echo mio"}]})
+    settings.write_text(json.dumps(body), encoding="utf-8")
+
+    executor._scrub_claude_settings(dry_run=False)
+
+    body = json.loads(settings.read_text(encoding="utf-8-sig"))
+    for event in ("SessionStart", "UserPromptSubmit", "PreCompact"):
+        left = [c for c in _cmds(body, event)
+                if "neuron_sessionstart_hook" in c or "neuron_reminder_hook" in c]
+        assert left == [], f"{event}: {left}"
+    assert "echo mio" in _cmds(body, "UserPromptSubmit"), "deleted a user's own hook"

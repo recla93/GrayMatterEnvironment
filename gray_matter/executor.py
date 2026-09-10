@@ -449,50 +449,97 @@ def _hook_drift(src: Path, dst: Path) -> tuple[int, int]:
     return added, removed
 
 
+# The second hook of the pair: the external reminder. The memory loop is
+# self-referential (pre_turn says "then store_turn", store_turn says "then
+# pre_turn"), so skipping one link also skips the reminder for the next one:
+# UserPromptSubmit is the only trigger OUTSIDE the cycle. Shipped since 6.4.4
+# and deployed by nobody — in the repo, with its own test, and never once on a
+# real machine. It imports neuron_sessionstart_hook, so it belongs in the SAME
+# directory and never travels alone.
+_REMINDER_HOOK = "neuron_reminder_hook.py"
+# UserPromptSubmit takes no matcher in Claude Code; PreCompact does. The hook
+# tells the two apart via `hook_event_name` and behaves differently (with a
+# compact imminent it nudges anyway), so both registrations are needed.
+_REMINDER_EVENTS = (("UserPromptSubmit", None), ("PreCompact", "manual|auto"))
+
+
+def _upsert_hook_group(cfg: dict, event: str, matcher: str | None,
+                       marker: str, command: str) -> bool:
+    """Upsert OUR entry for `event`. True when cfg changed.
+
+    Matching is on the SCRIPT NAME, not on the whole command: GM registers with
+    its own venv interpreter and the standalone deployer with a different one,
+    and comparing whole strings saw those as different and appended a second
+    entry for the same hook — the double handshake, already seen live.
+
+    An entry of ours that CANNOT run (an absolute interpreter that is gone, as
+    after the move to the GME root) gets rewritten, not left alone: it used to
+    stay broken forever, because no reinstall ever updated it.
+    """
+    groups = cfg.setdefault("hooks", {}).setdefault(event, [])
+    if not isinstance(groups, list):
+        return False
+    fresh: dict = {"hooks": [{"type": "command", "command": command}]}
+    if matcher:
+        fresh = {"matcher": matcher, **fresh}
+    ours = [g for g in groups
+            if isinstance(g, dict)
+            and any(marker in (h.get("command") or "")
+                    for h in (g.get("hooks") or []) if isinstance(h, dict))]
+    dead = [g for g in ours
+            if any(_entry_is_dead(h.get("command") or "")
+                   for h in (g.get("hooks") or []) if isinstance(h, dict))]
+    if not dead and ours:
+        return False
+    for g in dead:
+        groups.remove(g)
+    groups.append(fresh)
+    return True
+
+
 def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
-    """Copy the SessionStart hook + register it in ~/.claude/settings.json."""
+    """Copy BOTH claude-code hooks + register them in ~/.claude/settings.json.
+
+    `src` is the SessionStart hook; the reminder sits next to it and travels
+    with it — deploying one without the other leaves the reminder importing a
+    module that is not there.
+    """
     dest = _claude_dir() / "hooks" / src.name
-    if not dry_run:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-        settings = _claude_dir() / "settings.json"
-        try:
-            cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
-        except (json.JSONDecodeError, OSError):
-            return [str(dest)], "settings.json unreadable — register hook manually"
-        groups = cfg.setdefault("hooks", {}).setdefault("SessionStart", [])
-        # "matcher" singolare, come il resto del mondo: hooks.json del plugin, il
-        # deployer standalone, gli hook dell'utente. "matchers" (plurale, lista)
-        # esisteva solo qui.
-        fresh = {"matcher": "startup|resume|clear|compact",
-                 "hooks": [{"type": "command",
-                            "command": f'"{sys.executable}" "{dest}"'}]}
-        ours = [g for g in groups
-                if any("neuron_sessionstart_hook" in (h.get("command") or "")
-                       for h in (g.get("hooks") or []) if isinstance(h, dict))]
-        # Una entry NOSTRA che non puo' girare va RISCRITTA, non lasciata stare.
-        # "gia' presente = non toccare" e' come `claude mcp add` trattava le entry
-        # esistenti: dopo che l'install e' passato alla radice GME, il comando
-        # registrato puntava a un interprete che non esiste piu' e l'handshake
-        # non partiva piu' — per sempre, perche' nessun reinstall lo aggiornava.
-        # Verificato su installazione reale.
-        dead = [g for g in ours
-                if any(_entry_is_dead(h.get("command") or "")
-                       for h in (g.get("hooks") or []) if isinstance(h, dict))]
-        if dead:
-            for g in dead:
-                groups.remove(g)
-            groups.append(fresh)
-            note = "hook copied + stale SessionStart entry rewritten"
-        elif not ours:
-            groups.append(fresh)
-            note = "hook copied + SessionStart registered"
-        else:
-            return [str(dest)], "hook refreshed (SessionStart already registered)"
-        settings.parent.mkdir(parents=True, exist_ok=True)
-        _save_user_json(settings, cfg)
-        return [str(dest)], note
-    return [str(dest)], "hook copied + SessionStart registered"
+    reminder_src = src.parent / _REMINDER_HOOK
+    reminder_dest = dest.parent / _REMINDER_HOOK
+    deployed = [str(dest)] + ([str(reminder_dest)] if reminder_src.exists() else [])
+    if dry_run:
+        return deployed, "hooks copied + SessionStart/UserPromptSubmit registered"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    if reminder_src.exists():
+        shutil.copy2(reminder_src, reminder_dest)
+    settings = _claude_dir() / "settings.json"
+    try:
+        cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return deployed, "settings.json unreadable — register hooks manually"
+    # "matcher", singular, like everyone else: the plugin's hooks.json, the
+    # standalone deployer, the user's own hooks. "matchers" (plural, a list)
+    # existed here and nowhere else.
+    changed = _upsert_hook_group(
+        cfg, "SessionStart", "startup|resume|clear|compact",
+        "neuron_sessionstart_hook", f'"{sys.executable}" "{dest}"')
+    added = []
+    if reminder_src.exists():
+        for event, matcher in _REMINDER_EVENTS:
+            if _upsert_hook_group(cfg, event, matcher, _REMINDER_HOOK[:-3],
+                                  f'"{sys.executable}" "{reminder_dest}"'):
+                changed = True
+                added.append(event)
+    if not changed:
+        return deployed, "hooks refreshed (already registered)"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    _save_user_json(settings, cfg)
+    note = "hooks copied + SessionStart registered"
+    if added:
+        note += " + " + "/".join(added)
+    return deployed, note
 
 
 def _deploy_cowork(src: Path, dry_run: bool) -> tuple[list[str], str]:
@@ -752,7 +799,13 @@ def execute_install(state: dict | None = None, *, assets_root=None,
 # --------------------------------------------------------------------------
 
 def _scrub_claude_settings(dry_run: bool) -> None:
-    """Drop our SessionStart entry from ~/.claude/settings.json (only ours)."""
+    """Drop OUR hook entries from ~/.claude/settings.json (only ours).
+
+    All three events we register, not just SessionStart: the reminder lives
+    under UserPromptSubmit and PreCompact, and an uninstall that cleans one
+    event out of three leaves two commands pointing at a file it just deleted —
+    an error on every single user prompt, forever.
+    """
     settings = _claude_dir() / "settings.json"
     try:
         # utf-8-sig: a BOM'd settings.json (common on Windows editors) failed
@@ -760,18 +813,23 @@ def _scrub_claude_settings(dry_run: bool) -> None:
         cfg = json.loads(settings.read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001
         return
-    groups = (cfg.get("hooks") or {}).get("SessionStart")
-    if not groups:
-        return
-    new_groups = []
-    for g in groups:
-        kept = [h for h in g.get("hooks", [])
-                if "neuron_sessionstart_hook" not in h.get("command", "")]
-        if kept:
-            g["hooks"] = kept
-            new_groups.append(g)
-    if new_groups != groups and not dry_run:
-        cfg["hooks"]["SessionStart"] = new_groups
+    markers = ("neuron_sessionstart_hook", _REMINDER_HOOK[:-3])
+    dirty = False
+    for event in ("SessionStart", *(e for e, _ in _REMINDER_EVENTS)):
+        groups = (cfg.get("hooks") or {}).get(event)
+        if not groups:
+            continue
+        new_groups = []
+        for g in groups:
+            kept = [h for h in g.get("hooks", [])
+                    if not any(m in h.get("command", "") for m in markers)]
+            if kept:
+                g["hooks"] = kept
+                new_groups.append(g)
+        if new_groups != groups:
+            cfg["hooks"][event] = new_groups
+            dirty = True
+    if dirty and not dry_run:
         # atomic: a crash mid-write left Claude Desktop with no settings at all
         tmp = settings.with_name(f".{settings.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
