@@ -42,3 +42,53 @@ def test_no_orphans_no_reap():
 def test_legacy_scan_covers_old_name_and_slug():
     kinds = {t["kind"] for t in U.legacy_scan_plan()}
     assert {"old_slug", "old_name", "path_scripts", "stale_client", "orphan_procs"} <= kinds
+
+
+# --- venvs from previous installs -----------------------------------
+
+def test_leftover_venvs_are_offered_too():
+    """The manifest knows ONE venv, so uninstall never named the others and
+    never removed them: they sat on disk forever, hundreds of MB no command ever
+    touched. They now get the same treatment — we ASK, never assume — but with
+    no peers, because nothing runs from them any more: that is exactly what
+    makes them leftovers."""
+    plan = U.plan(_MANIFEST, data_paths=_DATA, venv="/x/graymatter/.venv",
+                  venv_peers=["neuron"],
+                  legacy_venvs=["/old/graymatter/.venv", "/old/gray-matter/.venv"])
+    venvs = [a for a in plan if a["action"] == "ask_venv"]
+    assert [a["path"] for a in venvs] == [
+        "/x/graymatter/.venv", "/old/graymatter/.venv", "/old/gray-matter/.venv"]
+    assert venvs[0]["peers"] == ["neuron"] and not venvs[0].get("legacy")
+    assert all(a["legacy"] and a["peers"] == [] for a in venvs[1:])
+
+
+def test_the_active_venv_is_never_offered_twice():
+    """If a "legacy" location is the one in use, asking twice means answering
+    twice for the same folder."""
+    plan = U.plan(_MANIFEST, data_paths=_DATA, venv="/x/.venv",
+                  legacy_venvs=["/x/.venv"])
+    assert len([a for a in plan if a["action"] == "ask_venv"]) == 1
+
+
+def test_leftovers_alone_still_get_asked():
+    """A half-uninstalled GM (a manifest with no venv) left the leftovers
+    invisible: no row, no question, nothing."""
+    plan = U.plan(_MANIFEST, data_paths=_DATA, venv=None,
+                  legacy_venvs=["/old/gray-matter/.venv"])
+    assert [a["path"] for a in plan if a["action"] == "ask_venv"] == ["/old/gray-matter/.venv"]
+
+
+def test_paths_finds_the_previous_locations_and_skips_the_active_one(tmp_path, monkeypatch):
+    from gray_matter import paths as P
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    active = tmp_path / "GrayMatterEnvironment" / "graymatter" / ".venv"
+    for p in (active, tmp_path / "graymatter" / ".venv", tmp_path / "gray-matter" / ".venv"):
+        p.mkdir(parents=True)
+    monkeypatch.setattr(P, "gm_venv", lambda: active)
+
+    found = [str(p) for p in P.legacy_venvs()]
+    assert found == [str(tmp_path / "graymatter" / ".venv"),
+                     str(tmp_path / "gray-matter" / ".venv")]
+    assert str(active) not in found, "it would offer to delete the venv in use twice"

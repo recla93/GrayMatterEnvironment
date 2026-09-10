@@ -12,7 +12,8 @@ from __future__ import annotations
 
 
 def plan(manifest: dict, *, purge_data: bool = False,
-         orphan_pids=None, data_paths=None, venv=None, venv_peers=None) -> list[dict]:
+         orphan_pids=None, data_paths=None, venv=None, venv_peers=None,
+         legacy_venvs=None) -> list[dict]:
     """Ordered, precise removal plan from an install manifest.
 
     Order: reap live processes → deregister from clients → remove per-client hooks
@@ -23,7 +24,15 @@ def plan(manifest: dict, *, purge_data: bool = False,
     Neuron's and NeuRAG's runtime with it (`venv_peers` names who else is in
     there). `purge_data` does NOT imply it — that flag is about the user's
     memory, and someone wiping their graphs is not thereby asking to uninstall
-    two other tools."""
+    two other tools.
+
+    `legacy_venvs` are the venvs left in the install locations we used BEFORE
+    this one. The manifest knows a single venv, so uninstall never mentioned
+    those and never removed them: they sat on disk for good, hundreds of MB each,
+    named by no command at all. They get the same `ask_venv` treatment (same
+    policy, and one `--venv` / one checkbox answers for all of them) but with no
+    peers: nothing points at them any more, which is exactly why they are
+    leftovers."""
     actions: list[dict] = []
     orphans = orphan_pids or []
     if orphans:
@@ -47,6 +56,11 @@ def plan(manifest: dict, *, purge_data: bool = False,
     if venv:
         actions.append({"action": "ask_venv", "path": str(venv),
                         "peers": sorted(venv_peers or [])})
+    for old in (legacy_venvs or []):
+        if venv and str(old) == str(venv):
+            continue   # asking twice about one folder gets two answers for it
+        actions.append({"action": "ask_venv", "path": str(old),
+                        "peers": [], "legacy": True})
     return actions
 
 

@@ -248,6 +248,31 @@ def gm_venv() -> "Path | None":
     return None
 
 
+def legacy_venvs() -> list:
+    """Venvs from PREVIOUS locations still on disk, excluding the active one.
+
+    `gm_venv()` knows exactly one — the manifest's — so a machine that went
+    through an older location kept the other one forever: hundreds of MB no
+    command ever named, because the installer only LOOKED at them (to inherit
+    one) and never removed any. `-Clear` now throws them away; uninstall must at
+    least OFFER them, or uninstalling does not uninstall.
+
+    The two locations are the installer's own, in the order they existed:
+    whoever adds a third adds it here and in install.ps1/.sh.
+    """
+    current = gm_venv()
+    out: list = []
+    for cand in (_os_base() / "graymatter" / ".venv",
+                 _os_base() / "gray-matter" / ".venv"):
+        if not cand.is_dir():
+            continue
+        if current is not None and cand.resolve() == Path(current).resolve():
+            continue
+        if cand not in out:
+            out.append(cand)
+    return out
+
+
 def venv_peers() -> list:
     """Trio tools other than GM sharing gm_venv(), per the manifest.
 

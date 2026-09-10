@@ -652,13 +652,25 @@ def _uninstall_targets() -> dict:
          "path": str(paths.gm_home()), "exists": paths.gm_home().exists()},
     ]
     venv = paths.gm_venv()
-    if venv:
-        peers = paths.venv_peers()
+    # Venvs from PREVIOUS locations share the SAME row: `--venv` and this
+    # checkbox cover all of them, because the executor already applies one
+    # answer to every ask_venv. Two boxes for a single answer would be a lie
+    # about the control the user actually has. Before this they appeared
+    # nowhere: the panel listed one venv and the others stayed on disk forever.
+    legacy = paths.legacy_venvs()
+    if venv or legacy:
+        peers = paths.venv_peers() if venv else []
+        allv = ([venv] if venv else []) + legacy
+        label = "Venv condiviso" if venv else "Venv residuo"
+        if peers:
+            label += " — esegue anche " + ", ".join(peers)
+        if legacy:
+            label += f" (+{len(legacy)} da installazioni precedenti)"
         targets.append({
-            "key": "venv", "default": False,
-            "label": "Venv condiviso" + (" — esegue anche " + ", ".join(peers) if peers else ""),
-            "size": paths.human_size(paths.dir_size(venv)),
-            "peers": peers, "path": str(venv), "exists": True})
+            "key": "venv", "default": False, "label": label,
+            "size": paths.human_size(sum(paths.dir_size(p) for p in allv)),
+            "peers": peers, "legacy": [str(p) for p in legacy],
+            "path": "  •  ".join(str(p) for p in allv), "exists": True})
     # Same dict the removal plan gets, so the panel cannot offer a surface no
     # action handles (it used to list neurag_config, which plan() never saw).
     data = [{"key": n, "name": n.replace("_", " "), "path": str(p), "exists": p.exists()}
@@ -690,7 +702,8 @@ def cmd_uninstall(purge_data: bool = False, yes: bool = False,
     """Uninstall: reap, deregister, remove hooks/code; memory is INTERACTIVE
     (asks per data path) unless --purge-data (INSTALLER-UX §6). `--list` elenca le
     superfici; `--json` emette JSON (usato dal control center: esito + verifica).
-    `--venv` rimuove anche il venv condiviso (default: NO — ci girano i peer)."""
+    `--venv` removes the shared venv AND any venv left in a previous install
+    location (default: NO — the peers run from the shared one)."""
     from gray_matter import executor
     if list_only:
         if as_json:
@@ -1012,9 +1025,10 @@ def build_parser() -> argparse.ArgumentParser:
     # Not covered by --yes on purpose: the venv also runs Neuron and NeuRAG, so
     # removing it needs its own yes rather than riding along on a batch flag.
     uni_p.add_argument("--venv", dest="venv", action="store_true", default=None,
-                       help="Also remove the shared venv (default: keep it — the peers run from it)")
+                       help="Also remove the shared venv AND any venv left in a previous "
+                            "install location (default: keep them — the peers run from the shared one)")
     uni_p.add_argument("--keep-venv", dest="venv", action="store_false",
-                       help="Never ask about the venv, keep it")
+                       help="Never ask about the venvs, keep them")
     renv = sub.add_parser("record-env",
                           help="Record the source folders of all three tools (used by the installer)")
     renv.add_argument("--root", default="", help="Workspace to scan for the components")

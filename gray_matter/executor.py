@@ -1162,7 +1162,8 @@ def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
     venv = paths.gm_venv()
     for act in uninstaller.plan(manifest, purge_data=purge_data,
                                 orphan_pids=[], data_paths=paths.data_paths(),
-                                venv=venv, venv_peers=paths.venv_peers()):
+                                venv=venv, venv_peers=paths.venv_peers(),
+                                legacy_venvs=paths.legacy_venvs()):
         a = act["action"]
         if a == "reap":
             results.append(_reap(act["pids"], dry_run))
@@ -1192,7 +1193,13 @@ def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
             results.append(_remove_data(act["name"], act["path"], dry_run))
         elif a == "ask_venv":
             size = paths.human_size(paths.dir_size(act["path"]))
-            who = (" (also runs " + ", ".join(act["peers"]) + ")") if act["peers"] else ""
+            # A legacy venv has no peers by definition: nothing runs from it any
+            # more, which is exactly what makes it a leftover. Saying so changes
+            # the answer — "remove Neuron's runtime" and "throw away 283 MB that
+            # serve no purpose" are not the same question.
+            who = (" — leftover from a previous install location" if act.get("legacy")
+                   else (" (also runs " + ", ".join(act["peers"]) + ")") if act["peers"]
+                   else "")
             # Unticked by default, deliberately: `assume_yes` is a batch flag for
             # "don't block on prompts", and letting it tear down a shared venv
             # would uninstall Neuron and NeuRAG as a side effect of `gray-matter
