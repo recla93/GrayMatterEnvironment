@@ -218,3 +218,15 @@ class TestRichiestaEndpoint:
         colpevoli = [r.strip() for r in html.splitlines()
                      if re.search(PAYLOAD_SERIALIZZATO, r)]
         assert not colpevoli, "payload serializzato due volte: " + "; ".join(colpevoli)
+
+
+def test_collapsing_the_console_actually_collapses_it():
+    """The footer height is FIXED (238px): hiding #log left an empty band of
+    the same height, so "collapse the console" collapsed nothing — the section
+    stayed open, just without text in it. The real collapse is the height;
+    without that rule the rest is decoration."""
+    from gray_matter.webgui import _HTML
+    css = _HTML.read_text(encoding="utf-8")
+    assert "footer{height:" in css, "the footer no longer has a fixed height: revisit this test"
+    assert re.search(r"footer\.collapsed\{[^}]*height:\s*auto", css), (
+        "collapse without height:auto = an empty band, the console stays open")

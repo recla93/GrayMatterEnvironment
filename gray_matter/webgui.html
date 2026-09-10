@@ -187,6 +187,11 @@
   .infra-card.collapsed > *:not(h4){display:none}
   /* Console collassabile: si nasconde il log, la barra dei comandi resta —
      serve poter fermare/avviare anche con la console chiusa. */
+  /* The footer height is FIXED (238px): hiding #log left a band of the same
+     height behind, so "collapse the console" collapsed nothing — the section
+     stayed open, just without text in it. The line below is what actually
+     collapses it: without it, everything else here is decoration. */
+  footer.collapsed{height:auto}
   footer.collapsed #log{display:none}
   footer.collapsed #stdin-bar{display:none}
   #btn-console-toggle{min-width:26px}
