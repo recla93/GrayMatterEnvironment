@@ -6,6 +6,8 @@
 #   ./install.command --force    repair: reinstall the code at the same version
 #   ./install.command --clear    last resort: wipe the venv and rebuild (implies --force)
 #                                CODE only — graphs, knowledge.db and bridges are kept
+#                                also DELETES the venvs left in the two previous
+#                                install locations — the only command that does
 #
 # "$@" forwarded so the flags work from a terminal; a double-click passes none.
 cd "$(dirname "$0")" || exit 1

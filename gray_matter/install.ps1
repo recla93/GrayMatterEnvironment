@@ -20,6 +20,11 @@
 # install as usual (implies -Force). For the states no reinstall can repair: a
 # half-written venv, a broken interpreter, a dependency pinned wrong. Removes
 # CODE only — graphs, knowledge.db, bridges and the GME registry are untouched.
+# It also DELETES the venvs left in the two previous install locations
+# (<base>\graymatter\.venv and <base>\gray-matter\.venv): outside -Clear those
+# are inherited so an existing install keeps working, and -Clear is the one
+# command that converges on the current location — so it is also the one that
+# clears the old ones out instead of leaving them on disk forever.
 #   -EmbedModel <name>  -> embedding model for Neuron (skips the prompt)
 #   -Client <sel>       -> where to register: all|detected|ask|a,b,c
 param([switch]$Force, [switch]$Clear, [string]$EmbedModel = "",
@@ -230,11 +235,30 @@ function Stop-VenvProcesses([string]$VenvPath) {
     $pids = Get-VenvPids $VenvPath
     if ($pids.Count -eq 0) { return }
     Write-Host "Stopping $($pids.Count) running process(es) from this venv (they hold the files pip must replace)..."
-    foreach ($p in $pids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Milliseconds 800        # let Windows release the file handles
-    $left = Get-VenvPids $VenvPath
-    if ($left.Count -gt 0) {
-        Write-Host "  WARNING: $($left.Count) still alive (PID $($left -join ', ')) — close your AI apps and re-run if pip reports 'Accesso negato'."
+    # One pass is not enough. The MCP client RESTARTS its stdio server within a
+    # few hundred ms, and that server respawns the daemon and the workers: the
+    # children take the .pyd files back exactly while pip is writing, which is
+    # the window where an upgrade half-fails (new metadata, old code, duplicate
+    # dist-info). Seen on a real machine: 8 processes killed, 26 alive a minute
+    # later. So keep at it until none is left.
+    for ($i = 0; $i -lt 5; $i++) {
+        foreach ($p in $pids) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Milliseconds 800    # let Windows release the file handles
+        $pids = Get-VenvPids $VenvPath
+        if ($pids.Count -eq 0) { return }
+    }
+    # If they still come back, the problem is not the process but WHO respawns
+    # it: name the parent, so the user knows which app to close instead of
+    # reading "close your AI apps" and guessing.
+    $parents = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                 Where-Object { $pids -contains $_.ProcessId } |
+                 ForEach-Object { (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue).ProcessName } |
+                 Where-Object { $_ } | Sort-Object -Unique)
+    Write-Host "  WARNING: $($pids.Count) process(es) keep respawning (PID $($pids -join ', '))."
+    if ($parents) {
+        Write-Host "  Respawned by: $($parents -join ', ') — close it and re-run."
+    } else {
+        Write-Host "  Close your AI apps (they respawn the servers) and re-run."
     }
 }
 
@@ -272,8 +296,14 @@ function Test-VenvUsable([string]$p) {
     if (-not (Test-Path (Join-Path $p "pyvenv.cfg"))) { return $false }
     return (Test-Path (Join-Path $p "Scripts\python.exe"))
 }
-foreach ($old in @((Join-Path $OsBase "graymatter\.venv"), (Join-Path $OsBase "gray-matter\.venv"))) {
-    if ((Test-VenvUsable $old) -and -not (Test-VenvUsable $Venv)) { $Venv = $old; break }
+$LegacyVenvs = @((Join-Path $OsBase "graymatter\.venv"), (Join-Path $OsBase "gray-matter\.venv"))
+# Outside -Clear one of them is INHERITED (a venv is not movable). Under -Clear
+# it is not: adopting the old location in the very command meant to start clean
+# is how an install never converges on the GME root.
+if (-not $Clear) {
+    foreach ($old in $LegacyVenvs) {
+        if ((Test-VenvUsable $old) -and -not (Test-VenvUsable $Venv)) { $Venv = $old; break }
+    }
 }
 Stop-VenvProcesses $Venv
 # -Clear: throw the venv away and rebuild. A "clean" option existed before, but
@@ -299,17 +329,53 @@ function Test-VenvHealthy([string]$VenvPath) {
 function Remove-Venv([string]$VenvPath, [string]$why) {
     Write-Host "$why ($VenvPath)"
     Write-Host "  (user memory is NOT touched — graphs, knowledge.db and bridges live elsewhere)"
-    Stop-VenvProcesses $VenvPath          # a live process is what makes a wipe partial
-    Remove-Item -Recurse -Force $VenvPath -ErrorAction SilentlyContinue
-    if (Test-Path $VenvPath) {
-        Write-Host "ERROR: could not fully remove $VenvPath."
+    # Killing harder is not the answer: deleting 280 MB takes seconds, and an
+    # MCP client respawning DURING the delete re-locks files the sweep already
+    # passed. One kill+remove pass left 8422 items behind (seen live) while the
+    # very same Remove-Item, run by hand a minute later, cleaned everything with
+    # no error at all. So loop: each pass takes more away, and after the first
+    # one the venv is broken enough that respawned servers die immediately.
+    $left = 0
+    for ($i = 0; $i -lt 3; $i++) {
+        Stop-VenvProcesses $VenvPath      # a live process is what makes a wipe partial
+        Remove-Item -Recurse -Force $VenvPath -ErrorAction SilentlyContinue
+        # The test is NOT "does the folder still exist". An EMPTY folder survives
+        # its own deletion for as long as a process holds it as its working
+        # directory, and Test-Path stays $true: -Clear called a perfectly
+        # successful removal a failure, exited 1, and reinstalled nothing — hence
+        # "-Clear does nothing". Seen on a real machine: 283 MB gone, empty
+        # folder pinned, exit 1. Count the CONTENT, not the shell.
+        $left = @(Get-ChildItem -LiteralPath $VenvPath -Recurse -Force -ErrorAction SilentlyContinue).Count
+        if ($left -eq 0) { break }
+        Write-Host "  ($left item(s) still there — something respawned mid-wipe, retrying)"
+    }
+    if ($left -gt 0) {
+        Write-Host "ERROR: could not fully remove $VenvPath ($left item(s) left)."
         Write-Host "  Close your AI apps (they respawn the servers) and re-run with -Clear."
         exit 1
     }
+    if (Test-Path $VenvPath) {
+        # `python -m venv` writes into an existing empty folder without
+        # complaining: a pinned shell is not a problem, and saying so keeps it
+        # from reading like a silent failure.
+        Write-Host "  (empty folder still pinned by a process — harmless, the rebuild writes into it)"
+    }
 }
 
-if ($Clear -and (Test-Path $Venv)) {
-    Remove-Venv $Venv "Clear: removing the venv and rebuilding from scratch"
+if ($Clear) {
+    if (Test-Path $Venv) {
+        Remove-Venv $Venv "Clear: removing the venv and rebuilding from scratch"
+    }
+    # The venvs of PREVIOUS locations. Until now the installer only looked at
+    # them — the loop above adopted one — and never removed any: they sat on
+    # disk forever, hundreds of MB each, named by no command at all. -Clear is
+    # the one moment an install really converges on the new location, so it is
+    # also the one moment the old ones should go.
+    foreach ($old in $LegacyVenvs) {
+        if ((Test-Path $old) -and ($old -ne $Venv)) {
+            Remove-Venv $old "Clear: removing a leftover venv from a previous install location"
+        }
+    }
 }
 # A leftover half-venv is repaired, not inherited: that is the whole point.
 if ((Test-Path $Venv) -and -not (Test-VenvHealthy $Venv)) {

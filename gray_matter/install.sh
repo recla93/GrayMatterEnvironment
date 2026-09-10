@@ -24,6 +24,11 @@ CLEAR=0
 # For the states no reinstall repairs: a half-written venv, a broken interpreter,
 # a dependency pinned wrong. CODE only: graphs, knowledge.db, bridges and the GME
 # registry are user data and live outside the venv (those are `repair`/`uninstall`).
+# It also DELETES the venvs left in the two previous install locations
+# ($OS_BASE/graymatter/.venv and $OS_BASE/gray-matter/.venv): outside --clear
+# those are inherited so an existing install keeps working, and --clear is the
+# one command that converges on the current location — so it is also the one
+# that clears the old ones out instead of leaving them on disk forever.
 for a in "$@"; do case "$a" in
     -y|--yes) ASSUME_YES=1 ;;
     -f|--force) FORCE=1 ;;
@@ -127,10 +132,14 @@ OS_BASE="${XDG_DATA_HOME:-$HOME/.local/share}"
 GM_BASE="${GM_HOME:-$OS_BASE/GrayMatterEnvironment}"
 VENV="$GM_BASE/graymatter/.venv"
 # Le due posizioni precedenti: un venv non e' spostabile, se ce n'e' gia' uno lo
-# si usa e converge alla nuova al primo --clear.
-for _old in "$OS_BASE/graymatter/.venv" "$OS_BASE/gray-matter/.venv"; do
-    if [ -d "$_old" ] && [ ! -d "$VENV" ]; then VENV="$_old"; break; fi
-done
+# si usa e converge alla nuova al primo --clear. Under --clear nothing is
+# inherited: adopting the old location in the very command meant to start clean
+# is how an install never converges.
+if [ "$CLEAR" != "1" ]; then
+    for _old in "$OS_BASE/graymatter/.venv" "$OS_BASE/gray-matter/.venv"; do
+        if [ -d "$_old" ] && [ ! -d "$VENV" ]; then VENV="$_old"; break; fi
+    done
+fi
 # INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
 # POSIX unlinks mapped files happily, so this is not the Windows lock that makes
 # pip fail there; the hazard here is a stale server writing to the same store
@@ -138,17 +147,59 @@ done
 # Stop-VenvProcesses in install.ps1: an MCP client respawns its stdio server
 # while the user reads an interactive prompt, so one call at the top is not
 # enough — and the two GM installers must stay readable as the same script.
+# $1 optional: the venv to clean up (defaults to $VENV), because --clear removes
+# more than one and killing the processes of the wrong venv helps nobody.
 stop_venv_procs() {
+    _v="${1:-$VENV}"
     command -v pkill >/dev/null 2>&1 || return 0
-    pkill -f "$VENV" 2>/dev/null && sleep 1
+    # One pass is not enough: the MCP client RESTARTS its stdio server within a
+    # few hundred ms and the children come straight back. pkill returns 1 once
+    # nothing matches any more, and that is the right way out of the loop.
+    # Parity with Stop-VenvProcesses in install.ps1.
+    _n=0
+    while [ "$_n" -lt 5 ]; do
+        pkill -f "$_v" 2>/dev/null || return 0
+        sleep 1
+        _n=$((_n + 1))
+    done
+    echo "  WARNING: processes from $_v keep respawning — close your AI apps and re-run."
     return 0
 }
-stop_venv_procs
-if [ "$CLEAR" = "1" ] && [ -d "$VENV" ]; then
-    echo "Clear: removing the venv and rebuilding from scratch ($VENV)"
+
+# $1 = venv to remove, $2 = the explanation line. Parity with Remove-Venv.
+remove_venv() {
+    [ -d "$1" ] || return 0
+    echo "$2 ($1)"
     echo "  (user memory is NOT touched — graphs, knowledge.db and bridges live elsewhere)"
-    rm -rf "$VENV"
-    [ -d "$VENV" ] && { echo "ERROR: could not remove $VENV — stop any running Gray Matter/Neuron process and re-run."; exit 1; }
+    # Killing harder is not the answer: deleting hundreds of MB takes seconds
+    # and an MCP client respawning DURING the delete re-locks files the sweep
+    # already passed (8422 items left by a single pass on Windows). So loop:
+    # each pass takes more away. Parity with Remove-Venv in install.ps1.
+    _i=0
+    while [ "$_i" -lt 3 ]; do
+        stop_venv_procs "$1"
+        rm -rf "$1"
+        # The test is NOT "does the folder still exist": an EMPTY folder can
+        # survive its own deletion while a process holds it as its working
+        # directory, and then --clear called a successful removal a failure and
+        # exited 1 without reinstalling anything.
+        [ -d "$1" ] && [ -n "$(ls -A "$1" 2>/dev/null)" ] || return 0
+        _i=$((_i + 1))
+    done
+    echo "ERROR: could not fully remove $1 — stop any running Gray Matter/Neuron process and re-run."
+    exit 1
+}
+stop_venv_procs
+if [ "$CLEAR" = "1" ]; then
+    remove_venv "$VENV" "Clear: removing the venv and rebuilding from scratch"
+    # The venvs of PREVIOUS locations. Until now the installer only looked at
+    # them — the loop above adopted one — and never removed any: they sat on
+    # disk forever, named by no command at all. --clear is the one moment an
+    # install converges on the new location, so it is also the one moment the
+    # old ones should go.
+    for _old in "$OS_BASE/graymatter/.venv" "$OS_BASE/gray-matter/.venv"; do
+        [ "$_old" = "$VENV" ] || remove_venv "$_old" "Clear: removing a leftover venv from a previous install location"
+    done
 fi
 # Un venv "c'e'" solo se il suo interprete PARTE. `[ -d ]` sulla cartella non e'
 # quel test: una rimozione interrotta lascia lib/ e bin/ senza pyvenv.cfg, la

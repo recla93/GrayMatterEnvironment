@@ -6,6 +6,8 @@ rem   install.cmd            normal install
 rem   install.cmd -Force     repair: reinstall the code at the same version
 rem   install.cmd -Clear     last resort: wipe the venv and rebuild (implies -Force)
 rem                          CODE only - graphs, knowledge.db and bridges are kept
+rem                          also DELETES the venvs left in the two previous
+rem                          install locations - it is the only command that does
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" %*
 set RC=%ERRORLEVEL%
 echo.

@@ -99,3 +99,102 @@ def test_record_install_writes_manifest(tmp_path):
     assert m.components()["gray_matter"]["registered"] is True
     assert m.components()["neuron"]["registered"] is False
     assert m.data["clients"] == ["cursor"]
+
+
+# --- -Clear: the part that did nothing -----------------------------------
+
+import re                                          # noqa: E402
+import shutil                                      # noqa: E402
+import subprocess                                  # noqa: E402
+from pathlib import Path                           # noqa: E402
+
+_HERE = Path(__file__).resolve().parents[1]
+_PS1 = (_HERE / "install.ps1").read_text(encoding="utf-8")
+_SH = (_HERE / "install.sh").read_text(encoding="utf-8")
+
+
+def test_removing_a_venv_counts_content_not_the_folder():
+    """An EMPTY folder survives its own deletion for as long as a process
+    holds it as its working directory: `Test-Path` stays $true, and -Clear
+    called a perfectly successful removal a failure, exited 1, and reinstalled
+    nothing — hence "-Clear does nothing". Seen live: 283 MB gone, empty folder
+    pinned, exit 1.
+
+    The guard must count the CONTENT before declaring failure."""
+    ps_fail = _PS1[_PS1.index("function Remove-Venv"):]
+    ps_fail = ps_fail[:ps_fail.index("could not fully remove")]
+    assert "Get-ChildItem" in ps_fail, "install.ps1 is trusting Test-Path again"
+
+    sh_fail = _SH[_SH.index("remove_venv() {"):]
+    sh_fail = sh_fail[:sh_fail.index("could not fully remove")]
+    assert "ls -A" in sh_fail, "install.sh is trusting [ -d ] again"
+
+
+def test_the_wipe_retries_when_something_respawns_into_it():
+    """Killing harder is not the answer: deleting 280 MB takes seconds, and a
+    client respawning DURING the delete re-locks files the sweep already passed.
+    Seen live: one pass left 8422 items behind, while the very same Remove-Item
+    run by hand a minute later cleaned everything with no error. So kill+remove
+    must LOOP, not fire once."""
+    ps = _PS1[_PS1.index("function Remove-Venv"):]
+    ps = ps[:ps.index("could not fully remove")]
+    assert ps.count("Stop-VenvProcesses") >= 1 and "for (" in ps, (
+        "install.ps1: kill+remove do not loop")
+    sh = _SH[_SH.index("remove_venv() {"):]
+    sh = sh[:sh.index("could not fully remove")]
+    assert "while [" in sh and "stop_venv_procs" in sh, "install.sh: kill+remove do not loop"
+
+
+def test_clear_deletes_the_venvs_of_the_previous_install_locations():
+    """The two historical paths were only LOOKED AT (to inherit one) and never
+    removed: they sat on disk forever, named by no command at all. -Clear is the
+    one moment an install converges on the new location."""
+    for name, text, legacy in (("install.ps1", _PS1, "$LegacyVenvs"),
+                               ("install.sh", _SH, "gray-matter/.venv")):
+        clear = text[text.index("Clear: removing the venv"):]
+        clear = clear[:clear.index("Damaged venv detected")]
+        assert "previous install location" in clear, f"{name}: -Clear does not remove the old venvs"
+        assert legacy in clear, f"{name}: the removal does not run over the legacy paths"
+    # And the two historical paths must stay NAMED somewhere, or the loop
+    # above spins over nothing.
+    assert r"graymatter\.venv" in _PS1 and r"gray-matter\.venv" in _PS1
+    assert "graymatter/.venv" in _SH and "gray-matter/.venv" in _SH
+
+
+def test_clear_does_not_inherit_the_location_it_is_meant_to_leave():
+    """Adopting the old venv in the very command meant to start clean is how an
+    install never converges on the GME root."""
+    assert re.search(r"if \(-not \$Clear\) \{\s*\n\s*foreach \(\$old in \$LegacyVenvs\)", _PS1)
+    assert re.search(r'if \[ "\$CLEAR" != "1" \]; then\s*\n\s*for _old in', _SH)
+
+
+def test_stopping_the_servers_survives_a_client_respawning_them():
+    """The MCP client restarts its stdio server within a few hundred ms: a
+    single kill leaves the children holding files exactly while pip writes, and
+    that is the window where an upgrade half-fails. Seen live: 8 processes
+    killed, 26 alive a minute later."""
+    ps = _PS1[_PS1.index("function Stop-VenvProcesses"):]
+    ps = ps[:ps.index("\n}\n")]
+    assert "for (" in ps, "install.ps1: a single kill pass"
+    sh = _SH[_SH.index("stop_venv_procs() {"):]
+    sh = sh[:sh.index("\n}\n")]
+    assert "while [" in sh, "install.sh: a single kill pass"
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="PowerShell not available")
+def test_the_windows_installer_still_parses():
+    """1100 lines of PowerShell: nobody sees a syntax error until a user
+    double-clicks."""
+    ps = ("$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("
+          f"'{_HERE / 'install.ps1'}', [ref]$null, [ref]$e); "
+          "if ($e) { $e | ForEach-Object { $_.Message }; exit 1 }")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="sh not available")
+def test_the_posix_installer_still_parses():
+    r = subprocess.run(["sh", "-n", str(_HERE / "install.sh")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
