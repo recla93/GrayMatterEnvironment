@@ -28,6 +28,15 @@
 7. **Lingue**: inglese primario, italiano come `*.it.md` affiancato (pattern
    INSTALL-AI già in uso). Stile: diretto, niente marketing nel reference;
    il tono "wow" vive solo nei README.
+8. **Nel codice si scrive in inglese.** Commenti, docstring e messaggi di
+   errore: inglese, sempre. La regola 7 copriva solo i `.md` e non essendo
+   scritta da nessuna parte il codice è andato a memoria — oggi ~530 righe di
+   commento sono in italiano su ~2900 (12–28% a seconda del progetto), e a
+   toccare un file si finisce per imitare la sacca locale invece della norma.
+   Le sacche esistenti si convertono quando si passa di lì, mai in un commit
+   di solo stile mescolato a una fix. I **messaggi di commit** restano in
+   italiano: è la lingua di tutta la storia del repo, e cambiarla a metà
+   rende la storia meno leggibile, non più.
 
 ## Struttura target (per ogni repo, in `docs/`)
 
