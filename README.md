@@ -1,4 +1,4 @@
-# Gray Matter Environment
+﻿# Gray Matter Environment
 
 <div align="center">
 <img src="gray_matter/assets/gray-matter-logo.png" alt="Gray Matter logo" width="420">
@@ -24,9 +24,9 @@ Gray Matter is a **Model Context Protocol (MCP)** ecosystem that gives AI agents
 
 | Component | Version | Role | Learns? |
 |---|---|---|---|
-| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.4.2-7c8cff?style=flat-square)](neuron/) | Episodic/conceptual semantic memory — graph, salience, trust, decay | Yes |
-| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.3.3-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base — nodes, chunks, triggers, auto-ingest | No — permanent vault |
-| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.4.1-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, GUI | Bridges only |
+| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.4.6-7c8cff?style=flat-square)](neuron/) | Episodic/conceptual semantic memory — graph, salience, trust, decay | Yes |
+| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.3.4-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base — nodes, chunks, triggers, auto-ingest | No — permanent vault |
+| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.4.4-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, GUI | Bridges only |
 
 **Model:** MCP clients register ONLY `gray-matter` (the gateway). Neuron and
 NeuRAG run as GM-managed workers. Each can also run standalone.
@@ -292,10 +292,12 @@ python gray_matter/selfcheck.py      # Gray Matter deterministics
    gateway.
 3. Merge into `main`. `mirror.yml` splits the tree and fast-forwards the three
    public repos.
-4. Release by tagging **here**, with the project prefix: `neuron-v6.4.3`,
-   `neurag-v1.3.4`, `gm-v1.4.2`. A bare `v*` would fire all three at once. The
-   mirror renames the tag on the way out, so `neuron-v6.4.3` lands on Neuron as
-   `v6.4.3` — which is what that repo's Releases page should say.
+4. Release by tagging **here**, with the prefix matching the subtree folder
+   name: `neuron-v6.4.6`, `neurag-v1.3.4`, `gray_matter-v1.4.4`. A bare `v*`
+   would fire all three at once, and a prefix that is not the folder name is
+   how a tag gets published and never mirrored — `release-gm.yml` once fired on
+   `gm-v*` while the mirror looked for `gray_matter-v*`. The mirror renames the
+   tag on the way out, so `neuron-v6.4.6` lands on Neuron as `v6.4.6` — which is what that repo's Releases page should say.
 
 A version bump touches five files per project: `pyproject.toml`, `__init__.py`,
 the README badge, `CHANGELOG.md`, and the vendored Gray Matter wheel in the
