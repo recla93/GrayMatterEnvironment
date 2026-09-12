@@ -173,7 +173,8 @@ _ctx_cache = ContextCache(max_size=_cfg["cache_max_size"], ttl=_cfg["cache_ttl_s
 
 # Lightweight observability counters, surfaced by `gray-matter stats` / `doctor`.
 _stats: dict[str, float] = {"pulses": 0, "cache_hits": 0, "cache_misses": 0,
-                            "flashes": 0, "bridges_added": 0, "pulse_ms_total": 0.0}
+                            "flashes": 0, "bridges_added": 0, "pulse_ms_total": 0.0,
+                            "kb_hints": 0}
 
 # D4 — conversation buffer: gli ultimi topic della sessione. Ogni pulse espande
 # la query NeuRAG col contesto recente (recall migliore su domande incrementali);
@@ -331,6 +332,113 @@ def _inject_neuron_mode(arguments: dict) -> None:
             arguments["focus"] = focus["value"]
     except Exception:  # noqa: BLE001
         pass
+
+
+async def _bridge_blocks(topic: str, neurag_tags: set, limit: int) -> list[str]:
+    """Cross-store bridges for this topic, one per block, strongest first.
+
+    The limit is also the limit on REINFORCEMENT: showing a bridge is what
+    counts as using it, so what does not fit is not reinforced. One bridge per
+    block so the budget packs as many as fit instead of dropping them all. The
+    rationale is TRUNCATED: the store keeps 500 chars because there it is
+    documentation; here it is an injected hint, and five whole rationales alone
+    blew the budget and took every bridge down with them.
+    B4 — a bridge just promoted (5+ real uses) has proven its Neuron concept:
+    confirm it (salience + trust). Best-effort."""
+    from gray_matter.bridges import bridges_for
+    rel = bridges_for(topic, tags=neurag_tags, limit=limit)
+    out: list[str] = []
+    for b in rel:
+        why = (b.get("rationale") or "").strip()
+        if len(why) > _BRIDGE_WHY_CHARS:
+            why = why[:_BRIDGE_WHY_CHARS - 1].rstrip() + "…"
+        out.append(f"🔗 {b['neuron']} ↔ {b['neurag']}" + (f" — {why}" if why else ""))
+    promoted = [b["neuron"] for b in rel if b.pop("_just_promoted", False)]
+    if promoted:
+        try:
+            await _call_server_async("neuron", "confirm",
+                                     {"keywords": promoted, "confidence": 0.5})
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+# --- Knowledge on pre_turn (2026-09-12) --------------------------------------
+# The model calls pre_turn every turn and pulse never: on a real vault test the
+# KB was indexed, bridged, and consulted zero times in the whole session. So the
+# KB rides the call that actually happens. Gate first, content never: a SQL-only
+# name/trigger lookup per keyword (knowledge_neighbors was built for this), and
+# on a hit ONE pointer line — "the KB knows this, ask knowledge_query" — plus the
+# bridges for the topic, all inside the proactive budget. No vector search here,
+# ever: that stays behind an explicit knowledge_query / pulse, which is where the
+# token cost belongs.
+_KB_HINTS_PER_TURN = 2          # bridges shown next to the pointer; tokens, not a knob
+_KB_HINT_CACHE: dict = {}       # keyword -> (line, tags, node); ("", set(), "") = known miss
+_KB_HINT_CACHE_MAX = 500        # ponytail: clear-all when full; LRU if it ever matters
+
+
+async def _kb_lookup(query: str) -> tuple:
+    """Resolve one keyword to a KB node by trigger/name (SQL-only). Returns
+    (pointer line, tags, node name); empty strings on a miss or any error."""
+    miss = ("", set(), "")
+    try:
+        import json as _json
+        raw = await _call_server_async("neurag", "knowledge_neighbors",
+                                       {"query": query[:200], "depth": 1, "limit": 3})
+        data = _json.loads(raw)
+    except Exception:  # noqa: BLE001 — proactive = best-effort, never blocks pre_turn
+        return miss
+    node = data.get("node") or {}
+    name = str(node.get("name") or "").strip()
+    if not name:
+        return miss
+    tags = {str(t) for t in (data.get("tags") or [])}
+    near = [n["name"] for n in data.get("neighbors", []) if n.get("name")][:3]
+    path = str(node.get("path") or "").strip()
+    line = (f'📚 KB knows "{name}"' + (f" ({path})" if path else "")
+            + (" · near: " + ", ".join(near) if near else "")
+            + f' → knowledge_query("{name}") for the detail')
+    return line, tags, name
+
+
+async def _knowledge_hint(arguments: dict) -> str:
+    """The KB addendum for a pre_turn: one pointer on the first keyword the KB
+    resolves, plus the topic's bridges. Empty when NeuRAG is off, isolated, the
+    budget is zero, or nothing matches — which is the common case and costs a
+    few SQL lookups, cached per keyword for the session."""
+    neurag = _registry.get_server("neurag")
+    if not (neurag and neurag.is_alive() and neurag.collaborative) or PROACTIVE_BUDGET <= 0:
+        return ""
+    topic = " ".join(str(arguments.get("topic", "")).split())[:200]
+    kws = [str(k).strip() for k in (arguments.get("keywords") or []) if str(k).strip()]
+    blocks: list[str] = []
+    tags: set = set()
+    for q in [*kws[:5], topic]:
+        if not q:
+            continue
+        key = q.lower()
+        fresh = key not in _KB_HINT_CACHE
+        if fresh:
+            if len(_KB_HINT_CACHE) >= _KB_HINT_CACHE_MAX:
+                _KB_HINT_CACHE.clear()
+            _KB_HINT_CACHE[key] = await _kb_lookup(q)
+        line, tags, node = _KB_HINT_CACHE[key]
+        if not line:
+            continue
+        blocks.append(line)
+        _stats["kb_hints"] += 1
+        # A keyword the KB resolves by name IS a bridge: Neuron concept on one
+        # side, KB node on the other. Minted on first sighting in the session
+        # (add_bridge is idempotent and reinforces on repeat — a cached hit
+        # would otherwise promote a bridge every turn the keyword recurs).
+        if fresh and q in kws:
+            from gray_matter.bridges import add_bridge
+            if add_bridge(q, node, f"co-named on pre_turn '{topic}'"):
+                _stats["bridges_added"] += 1
+        break                       # one pointer is enough; the rest is a query away
+    blocks.extend(await _bridge_blocks(topic, tags, _KB_HINTS_PER_TURN))
+    extra, _dropped = _fit(PROACTIVE_BUDGET, blocks)
+    return ("\n\n" + extra) if extra else ""
 
 
 async def _tool_brainstorm(args: dict) -> list[TextContent]:
@@ -626,33 +734,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # Matched on whole tokens AND on the tag identity above — a bridge to a
         # node whose NAME says nothing about the topic is reachable through its
         # tags, which is the whole point of the substrate.
-        rel = []
         if PROACTIVE_BUDGET > 0:
-            from gray_matter.bridges import bridges_for
-            # Il limite è anche sul RINFORZO: mostrare un bridge è ciò che conta
-            # come usarlo, quindi non si rinforza quello che non entra.
-            rel = bridges_for(topic, tags=neurag_tags, limit=_BRIDGES_PER_PULSE)
-        if rel:
-            # Un bridge per blocco, così il budget ne impacchetta quanti stanno
-            # invece di scartarli in massa. E il razionale va TRONCATO: lo store
-            # lo accetta fino a 500 caratteri perché è documentazione, ma qui è
-            # un suggerimento iniettato — cinque razionali interi da soli
-            # sfondavano il budget e facevano cadere tutti i bridge.
-            for b in rel:
-                why = (b.get("rationale") or "").strip()
-                if len(why) > _BRIDGE_WHY_CHARS:
-                    why = why[:_BRIDGE_WHY_CHARS - 1].rstrip() + "…"
-                proactive.append(f"🔗 {b['neuron']} ↔ {b['neurag']}"
-                                 + (f" — {why}" if why else ""))
-            # B4 — bridge appena promosso (5+ usi reali): il concetto Neuron ha
-            # dimostrato valore, confermalo (salience + trust). Best-effort.
-            promoted = [b["neuron"] for b in rel if b.pop("_just_promoted", False)]
-            if promoted:
-                try:
-                    await _call_server_async("neuron", "confirm",
-                                             {"keywords": promoted, "confidence": 0.5})
-                except Exception:  # noqa: BLE001
-                    pass
+            proactive.extend(await _bridge_blocks(topic, neurag_tags, _BRIDGES_PER_PULSE))
 
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
         if PROACTIVE_BUDGET > 0:
@@ -737,10 +820,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _inject_neuron_mode(arguments)
 
     result = await _call_server_async(server.name, name, arguments)
+    # La KB viaggia sulla call che il modello fa davvero (vedi _knowledge_hint).
+    kb = (await _knowledge_hint(arguments)
+          if server.name == "neuron" and name == "pre_turn" else "")
     # Rete di sicurezza stimoli: se il piggyback di Neuron non passa da troppi
     # turni (LLM ha "dimenticato" i tool giusti), GM lo rilancia qui.
     note = await _safety_net_note(name, arguments, result or "")
-    return [TextContent(type="text", text=(result or "(empty)") + note)]
+    return [TextContent(type="text", text=(result or "(empty)") + kb + note)]
 
 
 # Persistent workers: one long-lived subprocess per server (imported once, model
