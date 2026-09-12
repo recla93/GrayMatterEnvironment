@@ -85,6 +85,15 @@ insieme. Di là arriva rinominato: `gray_matter-v1.4.2` → `v1.4.2`.
        Il mirror ha `concurrency: group: mirror`, e GitHub tiene **un solo** run
        in coda per gruppo: tre push ravvicinati fanno cancellare quello di mezzo.
        Aspetta che il giro precedente chiuda.
+5. [ ] **Sull'altra macchina, dopo il `git pull`: riavvia il daemon.**
+       `python -m gray_matter.cli stop && python -m gray_matter.cli start`
+       (il python del venv, `%LOCALAPPDATA%\gray-matter\.venv`). Riavviare il
+       client AI **non basta**: rinnova gli stdio, ma il daemon
+       (`gray_matter.server --daemon`) è un processo staccato e resta vivo col
+       codice di prima. Visto il 2026-09-12: `doctor` diceva `v1.4.3` con
+       1.4.4 su disco, dopo un riavvio completo di Claude. Conferma: la riga
+       `Gray-Matter vX.Y.Z` di `doctor` deve riportare la versione appena
+       pullata.
 
 ### 0.5 Cosa fa la pipeline, adesso
 
@@ -133,6 +142,14 @@ guasti distinti, tutti dormienti dalla migrazione dei workflow alla radice:
   entrambi i casi. Per sapere se morde davvero si guarda
   `GET /repos/{owner}/{repo}/rules/branches/main`, che elenca le regole
   **effettive** ed è vuoto quando non se ne applica nessuna.
+- **Mai `sqlite3.connect` nudo su un `.db` di Neuron.** Con un worker vivo,
+  la `close()` cancella il WAL libSQL e ogni `store_turn` successivo dice
+  "saved" e perde il turno (riprodotto il 2026-09-12: tre turni). A daemon
+  fermo fa checkpoint e butta la storia delle pagine, cioè l'unico recupero
+  possibile dopo un danno. Lettura: `neuron.db.connect_read_only(path)` o
+  IPC `{"action":"call","server":"neuron","tool":"export"}`. Copia:
+  `neuron.db.snapshot(path)` (è ciò che fa il backup giornaliero in
+  `graphs/_backups/`, 5 giorni, più `<grafo>.pre-consolidate.db`).
 - **Un'attesa a tempo contro un lavoro di durata variabile è un flaky che
   aspetta.** Nei test a due processi sincronizza su un evento (`READY`), non su
   `sleep`, e tieni il lock finché non lo ammazzi tu.
