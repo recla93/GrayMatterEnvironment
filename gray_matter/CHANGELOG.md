@@ -1,5 +1,19 @@
 ﻿# Changelog — Gray Matter
 
+## 1.4.5 (2026-09-12)
+- **La knowledge base viaggia su `pre_turn`.** Su un vault grosso NeuRAG era
+  stato consultato zero volte in una sessione intera: tutto cio' che chiede
+  l'iniziativa del modello oltre pre_turn/store_turn non succede. Nel
+  passthrough di `pre_turn` GM prova keyword e topic con `knowledge_neighbors`
+  (trigger/nome, SQL puro) e al primo hit appende una riga — `📚 KB knows
+  "Turso" (db/turso) · near: … → knowledge_query("Turso")` — piu' i bridge del
+  topic (max 2), dentro `proactive_budget_chars`. Mai una ricerca vettoriale su
+  questa strada; hit e miss in cache per keyword; nessun match = nessun token.
+  Una keyword risolta per trigger con un nodo di nome diverso diventa un
+  bridge al primo avvistamento. `_bridge_blocks` e' condiviso con la pulse.
+- Wheel vendored di Gray Matter 1.4.5 in Neuron e NeuRAG, pin `GM_VERSION`
+  allineati.
+
 ## 1.4.4 (2026-09-10)
 - **`-Clear` dichiarava fallita una rimozione riuscita.** `Remove-Venv`
   chiudeva su `Test-Path`, ma una cartella VUOTA sopravvive alla propria

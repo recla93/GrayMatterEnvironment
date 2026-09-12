@@ -1,5 +1,9 @@
 ﻿# Changelog — NeuRAG
 
+## 1.3.5 (2026-09-12)
+- Wheel vendored di Gray Matter aggiornata alla 1.4.5 e pin `GM_VERSION`
+  allineato negli installer. Nessuna modifica al codice di NeuRAG.
+
 ## 1.3.4 (2026-09-10)
 - **Il deployer degli hook spedisce la coppia.** `deploy_hooks.py` e'
   byte-identico fra i tre tool, ma il promemoria di claude-code viveva nel solo
