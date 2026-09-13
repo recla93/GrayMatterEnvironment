@@ -94,6 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
     ing.add_argument("path", help="Folder to graph, or a single document")
     ing.add_argument("--godnode", default=None,
                      help="Root node to use/create (default: the folder name)")
+    ing.add_argument("--code", action="store_true",
+                     help="Also chunk source files (default: documents only — "
+                          ".md .txt .pdf .docx; code is grep's job)")
 
     ren = sub.add_parser("rename-node", help="Rename a node (also updates the children's paths)")
     ren.add_argument("name", help="Current node name")
@@ -1074,7 +1077,7 @@ def _dispatch() -> None:
 
     elif args.command == "ingest":
         from neurag.ingest import auto_ingest
-        report = auto_ingest(db, args.path, args.godnode, say=print)
+        report = auto_ingest(db, args.path, args.godnode, say=print, code=args.code)
         if report["skipped"]:
             sys.exit(2)   # completato ma con file saltati: esito visibile in GUI
 

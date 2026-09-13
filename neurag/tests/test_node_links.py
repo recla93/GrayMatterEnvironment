@@ -444,7 +444,7 @@ def test_auto_ingest_actually_produces_links(tmp_path):
         "\n## Beta section\nBetaThing again plus alpha_helper\n")
 
     kg = KnowledgeGraph(tmp_path / "vault.db")
-    report = auto_ingest(kg, root)
+    report = auto_ingest(kg, root, code=True)   # the fixture IS code
 
     assert report["chunks"] > 0, "nothing was indexed — fixture is wrong, not the code"
     assert report["links"]["tag_overlap"] > 0, (

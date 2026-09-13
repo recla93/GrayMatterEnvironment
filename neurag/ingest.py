@@ -47,6 +47,15 @@ _SKIP_DIRS = {"__pycache__", "node_modules", "venv", ".venv", "build", "dist",
               "site-packages", "egg-info", "cache", "graphify-out",
               "htmlcov", "coverage"}
 
+# Documents only, unless asked (2026-09-13). Measured on the real vault: 62% of
+# the chunks came from source files, and a question about a process returned
+# `catalog.py :: module (12/100)`. Code in a RAG is a stale, cut copy of what
+# grep/Read give exact and fresh, embedded by a prose model that does not read
+# it. The RAG keeps the WHY (docs, decisions, history); the disk keeps the HOW.
+# `code=True` re-enables every supported extension for a tree that really is
+# the knowledge (a vendored library, a repo the model cannot open).
+_DOC_EXTENSIONS = {".md", ".txt", ".pdf", ".docx"}
+
 
 def _skippable(rel_parts: tuple) -> bool:
     return any(p.startswith(".") or p in _SKIP_DIRS or p.endswith(".egg-info")
@@ -97,7 +106,8 @@ def ingest_file(kg, path, godnode: "str | None" = None, say=None) -> dict:
     return report
 
 
-def auto_ingest(kg, root, godnode: "str | None" = None, say=None) -> dict:
+def auto_ingest(kg, root, godnode: "str | None" = None, say=None,
+                code: bool = False) -> dict:
     """Grafizza `root` dentro `kg`. Ritorna il report; `say(riga)` per il progresso.
 
     `root` può essere una cartella (l'albero intero) o un singolo file. Il
@@ -140,9 +150,10 @@ def auto_ingest(kg, root, godnode: "str | None" = None, say=None) -> dict:
         report["nodes"] += 1
         say(f"[nodo] {'/'.join(rel)}  ({ntype})")
 
-    # File → chunk nel nodo della propria cartella.
+    # File → chunk nel nodo della propria cartella (documenti; codice solo con `code`).
+    allowed = _SUPPORTED_EXTENSIONS if code else _DOC_EXTENSIONS
     for f in sorted(p for p in root.rglob("*") if p.is_file()):
-        if f.suffix.lower() not in _SUPPORTED_EXTENSIONS:
+        if f.suffix.lower() not in allowed:
             continue
         if _skippable(f.relative_to(root).parts[:-1]):
             continue
@@ -173,7 +184,7 @@ JOBS: "dict[str, dict]" = {}
 _MAX_JOBS = 20      # memoria dei job recenti; i più vecchi decadono
 
 
-def start_job(root, godnode: "str | None" = None) -> dict:
+def start_job(root, godnode: "str | None" = None, code: bool = False) -> dict:
     jid = uuid.uuid4().hex[:8]
     job = {"id": jid, "root": str(root), "state": "running", "log": [],
            "report": None, "error": "", "t0": time.time(), "ms": None}
@@ -187,7 +198,8 @@ def start_job(root, godnode: "str | None" = None) -> dict:
         try:
             kg = KnowledgeGraph()           # connessione propria del thread
             job["report"] = auto_ingest(kg, root, godnode,
-                                        say=lambda s: job["log"].append(s))
+                                        say=lambda s: job["log"].append(s),
+                                        code=code)
             job["state"] = "done"
         except Exception as exc:  # noqa: BLE001
             job["state"] = "error"

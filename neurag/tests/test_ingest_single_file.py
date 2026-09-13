@@ -90,6 +90,16 @@ def test_the_folder_path_still_works(kg, tmp_path):
     assert rep["files"] == 2 and rep["godnode"] == "albero"
 
 
+def test_a_tree_ingests_documents_only_unless_code_is_asked(kg, tmp_path):
+    """Il RAG tiene il perche' (documenti); il come (codice) resta su disco."""
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    _doc(folder, "DESIGN.md")
+    (folder / "server.py").write_text("def handler(): return 1  # x\n" * 30, encoding="utf-8")
+    assert auto_ingest(kg, folder)["files"] == 1
+    assert auto_ingest(kg, folder, code=True)["files"] == 2
+
+
 def test_ingest_file_is_callable_directly(kg, tmp_path):
     assert ingest_file(kg, _doc(tmp_path), godnode="X")["files"] == 1
 

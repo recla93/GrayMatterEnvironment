@@ -106,6 +106,8 @@ def _tools() -> list[Tool]:
                              "description": "Absolute path of a FOLDER (whole tree) or a SINGLE FILE to ingest"},
                     "godnode": {"type": "string",
                                 "description": "Root node to use/create (default: folder name)"},
+                    "code": {"type": "boolean", "default": False,
+                             "description": "Also chunk source files. Default false: documents only (.md .txt .pdf .docx) — code is read exact and fresh from disk, a chunk of it is neither"},
                 },
                 "required": ["path"],
             },
@@ -463,7 +465,7 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
         path = Path(arguments["path"])
         if not path.exists():
             return [TextContent(type="text", text=f"Path not found: {path}")]
-        job = start_job(path, arguments.get("godnode"))
+        job = start_job(path, arguments.get("godnode"), code=bool(arguments.get("code", False)))
         return [TextContent(type="text", text=(
             f"Ingest started: job {job['id']} on {path}. "
             f"Poll knowledge_ingest_status to follow progress."))]
