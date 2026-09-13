@@ -1,5 +1,19 @@
 ﻿# Changelog — Gray Matter
 
+## 1.5.0 (2026-09-13)
+- **I tool non annunciati si instradano per nome.** Con la dieta dei tool di
+  Neuron e NeuRAG il registro conosce solo quelli pubblicati; una chiamata a
+  un tool nascosto cade su `knowledge_*` -> neurag, altrimenti neuron, e il
+  worker risponde da solo se il tool non esiste davvero. Trio: 8601 -> 5117
+  token di schema, 51 -> 27 tool.
+- **Contatori per tool.** `stats` riporta `kb_hints` e `tool_calls` della
+  sessione: quante `knowledge_query` provoca un puntatore era una sensazione.
+- **Il puntatore KB una volta per keyword.** Si ripeteva a ogni turno in cui la
+  keyword ricompariva: ~25 token che invitano a una `knowledge_query` da ~1000,
+  per una scelta gia' fatta. Ora una volta per sessione; i bridge accanto al
+  puntatore da 2 a 1; nel puntatore solo il segmento padre del path
+  (`(in db)`), non l'elenco degli antenati che finiva col nome del nodo.
+
 ## 1.4.5 (2026-09-12)
 - **La knowledge base viaggia su `pre_turn`.** Su un vault grosso NeuRAG era
   stato consultato zero volte in una sessione intera: tutto cio' che chiede

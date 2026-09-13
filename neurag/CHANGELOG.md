@@ -1,5 +1,23 @@
 ﻿# Changelog — NeuRAG
 
+## 1.4.0 (2026-09-13)
+- **L'ingest prende documenti; il codice solo su richiesta.** Misurato sul
+  vault reale: 20629 chunk, 62% da file `.py`, 22% da un path che non esiste
+  piu', indice vecchio di 18 giorni; una domanda su una procedura documentata
+  tornava `catalog.py :: module (12/100)`. Un chunk di codice e' una copia
+  stantia e tagliata di cio' che grep/Read danno esatto e fresco, embeddata da
+  un modello di prosa. `auto_ingest` prende `.md .txt .pdf .docx`; `code=True`
+  (CLI `--code`, MCP `knowledge_ingest(code=true)`) riabilita ogni estensione
+  per un albero che e' davvero la conoscenza. Il vault rifatto: 163 file,
+  6287 chunk, e la stessa domanda trova la checklist con `top_n=3`.
+- **Standalone e' un indice di documenti.** Annunciati `knowledge_query`,
+  `knowledge_ingest` (+`_status`), `knowledge_status`, `knowledge_tree`,
+  `knowledge_confirm`. I tool di grafo e di chirurgia sui nodi (`neighbors`,
+  `related`, `link_graph`, `rebuild_links`, `reindex`, `health`, `index`,
+  `add_node`, `add_chunks`, `rename`/`remove_node`, `import`) sono di
+  Gray-Matter e della CLI: serviti per nome, `NEURAG_TOOLS=all` li riannuncia.
+  2665 -> 1062 token di schema.
+
 ## 1.3.5 (2026-09-12)
 - Wheel vendored di Gray Matter aggiornata alla 1.4.5 e pin `GM_VERSION`
   allineato negli installer. Nessuna modifica al codice di NeuRAG.
