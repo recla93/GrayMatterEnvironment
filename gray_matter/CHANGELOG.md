@@ -1,5 +1,13 @@
 ﻿# Changelog — Gray Matter
 
+## Unreleased
+- **`promote` non poteva promuovere niente, mai.** Misurava l'età da
+  `Node.turn`, che è l'ultimo tocco (il motore lo riscrive a ogni rinforzo), e
+  la salienza decade dopo 5 turni fermi: "vecchio 50 turni" implicava
+  "salienza 0". Verificato su un grafo reale: 347 nodi, 0 che passassero
+  entrambe. L'età ora è il `created_turn` del link più vecchio che tocca il
+  nodo; un nodo senza link non ha età e non è eleggibile.
+
 ## 1.5.2 (2026-09-13)
 - **I contatori per tool vivono nel daemon.** `stats` li leggeva dal daemon
   ma l'incremento stava nel gateway stdio, e `cli stats` diceva zero. Ora

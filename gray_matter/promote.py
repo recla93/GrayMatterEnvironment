@@ -37,14 +37,34 @@ PROMOTE_RULES = {
 }
 
 
-def score(node: dict, turn_count: int) -> float:
+def first_seen(export: dict) -> dict[str, int]:
+    """keyword -> turn of the oldest link touching it.
+
+    Node.turn is the LAST touch, not the birth: the engine rewrites it on every
+    reinforcement, and salience decays with idleness. Measured from Node.turn,
+    "old" and "salient" exclude each other and nothing is ever promoted
+    (verified on a real graph: 347 nodes, 0 candidates, 0 that met both).
+    Links keep their birth turn, so the oldest link is the earliest proof the
+    concept existed. A node with no links has no age — and a concept never
+    connected to anything is not consolidated, so it is not eligible."""
+    born: dict[str, int] = {}
+    for lk in export.get("links") or []:
+        t = lk.get("created_turn")
+        if t is None:
+            continue
+        for kw in (lk.get("source"), lk.get("target")):
+            if kw and int(t) < born.get(kw, int(t) + 1):
+                born[kw] = int(t)
+    return born
+
+
+def score(node: dict, age: int) -> float:
     """salience x trust x age, normalized enough to be comparable across graphs.
 
-    Ranking only — eligibility is the floors. Age is in turns since the concept
-    first appeared, which is Neuron's own clock; wall-clock would punish a graph
-    that sat unused for a month, and sitting unused is not evidence."""
-    age = max(0, int(turn_count) - int(node.get("turn", 0)))
-    return float(node.get("salience", 0)) * float(node.get("trust", 0.0)) * (age / 100.0)
+    Ranking only — eligibility is the floors. Age is in turns, Neuron's own
+    clock; wall-clock would punish a graph that sat unused for a month, and
+    sitting unused is not evidence."""
+    return float(node.get("salience", 0)) * float(node.get("trust", 0.0)) * (max(0, age) / 100.0)
 
 
 def candidates(export: dict, rules: dict | None = None) -> list[dict]:
@@ -56,11 +76,14 @@ def candidates(export: dict, rules: dict | None = None) -> list[dict]:
     """
     r = {**PROMOTE_RULES, **(rules or {})}
     turn_count = int(export.get("turn_count") or 0)
+    born = first_seen(export)
     out = []
     for nd in export.get("nodes") or []:
         salience = float(nd.get("salience", 0) or 0)
         trust = float(nd.get("trust", 0.0) or 0.0)
-        age = max(0, turn_count - int(nd.get("turn", 0) or 0))
+        if nd.get("keyword") not in born:
+            continue
+        age = max(0, turn_count - born[nd["keyword"]])
         if salience < r["min_salience"] or trust < r["min_trust"] \
                 or age < r["min_age_turns"]:
             continue
@@ -75,7 +98,7 @@ def candidates(export: dict, rules: dict | None = None) -> list[dict]:
             "salience": salience,
             "trust": round(trust, 3),
             "age_turns": age,
-            "score": round(score(nd, turn_count), 3),
+            "score": round(score(nd, age), 3),
         })
     out.sort(key=lambda c: -c["score"])
     return [c for c in out if c["keyword"]]
@@ -102,12 +125,18 @@ def report_lines(cands: list[dict], applied: bool = False) -> list[str]:
 
 
 def demo() -> None:
-    """Runnable self-check (stdlib only): the floors are AND, not OR."""
+    """Runnable self-check (stdlib only): the floors are AND, not OR, and age
+    comes from the links — every node here was touched at turn 199."""
     exp = {"turn_count": 200, "nodes": [
-        {"keyword": "quorum", "salience": 9, "trust": 0.8, "turn": 10, "tags": ["raft"]},
-        {"keyword": "hot_but_unconfirmed", "salience": 40, "trust": 0.0, "turn": 10},
+        {"keyword": "quorum", "salience": 9, "trust": 0.8, "turn": 199, "tags": ["raft"]},
+        {"keyword": "hot_but_unconfirmed", "salience": 40, "trust": 0.0, "turn": 199},
         {"keyword": "trusted_but_new", "salience": 9, "trust": 0.9, "turn": 199},
-        {"keyword": "rare", "salience": 1, "trust": 0.9, "turn": 10},
+        {"keyword": "rare", "salience": 1, "trust": 0.9, "turn": 199},
+        {"keyword": "unlinked", "salience": 9, "trust": 0.9, "turn": 199},
+    ], "links": [
+        {"source": "quorum", "target": "rare", "created_turn": 10},
+        {"source": "hot_but_unconfirmed", "target": "quorum", "created_turn": 10},
+        {"source": "trusted_but_new", "target": "quorum", "created_turn": 199},
     ]}
     got = [c["keyword"] for c in candidates(exp)]
     assert got == ["quorum"], got

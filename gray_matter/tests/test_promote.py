@@ -13,12 +13,16 @@ from gray_matter.promote import PROMOTE_RULES, candidates, report_lines, score
 
 
 def _exp(nodes, turn_count=200):
-    return {"turn_count": turn_count, "nodes": nodes}
+    """Node.turn è l'ULTIMO tocco (il motore lo riscrive a ogni rinforzo); la
+    nascita vive nei link. Ogni nodo qui ha un link nato a `born`."""
+    links = [{"source": n["keyword"], "target": "altro", "created_turn": n.pop("born")}
+             for n in nodes if "born" in n]
+    return {"turn_count": turn_count, "nodes": nodes, "links": links}
 
 
-def _n(keyword, salience=9, trust=0.8, turn=10, tags=None):
+def _n(keyword, salience=9, trust=0.8, born=10, tags=None):
     return {"keyword": keyword, "salience": salience, "trust": trust,
-            "turn": turn, "tags": tags or [], "topic": "t", "domain": "d"}
+            "turn": 199, "born": born, "tags": tags or [], "topic": "t", "domain": "d"}
 
 
 # ---------- ogni soglia è un AND ----------
@@ -34,7 +38,7 @@ def test_frequent_but_never_confirmed_is_not_promoted():
 
 
 def test_trusted_but_too_young_is_not_promoted():
-    assert candidates(_exp([_n("nuovo", turn=199)])) == []
+    assert candidates(_exp([_n("nuovo", born=199)])) == []
 
 
 def test_rarely_reinforced_is_not_promoted():
@@ -60,8 +64,8 @@ def test_exactly_at_a_floor_is_in(field, value):
 def test_age_is_counted_in_turns_from_the_graphs_own_clock():
     """Non wall-clock: un grafo rimasto inutilizzato un mese non ha per questo
     concetti più stabili, e l'inattività non è evidenza."""
-    young = _exp([_n("x", turn=160)], turn_count=200)      # 40 turni
-    old = _exp([_n("x", turn=10)], turn_count=200)         # 190 turni
+    young = _exp([_n("x", born=160)], turn_count=200)      # 40 turni
+    old = _exp([_n("x", born=10)], turn_count=200)         # 190 turni
     assert candidates(young) == []
     assert candidates(old)
 
@@ -79,7 +83,29 @@ def test_the_report_is_ranked_by_score():
 
 
 def test_score_is_zero_without_trust():
-    assert score({"salience": 100, "trust": 0.0, "turn": 0}, 500) == 0.0
+    assert score({"salience": 100, "trust": 0.0}, age=500) == 0.0
+
+
+# ---------- l'età viene dai link, non da Node.turn ----------
+
+def test_age_is_the_oldest_link_not_the_last_touch():
+    """Sul grafo reale (347 nodi) nessun candidato, mai: Node.turn è l'ultimo
+    tocco e la salienza decade con l'inattività, quindi 'vecchio' e 'saliente'
+    si escludevano. Un nodo toccato ieri e collegato 190 turni fa è stabile."""
+    exp = {"turn_count": 200,
+           "nodes": [{"keyword": "x", "salience": 9, "trust": 0.8, "turn": 199}],
+           "links": [{"source": "x", "target": "y", "created_turn": 10},
+                     {"source": "z", "target": "x", "created_turn": 150}]}
+    c = candidates(exp)
+    assert [k["keyword"] for k in c] == ["x"]
+    assert c[0]["age_turns"] == 190, "conta il link più vecchio"
+
+
+def test_a_node_with_no_links_has_no_age_and_is_not_promoted():
+    exp = {"turn_count": 200,
+           "nodes": [{"keyword": "solo", "salience": 99, "trust": 1.0, "turn": 10}],
+           "links": []}
+    assert candidates(exp) == []
 
 
 # ---------- i tag viaggiano: è un join, non un orfano ----------
@@ -129,7 +155,7 @@ def test_the_cut_points_are_constants_not_literals():
     """§8.2: hanno bisogno di dati veri e si muoveranno, quindi stanno in un
     dict da regolare, non sparsi in una query."""
     assert set(PROMOTE_RULES) == {"min_salience", "min_trust", "min_age_turns"}
-    loose = candidates(_exp([_n("x", salience=1, trust=0.1, turn=199)]),
+    loose = candidates(_exp([_n("x", salience=1, trust=0.1, born=199)]),
                        rules={"min_salience": 0, "min_trust": 0.0, "min_age_turns": 0})
     assert [c["keyword"] for c in loose] == ["x"]
 
