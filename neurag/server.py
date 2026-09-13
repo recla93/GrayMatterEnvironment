@@ -347,7 +347,7 @@ def _tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="skill",
+            name="knowledge_skill",
             description="Return the FULL text of a NeuRAG skill on demand — token-cheap, "
                         "fetch it only when you need the details. Call once per session "
                         "after the compact opener to load the retrieval workflow.",
@@ -369,7 +369,9 @@ def _tools() -> list[Tool]:
 
 # Skills served as MCP tools, not as client plugin files: a plugin reaches one
 # client (Cowork), a tool reaches every client that speaks MCP. Same reason
-# Neuron serves `skill` — keep the two registries the same shape.
+# Neuron serves `skill`; this one is `knowledge_skill` (2026-09-13): behind
+# Gray-Matter the two lists merge and two tools with one name is one tool.
+# Keep the two registries the same shape.
 _SKILLS: dict[str, tuple[str, ...]] = {
     "usage": ("skills", "usage.md"),
 }
@@ -408,7 +410,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
-    if name == "skill":
+    if name == "knowledge_skill":
         which = str(arguments.get("name") or "usage").strip()
         parts = _SKILLS.get(which)
         if parts is None:

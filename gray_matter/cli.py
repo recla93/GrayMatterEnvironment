@@ -218,7 +218,7 @@ def cmd_stats() -> None:
         sys.exit(1)
     print("Gray-Matter stats:")
     order = ["pulses", "cache_hits", "cache_misses", "cache_hit_rate", "cache_size",
-             "flashes", "bridges_added_session", "bridges_total", "kb_hints",
+             "flashes", "bridges_added_session", "bridges_total",
              "avg_miss_ms", "workers_alive"]
     for k in order:
         if k in r:

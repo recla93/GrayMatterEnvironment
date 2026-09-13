@@ -1249,7 +1249,8 @@ def _build_stats() -> dict:
         "flashes": int(_stats["flashes"]),
         "bridges_added_session": int(_stats["bridges_added"]),
         "bridges_total": len(all_bridges()),
-        "kb_hints": int(_stats["kb_hints"]),
+        # no kb_hints here: pointers are minted in each stdio gateway, not in
+        # the daemon — the knowledge_neighbors count below is the gate's lookups
         "tool_calls": dict(sorted(_tool_calls.items(), key=lambda kv: -kv[1])),
         "avg_miss_ms": round(_stats["pulse_ms_total"] / misses, 1) if misses else 0.0,
         "workers_alive": [n for n, p in _workers.items() if p.poll() is None],
