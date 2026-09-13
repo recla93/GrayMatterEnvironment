@@ -1538,6 +1538,9 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     srv = "neurag" if action == "knowledge_cmd" else msg.get("server", "")
                     tool_name = msg.get("tool", "knowledge_status")
                     tool_args = msg.get("args", {})
+                    # Every stdio gateway's worker calls land here: this is the
+                    # counter `stats` shows, across sessions, until restart.
+                    _tool_calls[tool_name] = _tool_calls.get(tool_name, 0) + 1
                     try:
                         result = await _call_server_async(srv, tool_name, tool_args)
                         response = {"result": result}
