@@ -1,6 +1,19 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **Backup della suite: una cartella al giorno, tre sottocartelle.** Neuron
+  faceva le sue 5 copie in `_backups/`, NeuRAG e i bridge GM nessuna. Ora il
+  daemon copia i tre store in `<suite>/backups/gm-graph-backup_<data>/`
+  (`gray-matter/`, `neuron/`, `neurag/`), una volta al giorno, e tiene gli
+  ultimi 7 giorni. Le sorgenti sono `paths.data_paths()`, l'inventario che
+  legge già l'uninstaller: uno store aggiunto lì entra nel backup senza una
+  seconda lista. I `.db` passano dalla backup API su `mode=ro` — l'unico modo
+  sancito di aprire un grafo bloccato da un altro processo (WAL ripiegato
+  nella copia, WAL vivo intatto). `gray_matter backup [--force]` lo fa a mano,
+  senza daemon. `GM_BACKUP_KEEP=0` lo spegne. Una copia a metà non è mai una
+  copia: tutto nasce in `.tmp` e diventa la cartella del giorno con un solo
+  `rename`, `--force` scambia invece di cancellare prima, e `stop` aspetta la
+  copia in corso (al più 120 s) prima di uscire.
 - **`promote` non poteva promuovere niente, mai.** Misurava l'età da
   `Node.turn`, che è l'ultimo tocco (il motore lo riscrive a ogni rinforzo), e
   la salienza decade dopo 5 turni fermi: "vecchio 50 turni" implicava

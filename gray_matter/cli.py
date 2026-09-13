@@ -344,6 +344,24 @@ def cmd_reap(dry_run: bool = False, all_procs: bool = False) -> None:
     print(f"Reaped {len(targets)} process(es).")
 
 
+def cmd_backup(force: bool = False) -> None:
+    """Runs in THIS process, no daemon needed: the copy reads through mode=ro,
+    and the moment you most want a backup is when the daemon is not running."""
+    from gray_matter import backup, paths
+    folder, errors = backup.run(force=force)
+    for e in errors:
+        print(f"  [!] {e}")
+    if folder is None:
+        print(f"Backup di oggi già presente in {paths.backups_dir()} (--force per rifarlo).")
+        return
+    print(f"Backup: {folder}")
+    for f in sorted(folder.rglob("*")):
+        if f.is_file():
+            print(f"  {f.relative_to(folder).as_posix():34s} {f.stat().st_size:>10,} B")
+    days = sorted(p.name for p in paths.backups_dir().glob(f"{backup.PREFIX}*") if p.is_dir())
+    print(f"Giorni conservati: {len(days)}/{backup.KEEP}  ({days[0][-10:]} -> {days[-1][-10:]})")
+
+
 def cmd_promote(apply: bool = False, as_json: bool = False) -> None:
     """CLS consolidation (§5.3): concepts that proved themselves in Neuron
     become permanent NeuRAG knowledge. Dry run unless `apply`."""
@@ -1070,6 +1088,12 @@ def build_parser() -> argparse.ArgumentParser:
     log_p.add_argument("--follow", "-f", action="store_true", help="Keep following (Ctrl-C to stop)")
     log_p.add_argument("--lines", "-n", type=int, default=50, help="Tail size (default 50)")
 
+    bak_p = sub.add_parser("backup",
+                           help="Copy the three stores (Neuron graphs, NeuRAG vault, GM bridges) "
+                                "into <suite>/backups/gm-graph-backup_<day>/. Daily, keeps 7")
+    bak_p.add_argument("--force", action="store_true",
+                       help="Redo today's copy even if it exists")
+
     prm_p = sub.add_parser("promote",
                            help="Promote proven Neuron concepts into NeuRAG "
                                 "knowledge (CLS). DRY RUN unless --apply")
@@ -1130,7 +1154,7 @@ COMMAND_GROUPS = {
     "start": "lifecycle", "stop": "lifecycle", "gui": "lifecycle", "register": "lifecycle",
     "deregister": "lifecycle", "link": "lifecycle", "bridge": "lifecycle",
     "bridges-transfer": "maintenance", "knowledge": "maintenance",
-    "reap": "maintenance",
+    "reap": "maintenance", "backup": "maintenance",
     "status": "inspect", "stats": "inspect", "doctor": "inspect",
     "bridges": "inspect", "logs": "inspect", "ping": "inspect",
     "gm-neuron": "inspect", "gm-neurag": "inspect",
@@ -1219,6 +1243,8 @@ def main() -> None:
                   no_cli_install=args.no_cli_install, assume_yes=args.yes)
     elif args.command == "logs":
         cmd_logs(args.follow, args.lines)
+    elif args.command == "backup":
+        cmd_backup(force=args.force)
     elif args.command == "promote":
         cmd_promote(apply=args.apply, as_json=args.json)
     elif args.command == "bridges":

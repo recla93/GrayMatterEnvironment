@@ -317,6 +317,22 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Searches the knowledge base. Type your question in the query field.",
         "To see what your AI would find, before you trust the vault.",
     ),
+    ("gray-matter", "backup"): (
+        "Copia i tre store — grafi Neuron, vault NeuRAG, bridge GM — in una "
+        "cartella per giorno, gm-graph-backup_<data>, con una sottocartella per "
+        "tool. Tiene gli ultimi 7 giorni. Il daemon lo fa da solo una volta al "
+        "giorno; --force rifà la copia di oggi.",
+        "Prima di un'operazione che non torna indietro (consolidate, reindex, "
+        "un --apply) o a fine giornata: la copia automatica è di inizio giornata, "
+        "il lavoro fatto dopo non c'è ancora. Non serve il daemon acceso.",
+        "Copies the three stores — Neuron graphs, NeuRAG vault, GM bridges — into "
+        "one folder per day, gm-graph-backup_<date>, one subfolder per tool. "
+        "Keeps the last 7 days. The daemon does it once a day on its own; "
+        "--force redoes today's copy.",
+        "Before anything that does not undo (consolidate, reindex, an --apply) "
+        "or at the end of the day: the automatic copy is from the start of the "
+        "day, later work is not in it yet. The daemon need not be running.",
+    ),
     ("gray-matter", "promote"): (
         "Promuove in conoscenza permanente (NeuRAG) i concetti che si sono "
         "dimostrati validi nella memoria (Neuron): molto rinforzati, confermati "

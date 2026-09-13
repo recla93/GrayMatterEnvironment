@@ -114,7 +114,10 @@ Fatti compatti (max 200 caratteri) allegati alle keyword. Max 5 per nodo; i piu 
 
 ### Backup
 
-Copia il file `.db` dalla directory del graph store. Per Turso Cloud, usa `turso db shell` o `turso db export`.
+Due livelli, solo tier locale (per Turso Cloud usa `turso db export`):
+
+- **Di Neuron**: alla prima apertura di un grafo nel giorno, `db.snapshot()` scrive `<graphs>/_backups/<nome>.<YYYY-MM-DD>.db` (tiene `NEURON_BACKUP_KEEP`, default 5) più `<nome>.pre-consolidate.db` prima di ogni consolidamento.
+- **Di suite** (Gray Matter, sotto): una cartella al giorno con tutti e tre gli store.
 
 ---
 
@@ -131,6 +134,19 @@ Radice: `GM_HOME` (`%LOCALAPPDATA%\gray_matter` su Windows, `~/.local/share/gray
 | `config.json` | JSON | Override knob (vedi [Configurazione](CONFIGURATION.it.md)) |
 | `bridges.json` | JSON | Link bridge cross-store (concetto Neuron <-> nodo NeuRAG) |
 | `manifest.json` | JSON | Manifest install: server installati, hook, percorsi dati |
+
+### Backup
+
+Il daemon copia i tre store una volta al giorno in `<radice suite>/backups/`:
+
+```
+gm-graph-backup_2026-09-13/
+  gray-matter/  bridges.db
+  neuron/       graph_*.db  _cross_links.json
+  neurag/       knowledge.db  config.json
+```
+
+Tiene gli ultimi 7 giorni (`GM_BACKUP_KEEP`, `0` spegne). Le sorgenti sono `paths.data_paths()`, lo stesso inventario che legge il disinstallatore. I file SQLite passano dalla backup API su una connessione `mode=ro`: un WAL vivo viene ripiegato nella copia e lasciato intatto al worker. `gray_matter backup` lo fa a mano (senza daemon); `--force` rifà la cartella di oggi — la copia automatica è di inizio giornata, quindi lancialo prima di un'operazione che non torna indietro.
 
 ### Schema bridges.json
 
@@ -209,6 +225,10 @@ Sovrascrivere passando `db_path` a `KnowledgeGraph()`.
 | **PRIMARY KEY** | | `(source_id, target_id, link_type)` | Un link per tipo per coppia |
 
 **Indici:** `idx_links_source` su `source_id`, `idx_links_target` su `target_id`.
+
+### Backup
+
+Nessuno proprio: la copia giornaliera di suite (Gray Matter, sopra) include `knowledge.db` e `config.json`. Standalone: copia `knowledge.db`.
 
 ---
 

@@ -132,6 +132,7 @@ def neurag_config() -> Path:
 
 
 def gm_bridges() -> Path:    return gm_home() / "bridges.db"   # was bridges.json (migrated once)
+def backups_dir() -> Path:  return _user_base() / "backups"    # daily suite-level copies (backup.py)
 def gm_state() -> Path:      return gm_home() / "state.db"    # blackboard (TTL + versioni)
 
 

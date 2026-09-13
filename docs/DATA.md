@@ -114,7 +114,10 @@ Compact facts (max 200 chars) attached to keywords. Max 5 per node; oldest dropp
 
 ### Backup
 
-Copy the `.db` file from the graph store directory. For Turso Cloud, use `turso db shell` or `turso db export`.
+Two layers, local tier only (for Turso Cloud use `turso db export`):
+
+- **Neuron's own**: on the first open of a graph each day, `db.snapshot()` writes `<graphs>/_backups/<name>.<YYYY-MM-DD>.db` (keeps `NEURON_BACKUP_KEEP`, default 5) plus `<name>.pre-consolidate.db` before every consolidation.
+- **Suite-level** (Gray Matter, below): one folder per day with all three stores.
 
 ---
 
@@ -131,6 +134,19 @@ Root: `GM_HOME` (`%LOCALAPPDATA%\gray_matter` on Windows, `~/.local/share/gray_m
 | `config.json` | JSON | Tunable knob overrides (see [Configuration](CONFIGURATION.md)) |
 | `bridges.json` | JSON | Cross-store bridge links (Neuron concept <-> NeuRAG node) |
 | `manifest.json` | JSON | Install manifest: installed servers, hooks, data paths |
+
+### Backup
+
+The daemon copies the three stores once a day into `<suite root>/backups/`:
+
+```
+gm-graph-backup_2026-09-13/
+  gray-matter/  bridges.db
+  neuron/       graph_*.db  _cross_links.json
+  neurag/       knowledge.db  config.json
+```
+
+Keeps the last 7 days (`GM_BACKUP_KEEP`, `0` disables). Sources are `paths.data_paths()`, the same inventory the uninstaller reads. SQLite files are copied through the backup API over a `mode=ro` connection, so a live WAL is folded into the copy and left untouched for the worker. `gray_matter backup` runs it by hand (no daemon needed); `--force` redoes today's folder — the automatic copy is from the start of the day, so run it before anything that does not undo.
 
 ### bridges.json schema
 
@@ -212,7 +228,7 @@ Override by passing `db_path` to `KnowledgeGraph()`.
 
 ### Backup
 
-Copy `~/.local/share/neurag/knowledge.db`.
+No backup of its own: the suite-level daily copy (Gray Matter, above) includes `knowledge.db` and `config.json`. Standalone: copy `knowledge.db`.
 
 ---
 

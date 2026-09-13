@@ -1202,6 +1202,21 @@ async def _sleep_monitor():
     global _is_sleeping
     while True:
         await asyncio.sleep(30)
+        # Daily backup of the three stores (backup.py): a no-op once today's
+        # folder exists, so this costs one exists() per tick. Daemon only —
+        # every stdio gateway runs this monitor too, and four processes racing
+        # for the same .tmp folder at midnight is not a backup. Off the loop
+        # thread: a copy of a few MB must not stall the IPC listener.
+        if _IS_DAEMON:
+            try:
+                from gray_matter import backup as _backup
+                folder, errors = await asyncio.to_thread(_backup.run)
+                for e in errors:
+                    print(f"[gray-matter] backup: {e}", file=sys.stderr)
+                if folder:
+                    print(f"[gray-matter] backup: {folder}", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001 — say it, never crash the monitor
+                print(f"[gray-matter] backup skipped: {exc}", file=sys.stderr)
         now = time.time()
         idle = now - _last_call_time
 
@@ -1596,6 +1611,13 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     # orphan writers on the same graph files, with no final
                     # checkpoint. That is the accumulation pids.py was
                     # written to mop up — better not to create it.
+                    # Same for a backup in flight: os._exit would cut the copy
+                    # in half. Wait for it (bounded: a wedged disk must not
+                    # make `stop` hang forever; the .tmp is swept next run).
+                    from gray_matter import backup as _backup
+                    if not await asyncio.to_thread(_backup.wait_idle, 120.0):
+                        print("[gray-matter] shutdown: backup still running after 120s, "
+                              "leaving its .tmp behind", file=sys.stderr)
                     _shutdown_workers()
                     os._exit(0)
                 else:
