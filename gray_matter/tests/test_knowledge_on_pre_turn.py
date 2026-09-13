@@ -36,7 +36,7 @@ def srv(tmp_path, monkeypatch):
         calls.append((server, tool, dict(args)))
         # "turso" is the node's own name; "libsql" is a TRIGGER that resolves to it
         if tool == "knowledge_neighbors" and args["query"].lower() in ("turso", "libsql"):
-            return json.dumps({"node": {"name": "Turso", "path": "db/turso"},
+            return json.dumps({"node": {"name": "Turso", "path": "/vault/db/turso"},
                                "tags": ["sqlite", "cloud"],
                                "neighbors": [{"name": "libsql"}, {"name": "embedded replica"}]})
         if tool == "knowledge_neighbors":
@@ -53,7 +53,7 @@ def _hint(S, **args):
 
 def test_a_keyword_the_kb_resolves_yields_one_pointer_and_a_bridge(srv):
     out = _hint(srv, topic="scelta del database", keywords=["latency", "libsql", "wal"])
-    assert '📚 KB knows "Turso" (db/turso)' in out, out
+    assert '📚 KB knows "Turso" (in db)' in out, out  # parent segment only, never the full path
     assert "near: libsql, embedded replica" in out
     assert 'knowledge_query("Turso")' in out, "the pointer says how to get the detail"
     # the detail itself is NOT fetched: no vector search on the pre_turn path

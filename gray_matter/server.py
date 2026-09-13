@@ -394,8 +394,11 @@ async def _kb_lookup(query: str) -> tuple:
         return miss
     tags = {str(t) for t in (data.get("tags") or [])}
     near = [n["name"] for n in data.get("neighbors", []) if n.get("name")][:3]
-    path = str(node.get("path") or "").strip()
-    line = (f'📚 KB knows "{name}"' + (f" ({path})" if path else "")
+    # The KB path repeats every ancestor and ends with the node name itself:
+    # keep the parent segment only, and nothing when there is none.
+    parent = str(node.get("path") or "").strip().rstrip("/").rsplit("/", 2)[-2:-1]
+    where = parent[0] if parent and parent[0].lower() != name.lower() else ""
+    line = (f'📚 KB knows "{name}"' + (f" (in {where})" if where else "")
             + (" · near: " + ", ".join(near) if near else "")
             + f' → knowledge_query("{name}") for the detail')
     return line, tags, name

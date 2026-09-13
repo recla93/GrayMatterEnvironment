@@ -46,9 +46,9 @@ posto naturale.
 Memoria episodica: rapida, decade, consolida verso la corteccia. Possiede la
 cronologia dei turni (episode, entities, references) e il grafo dei concetti.
 
-Non ha ricevuto **nessun tool nuovo**: focus e pattern-match sono modalità del
-retrieval, che è il suo lavoro; pattern-extract nasce dalla cronologia, che è
-l'unico posto che la possiede.
+Non ha ricevuto **nessun tool nuovo**: focus è una modalità del retrieval, che
+è il suo lavoro. La modalità pattern è stata tolta il 2026-09-13 (0 previsioni
+giuste su 155 turni reali); il log dei turni resta, per rimisurare a 500.
 
 ### NeuRAG — Neocorteccia
 
