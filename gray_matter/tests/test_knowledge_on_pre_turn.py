@@ -40,6 +40,10 @@ def srv(tmp_path, monkeypatch):
             return json.dumps({"node": {"name": "Turso", "path": "/vault/db/turso"},
                                "tags": ["sqlite", "cloud"],
                                "neighbors": [{"name": "libsql"}, {"name": "embedded replica"}]})
+        if tool == "knowledge_neighbors" and args["query"].lower() == "vault":
+            # the root node: one path segment, triggers = the whole vocabulary
+            return json.dumps({"node": {"name": "vault", "path": "/vault"},
+                               "tags": [], "neighbors": [{"name": "db"}]})
         if tool == "knowledge_neighbors":
             return json.dumps({"node": None, "neighbors": []})
         raise AssertionError(f"unexpected call {server}.{tool}")
@@ -95,6 +99,12 @@ def test_a_cached_hit_does_not_reinforce_the_bridge_every_turn(srv):
     # minted once (weight 1); only a bridges_for() surfacing reinforces it, and
     # "db" matches neither endpoint nor the tags here
     assert b["weight"] == 1, b
+
+
+def test_the_root_node_is_a_miss_not_a_pointer(srv):
+    """The vault root answers to every stopword in the corpus."""
+    assert _hint(srv, topic="vault", keywords=["vault"]) == ""
+    assert srv._stats["kb_hints"] == 0
 
 
 def test_a_pointer_is_shown_once_per_keyword_per_session(srv):

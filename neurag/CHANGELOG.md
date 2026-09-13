@@ -1,5 +1,9 @@
 ﻿# Changelog — NeuRAG
 
+## 1.4.1 (2026-09-13)
+- Wheel vendored di Gray Matter aggiornata alla 1.5.1 e pin `GM_VERSION`
+  allineato negli installer. Nessuna modifica al codice di NeuRAG.
+
 ## 1.4.0 (2026-09-13)
 - **L'ingest prende documenti; il codice solo su richiesta.** Misurato sul
   vault reale: 20629 chunk, 62% da file `.py`, 22% da un path che non esiste

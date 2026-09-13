@@ -396,13 +396,18 @@ async def _kb_lookup(query: str) -> tuple:
         return miss
     node = data.get("node") or {}
     name = str(node.get("name") or "").strip()
-    if not name:
+    path = str(node.get("path") or "").strip()
+    # A root node (one path segment) is the vault itself: its triggers are the
+    # whole corpus' vocabulary, stopwords included, so a topic like "verifica
+    # del puntatore" resolves to it through "del". That is not "the KB knows
+    # this" — it is a miss.
+    if not name or "/" not in path.strip("/"):
         return miss
     tags = {str(t) for t in (data.get("tags") or [])}
     near = [n["name"] for n in data.get("neighbors", []) if n.get("name")][:3]
     # The KB path repeats every ancestor and ends with the node name itself:
     # keep the parent segment only, and nothing when there is none.
-    parent = str(node.get("path") or "").strip().rstrip("/").rsplit("/", 2)[-2:-1]
+    parent = path.rstrip("/").rsplit("/", 2)[-2:-1]
     where = parent[0] if parent and parent[0].lower() != name.lower() else ""
     line = (f'📚 KB knows "{name}"' + (f" (in {where})" if where else "")
             + (" · near: " + ", ".join(near) if near else "")
@@ -431,10 +436,11 @@ async def _knowledge_hint(arguments: dict) -> str:
             if len(_KB_HINT_CACHE) >= _KB_HINT_CACHE_MAX:
                 _KB_HINT_CACHE.clear()
             _KB_HINT_CACHE[key] = await _kb_lookup(q)
-        line, tags, node = _KB_HINT_CACHE[key]
+        line, kb_tags, node = _KB_HINT_CACHE[key]
         if not line or key in _KB_HINT_SHOWN:
             continue
         _KB_HINT_SHOWN.add(key)
+        tags = kb_tags                  # the node's tags feed the bridges only with its pointer
         blocks.append(line)
         _stats["kb_hints"] += 1
         # A keyword the KB resolves by name IS a bridge: Neuron concept on one

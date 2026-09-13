@@ -1,5 +1,13 @@
 ﻿# Changelog — Gray Matter
 
+## 1.5.1 (2026-09-13)
+- **La radice del vault non e' un puntatore.** Visto sul vivo subito dopo la
+  1.5.0: il topic "verifica live del puntatore" risolveva, tramite "del", il
+  nodo radice — i suoi trigger sono il vocabolario dell'intero corpus,
+  stopword comprese — e ogni topic nuovo produceva un `📚 KB knows
+  "GrayMatterEnvironment"`. Un nodo a un solo segmento di path e' un miss.
+  I tag per i bridge viaggiano solo col puntatore che li ha prodotti.
+
 ## 1.5.0 (2026-09-13)
 - **I tool non annunciati si instradano per nome.** Con la dieta dei tool di
   Neuron e NeuRAG il registro conosce solo quelli pubblicati; una chiamata a
