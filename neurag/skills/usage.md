@@ -27,9 +27,9 @@ workflow below does not change with the tier.
    the user's own material and outranks anything you recall.
 2. **Cite what you used.** Name the node/chunk you drew from. An uncited answer
    is indistinguishable from a guess, and the user cannot check it.
-3. **Widen only if empty.** No hits → try `knowledge_neighbors(query)` to see
-   what the graph actually holds near that topic, then re-query with the
-   vocabulary the vault uses. Re-running the same words never helps.
+3. **Widen only if empty.** No hits → `knowledge_tree` shows what the vault
+   actually holds; re-query with the vocabulary it uses. Re-running the same
+   words never helps.
 
 ## When NOT to search
 
@@ -44,6 +44,18 @@ irrelevant chunks. Skip it for:
 means every query is a wasted call — say so once, do not keep searching.
 
 ## Writing to the vault
+
+Documents, not code: `knowledge_ingest` takes `.md .txt .pdf .docx` by default
+(`code=true` for a tree that really is the knowledge). A chunk of source is a
+stale, cut copy of what the model reads exact from disk; the vault keeps the
+WHY — docs, decisions, history.
+
+Announced tools are the index's: `knowledge_query`, `knowledge_ingest` (+
+`_status`), `knowledge_status`, `knowledge_tree`, `knowledge_confirm`. The
+graph and surgery tools below (`add_node`, `add_chunks`, `index`, `health`,
+`neighbors`, `related`, `link_graph`, `rebuild_links`, `reindex`, `rename` /
+`remove_node`, `import`) still work by name — via the CLI, Gray-Matter, or with
+`NEURAG_TOOLS=all` — they are just not published to the model by default.
 
 - `knowledge_add_node(name, parent, triggers)` — a topic. `triggers` are the
   phrases that should surface it; pick words the user would actually type, not

@@ -814,7 +814,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _ctx_cache.invalidate_related(str(arguments.get("topic", "")))
 
     # --- Route to registered server (pass-through) ---
-    server = _registry.find_server_by_tool(name)
+    # Unannounced tools (the tool diet hides upkeep/admin ones from list_tools)
+    # still route by name: the worker dispatches by name and answers itself
+    # when a tool really does not exist.
+    server = (_registry.find_server_by_tool(name)
+              or _registry.get_server("neurag" if name.startswith("knowledge_") else "neuron"))
     if server is None:
         return [TextContent(type="text", text=f"Tool '{name}' not found in any registered server.")]
 

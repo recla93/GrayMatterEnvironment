@@ -35,9 +35,27 @@ _db: KnowledgeGraph | None = None
 app = Server("neurag", version=__version__)
 
 
+# Tool diet (2026-09-13). Standalone, NeuRAG is a document index: ingest,
+# query, status, tree, confirm. The graph tools (neighbors, links, health,
+# the model-driven index/add pipeline, node surgery) are Gray-Matter's and
+# the CLI's: dispatch is by name, so they keep working unannounced. 19 tools
+# cost 2.7k tokens of schema per session; NEURAG_TOOLS=all announces them all.
+_ADMIN_TOOLS = frozenset({"knowledge_index", "knowledge_add_node", "knowledge_add_chunks",
+                          "knowledge_health", "knowledge_link_graph", "knowledge_rebuild_links",
+                          "knowledge_reindex", "knowledge_neighbors", "knowledge_related",
+                          "knowledge_remove_node", "knowledge_rename_node", "knowledge_import"})
+
+
+def _announced() -> list[Tool]:
+    tools = _tools()
+    if os.environ.get("NEURAG_TOOLS", "core").lower() == "all":
+        return tools
+    return [t for t in tools if t.name not in _ADMIN_TOOLS]
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
-    return _tools()
+    return _announced()
 
 
 def announced_tool_names() -> list[str]:
@@ -49,7 +67,7 @@ def announced_tool_names() -> list[str]:
     `knowledge_neighbors` and `skill` were both served and dispatched for
     releases while the gateway was never told they existed, so GM could not
     proxy tools that worked."""
-    return [t.name for t in _tools()]
+    return [t.name for t in _announced()]
 
 
 _VAULT_STATS: "str | None" = None
