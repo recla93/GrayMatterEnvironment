@@ -175,6 +175,9 @@ _ctx_cache = ContextCache(max_size=_cfg["cache_max_size"], ttl=_cfg["cache_ttl_s
 _stats: dict[str, float] = {"pulses": 0, "cache_hits": 0, "cache_misses": 0,
                             "flashes": 0, "bridges_added": 0, "pulse_ms_total": 0.0,
                             "kb_hints": 0}
+# Calls per tool this session (model-initiated only, not GM's internal
+# lookups): how many knowledge_query a pointer provokes was a feeling until now.
+_tool_calls: dict[str, int] = {}
 
 # D4 — conversation buffer: gli ultimi topic della sessione. Ogni pulse espande
 # la query NeuRAG col contesto recente (recall migliore su domande incrementali);
@@ -372,8 +375,11 @@ async def _bridge_blocks(topic: str, neurag_tags: set, limit: int) -> list[str]:
 # bridges for the topic, all inside the proactive budget. No vector search here,
 # ever: that stays behind an explicit knowledge_query / pulse, which is where the
 # token cost belongs.
-_KB_HINTS_PER_TURN = 2          # bridges shown next to the pointer; tokens, not a knob
+_KB_HINTS_PER_TURN = 1          # bridges shown next to the pointer; tokens, not a knob
 _KB_HINT_CACHE: dict = {}       # keyword -> (line, tags, node); ("", set(), "") = known miss
+_KB_HINT_SHOWN: set = set()     # pointers already shown this session: once per keyword.
+                                # A repeat is ~25 tokens that invite a ~1000-token
+                                # knowledge_query the model already chose to make or not.
 _KB_HINT_CACHE_MAX = 500        # ponytail: clear-all when full; LRU if it ever matters
 
 
@@ -426,8 +432,9 @@ async def _knowledge_hint(arguments: dict) -> str:
                 _KB_HINT_CACHE.clear()
             _KB_HINT_CACHE[key] = await _kb_lookup(q)
         line, tags, node = _KB_HINT_CACHE[key]
-        if not line:
+        if not line or key in _KB_HINT_SHOWN:
             continue
+        _KB_HINT_SHOWN.add(key)
         blocks.append(line)
         _stats["kb_hints"] += 1
         # A keyword the KB resolves by name IS a bridge: Neuron concept on one
@@ -630,6 +637,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     _last_call_time = time.time()
     _flash_counter += 1
+    _tool_calls[name] = _tool_calls.get(name, 0) + 1
 
     # --- Gray-Matter orchestrated tools ---
 
@@ -1235,6 +1243,8 @@ def _build_stats() -> dict:
         "flashes": int(_stats["flashes"]),
         "bridges_added_session": int(_stats["bridges_added"]),
         "bridges_total": len(all_bridges()),
+        "kb_hints": int(_stats["kb_hints"]),
+        "tool_calls": dict(sorted(_tool_calls.items(), key=lambda kv: -kv[1])),
         "avg_miss_ms": round(_stats["pulse_ms_total"] / misses, 1) if misses else 0.0,
         "workers_alive": [n for n, p in _workers.items() if p.poll() is None],
         "worker_latency": {n: {"calls": v["calls"],

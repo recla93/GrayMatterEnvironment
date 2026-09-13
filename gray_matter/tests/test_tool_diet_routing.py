@@ -35,7 +35,8 @@ def _call(S, name):
 def test_an_unannounced_tool_routes_by_name_prefix(gm):
     _call(gm, "knowledge_neighbors")     # hidden by NeuRAG's diet
     _call(gm, "consolidate")             # hidden by Neuron's diet
-    assert gm._routed[-2:] == [("neurag", "knowledge_neighbors"), ("neuron", "consolidate")]
+    # (consolidate makes side-calls of its own; membership is what matters)
+    assert {("neurag", "knowledge_neighbors"), ("neuron", "consolidate")} <= set(gm._routed)
 
 
 def test_an_announced_tool_still_routes_by_the_index(gm):

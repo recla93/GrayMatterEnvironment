@@ -28,6 +28,7 @@ def srv(tmp_path, monkeypatch):
                         lambda name: neurag if name == "neurag" else None)
     monkeypatch.setattr(S, "PROACTIVE_BUDGET", 800)
     S._KB_HINT_CACHE.clear()
+    S._KB_HINT_SHOWN.clear()
     S._stats["kb_hints"] = 0
 
     calls: list[tuple[str, str, dict]] = []
@@ -94,6 +95,16 @@ def test_a_cached_hit_does_not_reinforce_the_bridge_every_turn(srv):
     # minted once (weight 1); only a bridges_for() surfacing reinforces it, and
     # "db" matches neither endpoint nor the tags here
     assert b["weight"] == 1, b
+
+
+def test_a_pointer_is_shown_once_per_keyword_per_session(srv):
+    first = _hint(srv, topic="db", keywords=["turso"])
+    again = _hint(srv, topic="db", keywords=["turso"])
+    assert '📚 KB knows "Turso"' in first
+    assert "📚" not in again, again
+    assert srv._stats["kb_hints"] == 1
+    # a different keyword that resolves gets its own, once
+    assert '📚 KB knows "Turso"' in _hint(srv, topic="db", keywords=["libsql"])
 
 
 def test_the_bridges_of_the_topic_ride_along(srv):

@@ -218,11 +218,15 @@ def cmd_stats() -> None:
         sys.exit(1)
     print("Gray-Matter stats:")
     order = ["pulses", "cache_hits", "cache_misses", "cache_hit_rate", "cache_size",
-             "flashes", "bridges_added_session", "bridges_total", "avg_miss_ms",
-             "workers_alive"]
+             "flashes", "bridges_added_session", "bridges_total", "kb_hints",
+             "avg_miss_ms", "workers_alive"]
     for k in order:
         if k in r:
             print(f"  {k:22} {r[k]}")
+    if r.get("tool_calls"):
+        print("  tool_calls (this session):")
+        for k, v in r["tool_calls"].items():
+            print(f"    {k:28} {v}")
 
 
 def _report_wiring() -> bool:
