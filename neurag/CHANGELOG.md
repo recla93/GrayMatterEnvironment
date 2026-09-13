@@ -1,5 +1,10 @@
 ﻿# Changelog — NeuRAG
 
+## 1.4.2 (2026-09-13)
+- **`skill` diventa `knowledge_skill`.** Neuron espone `skill`: dietro
+  Gray-Matter le due liste si fondono e due tool con un nome sono un tool.
+  Gli hook di sessione dicono il nome nuovo. Wheel vendored 1.5.2.
+
 ## 1.4.1 (2026-09-13)
 - Wheel vendored di Gray Matter aggiornata alla 1.5.1 e pin `GM_VERSION`
   allineato negli installer. Nessuna modifica al codice di NeuRAG.

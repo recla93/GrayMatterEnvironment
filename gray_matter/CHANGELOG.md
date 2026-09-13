@@ -1,5 +1,12 @@
 ﻿# Changelog — Gray Matter
 
+## 1.5.2 (2026-09-13)
+- **I contatori per tool vivono nel daemon.** `stats` li leggeva dal daemon
+  ma l'incremento stava nel gateway stdio, e `cli stats` diceva zero. Ora
+  conta l'azione IPC `call`, dove passano le chiamate ai worker di ogni
+  gateway. `kb_hints` tolto da `stats` per la stessa ragione: i puntatori
+  nascono nel gateway; le lookup del gate sono `knowledge_neighbors`.
+
 ## 1.5.1 (2026-09-13)
 - **La radice del vault non e' un puntatore.** Visto sul vivo subito dopo la
   1.5.0: il topic "verifica live del puntatore" risolveva, tramite "del", il
