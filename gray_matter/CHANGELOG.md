@@ -1,6 +1,6 @@
-﻿# Changelog — Gray Matter
+# Changelog — Gray Matter
 
-## Unreleased
+## 1.5.3 (2026-09-14)
 - **Un tool ricorda l'altro: `pre_turn` su un problema suggerisce
   `brainstorm`.** `around`/`brainstorm` sono letture che nessun loop chiama da
   solo: hook, handshake e playbook non li nominavano, e il modello doveva

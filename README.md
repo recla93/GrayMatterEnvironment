@@ -24,9 +24,9 @@ Gray Matter is a **Model Context Protocol (MCP)** ecosystem that gives AI agents
 
 | Component | Version | Role | Learns? |
 |---|---|---|---|
-| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.5.2-7c8cff?style=flat-square)](neuron/) | Episodic/conceptual semantic memory — graph, salience, trust, decay | Yes |
-| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.4.2-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base — nodes, chunks, triggers, auto-ingest | No — permanent vault |
-| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.5.2-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, GUI | Bridges only |
+| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.5.3-7c8cff?style=flat-square)](neuron/) | Episodic/conceptual semantic memory — graph, salience, trust, decay | Yes |
+| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.4.3-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base — nodes, chunks, triggers, auto-ingest | No — permanent vault |
+| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.5.3-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, GUI | Bridges only |
 
 **Model:** MCP clients register ONLY `gray-matter` (the gateway). Neuron and
 NeuRAG run as GM-managed workers. Each can also run standalone.
@@ -293,11 +293,11 @@ python gray_matter/selfcheck.py      # Gray Matter deterministics
 3. Merge into `main`. `mirror.yml` splits the tree and fast-forwards the three
    public repos.
 4. Release by tagging **here**, with the prefix matching the subtree folder
-   name: `neuron-v6.5.2`, `neurag-v1.4.2`, `gray_matter-v1.5.2`. A bare `v*`
+   name: `neuron-v6.5.3`, `neurag-v1.4.3`, `gray_matter-v1.5.3`. A bare `v*`
    would fire all three at once, and a prefix that is not the folder name is
    how a tag gets published and never mirrored — `release-gm.yml` once fired on
    `gm-v*` while the mirror looked for `gray_matter-v*`. The mirror renames the
-   tag on the way out, so `neuron-v6.5.2` lands on Neuron as `v6.5.2`, and
+   tag on the way out, so `neuron-v6.5.3` lands on Neuron as `v6.5.3`, and
    then publishes the same Release there (wheels attached, notes generated
    from the mirror's history) — the tag alone left that repo's Releases page
    frozen on the last hand-made release while the tags moved on.

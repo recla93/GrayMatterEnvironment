@@ -1,6 +1,6 @@
-﻿# Changelog — NeuRAG
+# Changelog — NeuRAG
 
-## Unreleased
+## 1.4.3 (2026-09-14)
 - **README: tutti i 19 tool.** Mancavano `knowledge_ingest`/`_status`,
   `confirm`, `import`, `rename_node`, `remove_node`, `reindex`, `neighbors`,
   `related`, `skill`.
