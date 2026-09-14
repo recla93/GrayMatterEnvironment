@@ -85,6 +85,12 @@ def ingest_file(kg, path, godnode: "str | None" = None, say=None) -> dict:
 
     Il godnode di default è la cartella che contiene il file, non il file: chi
     salva tre PDF nella stessa cartella si aspetta di ritrovarli insieme.
+
+    Ma solo per un file NUOVO. Un file già nel vault si aggiorna dove sta: il
+    nome della cartella non basta a ritrovarne la casa (`neuron/docs/X.md` vive
+    sotto «neuron · docs», e il default «docs» lo avrebbe spostato sotto
+    l'omonimo della radice). Un `godnode` esplicito invece lo sposta davvero:
+    `index_into_node` cancella per sorgente, quindi non resta niente dietro.
     """
     say = say or (lambda s: None)
     path = Path(path).expanduser().resolve()
@@ -95,8 +101,14 @@ def ingest_file(kg, path, godnode: "str | None" = None, say=None) -> dict:
         raise ValueError(
             f"'{path.suffix or path.name}' non è un tipo indicizzabile. "
             f"Supportati: {', '.join(sorted(_SUPPORTED_EXTENSIONS))}")
-    god = (godnode or path.parent.name or "documenti").strip()
-    gn = _ensure_godnode(kg, god, report, say)
+    home = None if godnode else kg.node_for_source(path)
+    if home is not None:
+        gn = kg.get_node(home)
+        god = report["godnode"] = gn["name"]
+        say(f"[godnode] {god} (dove il file sta già)")
+    else:
+        god = (godnode or path.parent.name or "documenti").strip()
+        gn = _ensure_godnode(kg, god, report, say)
     n = kg.index_into_node(path, gn["id"])
     report["files"], report["chunks"] = 1, n
     say(f"  {path.name} -> {n} chunk")

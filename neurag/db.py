@@ -1247,6 +1247,12 @@ class KnowledgeGraph:
         ).fetchall()
         return [_without_vector(dict(r)) for r in rows]
 
+    def node_for_source(self, filepath: Path) -> Optional[int]:
+        """The node a file already lives in, or None if the vault never saw it."""
+        row = self._conn.execute(
+            "SELECT node_id FROM chunks WHERE source = ? LIMIT 1", (str(filepath),)).fetchone()
+        return int(row[0]) if row else None
+
     def index_into_node(self, filepath: Path, node_id: int) -> int:
         """Chunk a file, add the chunks to a node, and enrich the node's triggers
         with the symbols found (the tags each code chunk carries).
@@ -1260,7 +1266,13 @@ class KnowledgeGraph:
 
         Not a violation of "nothing is ever deleted": the same source's content
         is being REPLACED by its current version, not forgotten. Chunks whose
-        file is gone from disk are never touched here."""
+        file is gone from disk are never touched here.
+
+        The replace is by SOURCE alone, not (node, source): a file lives in one
+        node. Keyed on the pair, re-ingesting a file into a different node —
+        a single-file ingest with another godnode, a renamed folder — left the
+        old chunks under the old node and the vault held both versions (seen
+        live 2026-09-14: docs/DATA.md twice, the stale one still answering)."""
         source = str(filepath)
         # chunk_tags has no FK cascade (pyturso 0.6.1, see delete_node), so the
         # join rows go first or a re-ingest leaves them pointing at dead ids.
@@ -1269,10 +1281,8 @@ class KnowledgeGraph:
         try:
             self._conn.execute(
                 "DELETE FROM chunk_tags WHERE chunk_id IN "
-                "(SELECT id FROM chunks WHERE node_id = ? AND source = ?)",
-                (node_id, source))
-            self._conn.execute("DELETE FROM chunks WHERE node_id = ? AND source = ?",
-                               (node_id, source))
+                "(SELECT id FROM chunks WHERE source = ?)", (source,))
+            self._conn.execute("DELETE FROM chunks WHERE source = ?", (source,))
         except Exception:
             self._conn.rollback()
             raise

@@ -1,5 +1,18 @@
 ﻿# Changelog — NeuRAG
 
+## Unreleased
+- **Un file vive in un nodo solo.** Il replace-per-file di `index_into_node`
+  era per coppia (nodo, sorgente): re-ingerire un documento in un nodo
+  diverso — un file singolo con un altro `godnode`, una cartella rinominata —
+  lasciava i chunk vecchi sotto il nodo vecchio, e il vault teneva ENTRAMBE le
+  versioni (visto sul vivo 2026-09-14: `docs/DATA.md` due volte, la vecchia che
+  rispondeva ancora). Ora la cancellazione e' per sorgente, in qualunque nodo
+  stia. E `ingest_file` senza `godnode` aggiorna un file gia' noto DOVE STA
+  (`node_for_source`): il nome della cartella non basta a ritrovarne la casa
+  — `neuron/docs/X.md` vive sotto «neuron · docs», il default «docs» lo
+  avrebbe spostato sotto l'omonimo della radice. Un `godnode` esplicito lo
+  sposta davvero, senza lasciare niente dietro.
+
 ## 1.4.2 (2026-09-13)
 - **`skill` diventa `knowledge_skill`.** Neuron espone `skill`: dietro
   Gray-Matter le due liste si fondono e due tool con un nome sono un tool.

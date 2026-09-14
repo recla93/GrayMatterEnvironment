@@ -59,6 +59,35 @@ def test_re_ingesting_the_same_file_replaces_it_instead_of_duplicating(kg, tmp_p
     assert total == first, "il vault è raddoppiato al secondo ingest"
 
 
+def test_a_source_lives_in_one_node_only_even_across_godnodes(kg, tmp_path):
+    """Il caso trovato sul vivo (2026-09-14): docs/DATA.md ingerito con la
+    cartella stava sotto `docs`; re-ingerito da solo con godnode=radice e' finito
+    sotto la radice, e il vault ha tenuto ENTRAMBE le versioni. Il replace era
+    per (nodo, sorgente): con un nodo diverso i vecchi restavano."""
+    doc = _doc(tmp_path)
+    n = auto_ingest(kg, doc, godnode="A")["chunks"]
+    auto_ingest(kg, doc, godnode="B")
+    rows = kg._conn.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT node_id) FROM chunks WHERE source = ?",
+        (str(doc.resolve()),)).fetchone()
+    assert tuple(rows) == (n, 1), "stessa sorgente in due nodi: il vault e' raddoppiato"
+
+
+def test_a_known_file_stays_where_it_is_when_no_godnode_is_given(kg, tmp_path):
+    """Il nome della cartella non basta a ritrovare la casa di un file:
+    `neuron/docs/X.md` sta sotto `neuron · docs`, non sotto `docs`. Senza
+    godnode, un file gia' nel vault si aggiorna dove sta."""
+    (tmp_path / "docs").mkdir()
+    doc = _doc(tmp_path / "docs")
+    auto_ingest(kg, doc, godnode="neuron · docs")
+    kg.add_node(name="docs", node_type="godnode")        # l'omonimo sbagliato
+    auto_ingest(kg, doc)                                  # default: parent.name == "docs"
+    home = kg._conn.execute(
+        "SELECT DISTINCT node_id FROM chunks WHERE source = ?",
+        (str(doc.resolve()),)).fetchall()
+    assert [kg.get_node(r[0])["name"] for r in home] == ["neuron · docs"]
+
+
 def test_two_files_in_one_godnode_both_survive(kg, tmp_path):
     """Il replace è PER SORGENTE: aggiungerne uno non cancella l'altro."""
     auto_ingest(kg, _doc(tmp_path, "a.md", "# A\n\n" + "alfa unico. " * 20), godnode="R")
