@@ -154,3 +154,49 @@ now rendered. What's still missing, and why it wasn't done in the same pass:
 
 Revisit together, not separately — they're the same "is Turso actually
 working" question a user would ask.
+
+## 7. `promote` carries the memory, not just the name (2026-09-14)
+
+**What's wrong today.** `_do_promote` (gray_matter/server.py) reads Neuron's
+`export` — nodes and links, **no episodes** — and writes NeuRAG with
+`knowledge_add_node(name, triggers)` only: **no chunks**. A promoted concept is
+a bare label in the vault: no text, no embedding, `knowledge_query` never finds
+it. The CLS "missing third" (neurag/DESIGN-EVOLUTION.md §5.3) is only half
+built: the trace that made the concept stable never reaches the cortex.
+
+**The idea.** NeuRAG becomes *knowledge with its history*: every promoted
+concept lands with its episodes and its link rationales as chunks.
+
+| NeuRAG chunk | Carries |
+|---|---|
+| `text` | the episode ("hook one line behind, repair run, doctor still red") or the link with its reason (`doctor -[contrast]-> repair: repair alone only wipes`) |
+| `source` | provenance: `neuron:<context>/<keyword>` |
+| `section` | when: `turn 138` (or a date, see below) |
+| `embedding` | computed by NeuRAG — the fact becomes searchable |
+
+Then a bridge `neuron:<kw> <-> neurag:<kw>` so `pulse` and `brainstorm` know the
+two faces are one concept. Zero schema changes in NeuRAG (chunks already have
+`source`/`section`/`created_at`).
+
+**Steps (small):**
+1. Neuron `export` adds `"episodes"` — one line, the only touch on Neuron.
+2. `_do_promote`: after `add_node`, `add_chunks` with episodes + link rationales.
+3. Auto-bridge for each written node.
+4. Dry-run on the real `ai` graph (376 nodes) before `--apply`.
+
+**Guard rail.** Promoted text does not decay (promote.py docstring). Keep the
+three floors and the dry-run default; promote only the episodes recorded
+*after* the node cleared `min_trust`, not all five — facts from when the concept
+was still uncertain are the least reliable ones.
+
+**Dates — deliberately NOT in Neuron.** Episodes carry `turn`, not a timestamp.
+Decided 2026-09-14: leave the core alone. If dates are ever wanted, they go in a
+GM sidecar (`turn_ts(context, turn, ts)` in the bridges SQLite), written by the
+pass-through when `store_turn` answers "Turn N saved", joined at promote time.
+Extension-table pattern (JPA `@SecondaryTable`): the entity does not know the
+annotation exists; whoever needs it joins. Only GM-routed turns get a date —
+fine, promote is GM-only anyway (I2).
+
+**What "better" must mean:** a promoted concept is *found* by `knowledge_query`
+on the text of one of its facts, and `brainstorm` on a bug seed surfaces a
+past fix from the vault, not only from Neuron.
