@@ -124,5 +124,12 @@ def orphans() -> "list[dict]":
     L1/L2 descrivono. Il processo CORRENTE non è mai un orfano di se stesso.
     """
     me = os.getpid()
-    return [e for e in tracked()
-            if e["pid"] != me and e.get("ppid", 0) > 0 and not alive(e["ppid"])]
+    live = tracked()
+    # Il daemon nasce per sopravvivere a chi lo lancia: `gray-matter start` e'
+    # una CLI che esce subito, e da quel momento il suo ppid e' sempre morto.
+    # Per lui la domanda giusta e' "serve ancora qualcuno?": finche' c'e' uno
+    # stdio vivo (un client AI attaccato), non e' un orfano ma il gateway.
+    serving = any(e.get("role") == "stdio" for e in live)
+    return [e for e in live
+            if e["pid"] != me and e.get("ppid", 0) > 0 and not alive(e["ppid"])
+            and not (e.get("role") == "daemon" and serving)]

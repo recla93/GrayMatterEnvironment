@@ -1,6 +1,14 @@
-# Changelog — Gray Matter
+﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **Il doctor vede un daemon più vecchio del codice.** Riavviare il client
+  AI rilancia gli stdio, che si riagganciano al daemon già vivo: dopo un
+  cambio di codice `promote` dava 0 candidati con le regole nuove stampate
+  dalla CLI (14 settembre, mezz'ora persa). Check `processes`: l'istante di
+  avvio nel registro PID contro l'mtime dei `.py` del sorgente — se un file è
+  più nuovo del processo che dovrebbe eseguirlo, «gray-matter stop && start».
+  E un daemon lanciato da `gray-matter start` non è più un orfano finché serve
+  uno stdio vivo: il suo genitore è una CLI che esce subito, per costruzione.
 - **`promote` porta la memoria, non solo il nome.** Scriveva in NeuRAG un
   nodo con nome e trigger e zero chunk: niente testo, niente embedding,
   `knowledge_query` non lo trovava mai. Ora ogni concetto promosso arriva con

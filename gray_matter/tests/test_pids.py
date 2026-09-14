@@ -128,3 +128,22 @@ def test_executor_sees_the_registry():
     executor = pytest.importorskip("gray_matter.executor")
     pids.record_self("visible")
     assert os.getpid() in executor._tracked_pids()
+
+
+def test_a_daemon_serving_live_stdio_is_not_an_orphan():
+    """`gray-matter start` e' una CLI che esce subito: il ppid del daemon e'
+    sempre morto, e il doctor lo segnava orfano appena riavviato a mano.
+    Finche' c'e' uno stdio vivo, e' il gateway in servizio, non un fantasma."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"]); dead.wait()
+    daemon = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        pids._write([
+            {"pid": daemon.pid, "ppid": dead.pid, "role": "daemon", "started": 0},
+            {"pid": os.getpid(), "ppid": os.getppid(), "role": "stdio", "started": 0},
+        ])
+        assert pids.orphans() == []
+        # nessuno stdio: lo stesso daemon torna a essere un orfano
+        pids._write([{"pid": daemon.pid, "ppid": dead.pid, "role": "daemon", "started": 0}])
+        assert [e["role"] for e in pids.orphans()] == ["daemon"]
+    finally:
+        daemon.kill(); daemon.wait()

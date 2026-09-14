@@ -267,6 +267,35 @@ def check_wiring() -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         rec("versions", False, f"non verificabile: {exc}")
 
+    # 6. Il daemon e i worker girano il codice sul disco? Riavviare il client
+    #    AI rilancia gli stdio, che si riagganciano al daemon gia' vivo: dopo
+    #    un cambio di codice `promote` dava 0 candidati con le regole nuove
+    #    stampate dalla CLI (2026-09-14, mezz'ora persa). Il registro PID ha
+    #    l'istante di avvio; il sorgente ha l'mtime: se un .py e' piu' nuovo
+    #    del processo che dovrebbe eseguirlo, quel processo e' stantio.
+    try:
+        from gray_matter import pids as _pids
+        stale = []
+        for e in _pids.tracked():
+            role, started = e.get("role", ""), int(e.get("started") or 0)
+            if not started or role not in ("daemon", "worker:neuron", "worker:neurag"):
+                continue
+            slug = "gray-matter" if role == "daemon" else role.split(":", 1)[1]
+            src = paths.source_dir(slug)
+            if not src:
+                continue
+            newest = max((f.stat().st_mtime for f in Path(src).rglob("*.py")
+                          if "tests" not in f.parts and "build" not in f.parts), default=0)
+            if newest > started:
+                stale.append(f"{role} (pid {e['pid']})")
+        if stale:
+            rec("processes", False, "codice piu' nuovo del processo: " + ", ".join(stale),
+                "gray-matter stop && gray-matter start")
+        else:
+            rec("processes", True, "daemon e worker piu' recenti del codice")
+    except Exception as exc:  # noqa: BLE001
+        rec("processes", False, f"non verificabile: {exc}")
+
     return out
 
 

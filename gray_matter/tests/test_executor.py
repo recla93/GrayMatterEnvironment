@@ -368,3 +368,23 @@ def test_hook_drift_conta_il_verso_non_i_byte(env):
 
     b.write_bytes(b"uno\n")
     assert executor._hook_drift(a, b) == (0, 1)      # solo rimozioni
+
+
+def test_wiring_flags_a_daemon_older_than_the_code(env, monkeypatch, tmp_path):
+    """Riavviare il client AI rilancia gli stdio, che si riagganciano al daemon
+    gia' vivo: il codice nuovo non gira. Il registro PID ha l'istante di avvio,
+    il sorgente l'mtime: un .py piu' nuovo del processo = processo stantio."""
+    import time
+    from gray_matter import pids, paths
+    src = tmp_path / "gm_src"; src.mkdir()
+    (src / "server.py").write_text("x = 1", encoding="utf-8")
+    monkeypatch.setattr(paths, "source_dir", lambda slug: src if slug == "gray-matter" else None)
+    stale = int(time.time()) - 3600
+    monkeypatch.setattr(pids, "tracked", lambda: [
+        {"pid": 1, "ppid": 0, "role": "daemon", "started": stale}])
+    r = _wiring(env)["processes"]
+    assert not r["ok"] and "daemon" in r["detail"] and "stop" in r["fix"]
+    # processo piu' recente del codice: verde
+    monkeypatch.setattr(pids, "tracked", lambda: [
+        {"pid": 1, "ppid": 0, "role": "daemon", "started": int(time.time()) + 60}])
+    assert _wiring(env)["processes"]["ok"]
