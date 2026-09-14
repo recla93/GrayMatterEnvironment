@@ -38,8 +38,12 @@ posto naturale.
 - `state_set` / `state_get` / `state_delta` — key-value con TTL e versioni.
   `state_delta` include le entry scadute: il consumatore deve poter vedere che
   una chiave è decaduta, non solo che è sparita.
-- `brainstorm` — nodi lontani (Neuron) + chunk (NeuRAG), ordinati per distanza
-  decrescente.
+- `brainstorm` — il vicinato di un problema, con la sua storia: i nodi Neuron
+  in banda media (0.30–0.75: pertinenti ma non ovvi, dormienti o no) con i loro
+  fatti e le ragioni sui link, più i chunk NeuRAG più vicini. Per dilemmi e
+  decisioni. Nessuna misura inventata: la versione «nodi lontani ordinati per
+  distanza» prendeva la coda di una ricerca normale e chiamava il rank
+  distanza — l'ottavo chunk più vicino su seimila usciva come «1.0».
 
 ### Neuron — Ippocampo
 
@@ -119,7 +123,7 @@ coperto da uno esistente, si espande quello.
 | Pezzo | Perché no |
 |---|---|
 | `body_status` (vista unica del corpo) | pura aggregazione di `status` + `knowledge_status` + `bridges`: tre chiamate che l'agente può già fare. Un tool per risparmiare un giro non si motiva |
-| `evaluate` separato | la valutazione **è** l'ordinamento per distanza dentro `brainstorm`. Un file in meno |
+| `evaluate` separato | la valutazione la fa chi legge: `brainstorm` mette prima i nodi che portano un fatto o una ragione, e basta. Un file in meno |
 | Quarto server | i pezzi mancanti erano modalità dei tre esistenti, non un componente nuovo |
 | `sqld` (daemon Turso) | YAGNI a sessione singola: un processo proprietario per DB |
 | Flash on-demand | già coperto da `brainstorm` |

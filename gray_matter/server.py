@@ -458,55 +458,36 @@ async def _knowledge_hint(arguments: dict) -> str:
 
 
 async def _tool_brainstorm(args: dict) -> list[TextContent]:
-    """Cervello (GM, talamo): seed + elementi piu' DISTANTI di Neuron/NeuRAG.
-    Nodi: distanza = 1-cos dalla vector_search di Neuron (vettori reali, come da
-    spec mock). Chunk: il rank di knowledge_query fa da proxy di distanza (l'ultimo
-    e' il meno atteso). Niente auto-combinazione; ordinati per distanza decrescente."""
-    import json as _json
-    import re as _re
+    """Brain (GM, thalamus): what surrounds a problem, with its history.
+
+    Neuron `around` gives the mid-band nodes — related but not obvious — each
+    with its facts ("chose X because Y") and the reasons on its links: a past
+    decision, a bug already solved once. NeuRAG gives the nearest chunks: a
+    practice, a spec. Nothing is scored here: both sides carry their own
+    measure, and this tool no longer invents one. The previous version took
+    the TAIL of an ordinary search and labelled rank as distance — the 8th
+    nearest chunk of 6000 called "distance 1.0" (seen live 2026-09-14).
+    For dilemmas and decisions; a dormant node is marked so the caller can
+    confirm() it (or recall() it if archived)."""
     seed = str(args.get("seed", "")).strip()
     n = min(max(int(args.get("n", 5) or 5), 1), 10)
     if not seed:
         return [TextContent(type="text", text=(
-            "gray_matter_brainstorm: serve un 'seed' non vuoto. Combina il seed "
-            "con gli elementi piu' distanti (bassa similarita') di Neuron e NeuRAG."))]
-
-    pool: list[tuple[str, float]] = []   # (target, distance)
+            "gray_matter_brainstorm: serve un 'seed' non vuoto — il problema, il "
+            "dilemma o la decisione. Torna il vicinato non ovvio in memoria (con i "
+            "fatti e le ragioni) e i documenti piu' vicini."))]
+    parts = [f"Spunti attorno a '{seed}'"]
     try:
-        out = await _call_server_async("neuron", "vector_search",
-                                       {"keywords": [seed], "top_n": 50})
-        for line in out.splitlines():
-            m = _re.search(r"cos=([\d.]+)", line)
-            if not m:
-                continue
-            kw = line.split("cos=")[0].strip()
-            if kw:
-                pool.append((kw, 1.0 - float(m.group(1))))
-    except Exception:  # noqa: BLE001 — neuron assente: resta solo il pool NeuRAG
-        pass
-
+        parts.append(await _call_server_async("neuron", "around", {"topic": seed, "n": n}))
+    except Exception as exc:  # noqa: BLE001 — neuron assente: resta la conoscenza
+        parts.append(f"memoria: non disponibile ({exc})")
     try:
-        out = await _call_server_async("neurag", "knowledge_query",
-                                       {"query": seed, "top_n": 8})
-        lines = [l.strip() for l in out.splitlines()
-                 if l.strip().startswith("[")]
-        total = max(len(lines), 1)
-        for i, l in enumerate(lines):
-            pool.append((l, (i + 1) / total))
-    except Exception:  # noqa: BLE001 — neurag assente: resta solo il pool Neuron
-        pass
-
-    if not pool:
-        return [TextContent(type="text", text=(
-            f"gray_matter_brainstorm: nessun materiale da Neuron/NeuRAG per "
-            f"'{seed}'."))]
-
-    scored = [{"idea": f"{seed} + {t}", "target": t, "distance": round(d, 4)}
-              for t, d in pool if t.lower() != seed.lower()]
-    scored.sort(key=lambda c: c["distance"], reverse=True)
-    body = _json.dumps({"seed": seed, "candidates": scored[:n]},
-                       ensure_ascii=False, indent=2)
-    return [TextContent(type="text", text=body)]
+        parts.append(await _call_server_async("neurag", "knowledge_query",
+                                              {"query": seed, "top_n": min(n, 3)}))
+    except Exception as exc:  # noqa: BLE001 — neurag assente: resta la memoria
+        parts.append(f"conoscenza: non disponibile ({exc})")
+    parts.append("Dormant → confirm(keywords) per rialzarlo; archiviato → recall(keyword).")
+    return [TextContent(type="text", text="\n\n".join(parts))]
 
 
 _is_sleeping: bool = False
@@ -610,12 +591,12 @@ async def list_tools() -> list[Tool]:
     ))
     tools.append(Tool(
         name="gray_matter_brainstorm",
-        description="Brain (GM, thalamus): pairs a seed with the most DISTANT items (lowest similarity) from Neuron (nodes) and NeuRAG (chunks) — unexpected candidates, ordered by distance. Requires 'seed'.",
+        description="Brain (GM, thalamus): what surrounds a problem, with its history. Mid-band memory nodes (related but not obvious) with their facts and link rationales — a past decision, a bug solved once — plus the nearest knowledge chunks. For dilemmas, problems and decisions. Requires 'seed'.",
         inputSchema={
             "type": "object",
             "properties": {
-                "seed": {"type": "string", "description": "Concept to generate ideas from"},
-                "n": {"type": "integer", "description": "Number of candidates (default 5, max 10)"},
+                "seed": {"type": "string", "description": "The problem, dilemma or decision to think around"},
+                "n": {"type": "integer", "description": "Memory nodes to show (default 5, max 10); knowledge chunks capped at 3"},
             },
             "required": ["seed"],
         },

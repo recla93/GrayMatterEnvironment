@@ -1,6 +1,16 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **`brainstorm` fa quello che promette: il vicinato di un problema, con la
+  sua storia.** Prendeva la coda di una `knowledge_query` e chiamava il rank
+  distanza (l'ottavo chunk più vicino su seimila usciva come «1.0»), e da
+  Neuron i 20 nodi più vicini — `vector_search` tronca lì — presentati come i
+  più lontani. Ora compone Neuron `around` (banda media 0.30–0.75, dormienti o
+  no, ognuno coi suoi fatti e le ragioni intere sui link; prima chi porta
+  qualcosa) e i 3 chunk NeuRAG più vicini, senza inventare misure. Sul vivo,
+  seed «il daemon non si riavvia»: primo spunto un nodo dormiente da 71 turni
+  con la spiegazione esatta del problema di quella sera. I dormienti sono
+  marcati: `confirm` li rialza, `recall` riporta gli archiviati.
 - **Backup della suite: una cartella al giorno, tre sottocartelle.** Neuron
   faceva le sue 5 copie in `_backups/`, NeuRAG e i bridge GM nessuna. Ora il
   daemon copia i tre store in `<suite>/backups/gm-graph-backup_<data>/`
