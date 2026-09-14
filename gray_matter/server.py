@@ -12,6 +12,7 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -204,6 +205,7 @@ FLASH_MIN_GAP = _cfg["flash_min_gap"]   # min pulses between flashes (anti-spam)
 # settings (→ GUI Preferences): stimulus_safety_net / stimulus_safety_gap.
 STIM_SAFETY_NET = _cfg["stimulus_safety_net"]
 STIM_SAFETY_GAP = _cfg["stimulus_safety_gap"]
+BRAINSTORM_HINT = _cfg["brainstorm_hint"]
 _turns_since_stim: int = 0
 
 # Quanto contesto GM inietta. Il punto del progetto è far RISPARMIARE token, e
@@ -413,6 +415,30 @@ async def _kb_lookup(query: str) -> tuple:
             + (" · near: " + ", ".join(near) if near else "")
             + f' → knowledge_query("{name}") for the detail')
     return line, tags, name
+
+
+# Un tool ricorda l'altro: `around`/`brainstorm` sono letture che nessun loop
+# chiama da solo, quindi il momento giusto glielo dice pre_turn. La parola
+# arriva dal modello stesso (topic/keywords), non dal testo dell'utente.
+# ponytail: lista di parole, non un classificatore — un embedding se i buchi si accumulano.
+_PROBLEM_WORDS = frozenset({
+    "bug", "debug", "fix", "error", "errore", "issue", "crash", "fail", "failure",
+    "fallisce", "fallito", "dilemma", "decision", "decisione", "problem", "problema",
+    "why", "perche", "perché", "regression", "regressione", "broken", "rotto"})
+
+
+def _brainstorm_hint(arguments: dict) -> str:
+    """One line on a pre_turn whose topic/keywords name a problem: point the
+    model at gray_matter_brainstorm. Empty otherwise — the common case."""
+    if not BRAINSTORM_HINT:
+        return ""
+    text = " ".join([str(arguments.get("topic", "")),
+                     *map(str, arguments.get("keywords") or [])]).lower()
+    words = set(re.findall(r"[a-zà-ù]+", text))
+    if not (words & _PROBLEM_WORDS):
+        return ""
+    return ("\n💡 Looks like a problem or a decision: gray_matter_brainstorm(seed) "
+            "before answering — the seed is the problem in one sentence.")
 
 
 async def _knowledge_hint(arguments: dict) -> str:
@@ -823,12 +849,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     result = await _call_server_async(server.name, name, arguments)
     # La KB viaggia sulla call che il modello fa davvero (vedi _knowledge_hint).
-    kb = (await _knowledge_hint(arguments)
-          if server.name == "neuron" and name == "pre_turn" else "")
+    is_pre = server.name == "neuron" and name == "pre_turn"
+    kb = (await _knowledge_hint(arguments) if is_pre else "")
+    bs = _brainstorm_hint(arguments) if is_pre else ""
     # Rete di sicurezza stimoli: se il piggyback di Neuron non passa da troppi
     # turni (LLM ha "dimenticato" i tool giusti), GM lo rilancia qui.
     note = await _safety_net_note(name, arguments, result or "")
-    return [TextContent(type="text", text=(result or "(empty)") + kb + note)]
+    return [TextContent(type="text", text=(result or "(empty)") + kb + bs + note)]
 
 
 # Persistent workers: one long-lived subprocess per server (imported once, model

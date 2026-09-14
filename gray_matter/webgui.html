@@ -50,16 +50,31 @@
 
   /* --- corpo: gruppi, dal più grande al più piccolo --- */
   section{flex:1;overflow-y:auto;padding:16px 20px;min-width:0}
-  .grp{margin-bottom:22px}
+  .grp{margin-bottom:18px}
+  /* Titolo di gruppo = interruttore: stesso caret e stessa regola delle
+     infra-card (stato in localStorage), cosi' le sezioni che non servono
+     oggi si mettono da parte e restano da parte. */
   .grp h3{margin:0 0 9px;font-size:11px;letter-spacing:.13em;text-transform:uppercase;
-          color:var(--dim);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:5px}
-  .cmds{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:8px}
+          color:var(--dim);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:5px;
+          cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+  .grp h3:hover{color:var(--fg)}
+  .grp h3::before{content:"▾";font-size:9px;transition:transform .12s;opacity:.7}
+  .grp.collapsed h3::before{transform:rotate(-90deg)}
+  .grp.collapsed h3{margin-bottom:0}
+  .grp.collapsed > *:not(h3){display:none}
+  /* Lista verticale, una card per riga: nome a sinistra a larghezza fissa,
+     descrizione accanto. La griglia a colonne mescolava 27 comandi in un
+     mosaico senza ordine di lettura. */
+  .cmds{display:flex;flex-direction:column;gap:6px}
   .cmd{background:var(--panel);border:1px solid var(--line);border-radius:8px;
-       padding:10px 12px;cursor:pointer;transition:border-color .12s}
+       padding:8px 12px;cursor:pointer;transition:border-color .12s;
+       display:grid;grid-template-columns:150px 1fr;column-gap:12px;align-items:baseline}
   .cmd:hover{border-color:var(--accent)}
-  .cmd[aria-expanded="true"]{border-color:var(--accent);grid-column:1/-1}
+  .cmd[aria-expanded="true"]{border-color:var(--accent)}
   .cmd .n{font-family:var(--mono);font-size:13px;color:var(--accent)}
-  .cmd .h{font-size:12px;color:var(--dim);margin-top:3px}
+  .cmd .h{font-size:12px;color:var(--dim)}
+  .cmd .when,.cmd .form{grid-column:1/-1}
+  @media (max-width:640px){.cmd{grid-template-columns:1fr}}
   /* "Quando serve": staccato dalla descrizione da una barra laterale, perche'
      risponde a una domanda diversa (non "cosa fa" ma "e' questo che mi serve
      adesso") e non deve leggersi come la continuazione della riga sopra. */
@@ -153,7 +168,11 @@
                  background:var(--panel)}
   .clients-panel.show{display:block}
   .clients-panel .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
-  .clients-panel .head .title{font-weight:600}
+  .clients-panel .head .title{font-weight:600;cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+  .clients-panel .head .title::before{content:"BE";font-size:9px;transition:transform .12s;opacity:.7}
+  .clients-panel.collapsed .head .title::before{transform:rotate(-90deg)}
+  .clients-panel.collapsed .head{margin-bottom:0}
+  .clients-panel.collapsed > *:not(.head){display:none}
   .clients-panel .head .sub{color:var(--dim);font-size:12px;flex:1;min-width:180px}
   .clients-grid{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
   .client-item{display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:6px;
@@ -597,11 +616,11 @@ function render(){
   const procCard = el("div", {class:"cmds"});
   procCard.append(el("div", {class:"hint"}, T("loading")));
   setTimeout(() => processPanel(env, procCard), 50);
-  body.append(el("div", {class:"grp"}, el("h3", {}, T("processes_title")), procCard));
+  body.append(groupCard(env.key + ":processes", T("processes_title"), procCard));
   for (const g of env.groups){
     const cards = el("div", {class:"cmds"});
     for (const c of g.commands) cards.append(commandCard(env, c));
-    body.append(el("div", {class:"grp"}, el("h3", {}, g.label), cards));
+    body.append(groupCard(env.key + ":" + g.key, g.label, cards));
   }
   applyCmdFilter();
 }
@@ -612,6 +631,7 @@ function render(){
 function applyCmdFilter(){
   const q = document.getElementById("cmd-filter").value.trim().toLowerCase();
   document.querySelectorAll("#body .grp").forEach(grp => {
+    if (!grp.querySelector(".cmd")) return;   // pannello processi: non e' un elenco di comandi
     let anyVisible = false;
     grp.querySelectorAll(".cmd").forEach(card => {
       const show = !q || card.textContent.toLowerCase().includes(q);
@@ -1159,15 +1179,22 @@ document.getElementById("btn-copy").addEventListener("click", async () => {
 // Card collassabile. Lo stato sta in localStorage per chiave, non nel DOM:
 // refreshInfra() ricostruisce le card da zero a ogni giro, quindi qualunque
 // stato tenuto nell'elemento verrebbe buttato via al primo refresh.
-function infraCard(key, title){
-  const card = el("div", {class:"infra-card"});
+function collapsible(card, head, key){
   if (localStorage.getItem("gm_collapsed_" + key) === "1") card.classList.add("collapsed");
-  const h = el("h4", {}, title);
-  h.addEventListener("click", () => {
+  head.addEventListener("click", () => {
     const now = card.classList.toggle("collapsed");
     localStorage.setItem("gm_collapsed_" + key, now ? "1" : "0");
   });
-  card.append(h);
+  card.append(head);
+  return card;
+}
+function infraCard(key, title){
+  return collapsible(el("div", {class:"infra-card"}), el("h4", {}, title), key);
+}
+// Gruppo di comandi (o il pannello processi): titolo cliccabile, corpo sotto.
+function groupCard(key, title, bodyEl){
+  const card = collapsible(el("div", {class:"grp"}), el("h3", {}, title), "grp_" + key);
+  card.append(bodyEl);
   return card;
 }
 
@@ -1495,6 +1522,16 @@ document.getElementById("btn-clients-refresh").onclick = loadClients;
 document.getElementById("btn-clients-register").onclick = registerClients;
 document.getElementById("btn-clients-hide").onclick = () =>
   document.getElementById("clients-panel").classList.remove("show");
+// Il pannello client si puo' anche solo ripiegare (titolo), e il ripiego resta.
+{
+  const panel = document.getElementById("clients-panel");
+  const title = document.getElementById("clients-title");
+  if (localStorage.getItem("gm_collapsed_clients") === "1") panel.classList.add("collapsed");
+  title.addEventListener("click", () => {
+    const now = panel.classList.toggle("collapsed");
+    localStorage.setItem("gm_collapsed_clients", now ? "1" : "0");
+  });
+}
 setTimeout(loadClients, 1000);
 setTimeout(refreshInfra, 1200);
 // Command filter lives outside #body so it survives render() rebuilds.

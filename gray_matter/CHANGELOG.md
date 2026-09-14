@@ -1,6 +1,34 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **Un tool ricorda l'altro: `pre_turn` su un problema suggerisce
+  `brainstorm`.** `around`/`brainstorm` sono letture che nessun loop chiama da
+  solo: hook, handshake e playbook non li nominavano, e il modello doveva
+  dedurre da sé che il turno era un dilemma. Ora la risposta di `pre_turn`
+  porta una riga in più quando topic o keywords parlano di bug, errori,
+  dilemmi o decisioni — stesso `+` di `_knowledge_hint` e della rete di
+  sicurezza. Knob `brainstorm_hint` (default on): CLI, GUI e `config set`.
+  L'hook di sessione porta la stessa regola in forma statica, solo dietro il
+  gateway; il playbook ha il passo `[THINK]`.
+- **GUI: comandi in lista, sezioni che si mettono da parte.** 27 comandi in
+  una griglia a colonne erano un mosaico senza ordine di lettura: ora una card
+  per riga (nome | descrizione) e ogni gruppo si ripiega dal titolo, come le
+  infra-card, stato in localStorage. Anche il pannello Client MCP si ripiega.
+  Trovato per strada: il filtro nascondeva sempre il pannello «Processi dei
+  comandi» (nessuna `.cmd` dentro → gruppo vuoto → `display:none`).
+- **Il doctor consiglia `repair --reinstall`, non `repair`.** Sette hint di
+  `check_wiring` (registro, entry SessionStart, hook deployato) promettevano
+  «ri-deploya l'hook» da `gray-matter repair`, che da solo pulisce i dati e si
+  ferma. Chi riscrive registro, entry e hook e' l'installer, e lo lancia solo
+  `--reinstall`. Trovato sul vivo: hook indietro di una riga
+  (`skill` → `knowledge_skill`), `repair` eseguito, doctor ancora rosso. Le
+  descrizioni di `repair` e `config` nel catalogo GUI dicevano lo stesso.
+- **README della suite: le tabelle dei tool dai nomi reali.** Neuron
+  documentava `neuron_pre_turn` — un prefisso che nel codice non esiste — e
+  mancavano `around`, `recall`, `dismiss`, `help`, `skill`; NeuRAG ne
+  ometteva otto su diciannove; GM non citava `brainstorm`, `state_*`, il
+  backup giornaliero. Ora le liste sono estratte dal codice, e c'e' un test
+  che se ne accorge quando divergono di nuovo (`test_readme_tools`).
 - **`brainstorm` fa quello che promette: il vicinato di un problema, con la
   sua storia.** Prendeva la coda di una `knowledge_query` e chiamava il rank
   distanza (l'ottavo chunk più vicino su seimila usciva come «1.0»), e da

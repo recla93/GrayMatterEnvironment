@@ -66,9 +66,9 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "When you want to stop using the suite. Your memory is kept unless you explicitly ask to delete it.",
     ),
     ("gray-matter", "repair"): (
-        "Reinstall pulito: scegli cosa cancellare (memoria, conoscenza, ponti, config, registrazioni) e cosa tenere, poi reinstalla forzando il bypass del check di versione.",
+        "Pulizia selettiva: scegli cosa cancellare (memoria, conoscenza, ponti, config, registrazioni) e cosa tenere. Da solo NON reinstalla: con --reinstall rilancia subito l'installer con -Force (bypass del check di versione), che riscrive registro, hook ed entry nei client.",
         "Quando 'install' non basta più: codice aggiornato ma stessa versione, o uno stato che non torna. Prima prova 'doctor'.",
-        "Clean reinstall: pick what to delete (memory, knowledge, bridges, config, registrations) and what to keep, then force-reinstall bypassing the version check.",
+        "Selective cleanup: pick what to delete (memory, knowledge, bridges, config, registrations) and what to keep. Alone it does NOT reinstall: --reinstall runs the installer right away with -Force (bypassing the version check), which rewrites the registry, the hook and the client entries.",
         "When 'install' is no longer enough: code changed but the version did not, or state that no longer adds up. Try 'doctor' first.",
     ),
     ("gray-matter", "start"): (
@@ -154,9 +154,9 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
 
     # ── Gray Matter — regolazione e rete ─────────────────────────────────
     ("gray-matter", "config"): (
-        "Configurazione del gateway: cache, flash rate, TTL, prewarm.",
+        "Configurazione del gateway: cache (TTL, dimensione), stimoli (flash rate, rete di sicurezza, hint brainstorm), tetti di token per memoria e conoscenza, prewarm, tool sganciati.",
         "Per regolare il comportamento senza toccare il codice. Parti da action=list per vedere cosa esiste.",
-        "Gateway configuration: cache, flash rate, TTL, prewarm.",
+        "Gateway configuration: cache (TTL, size), stimuli (flash rate, safety net, brainstorm hint), token caps for memory and knowledge, prewarm, unmanaged tools.",
         "To tune behaviour without touching code. Start with action=list to see what exists.",
     ),
     ("gray-matter", "cloud"): (
@@ -288,9 +288,9 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "To use memory alone, without the knowledge base. Undo with 'gray-matter link'.",
     ),
     ("neuron", "repair"): (
-        "Reinstall pulito SOLO di Neuron: scegli cosa cancellare (memoria, config), poi reinstalla forzato.",
+        "Pulizia selettiva SOLO di Neuron: scegli cosa cancellare (memoria, config). Con --reinstall rilancia subito l'installer di Neuron con -Force.",
         "Quando è Neuron a essere rotto e non vuoi toccare NeuRAG né il gateway.",
-        "Clean reinstall of Neuron ONLY: pick what to delete (memory, config), then force-reinstall.",
+        "Selective cleanup of Neuron ONLY: pick what to delete (memory, config). --reinstall then runs Neuron's installer right away with -Force.",
         "When Neuron is the broken one and you do not want to touch NeuRAG or the gateway.",
     ),
     ("neuron", "migrate"): (
@@ -526,9 +526,9 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Before an update, or to release the database.",
     ),
     ("neurag", "repair"): (
-        "Reinstall pulito SOLO di NeuRAG: scegli cosa cancellare (conoscenza, config), poi reinstalla forzato.",
+        "Pulizia selettiva SOLO di NeuRAG: scegli cosa cancellare (conoscenza, config). Con --reinstall rilancia subito l'installer di NeuRAG con -Force.",
         "Quando è NeuRAG a essere rotto e non vuoi toccare Neuron né il gateway.",
-        "Clean reinstall of NeuRAG ONLY: pick what to delete (knowledge, config), then force-reinstall.",
+        "Selective cleanup of NeuRAG ONLY: pick what to delete (knowledge, config). --reinstall then runs NeuRAG's installer right away with -Force.",
         "When NeuRAG is the broken one and you do not want to touch Neuron or the gateway.",
     ),
     ("neurag", "uninstall"): (

@@ -262,14 +262,28 @@ NEURAG_TURSO_DATABASE_URL=libsql://... NEURAG_TURSO_AUTH_TOKEN=... python -m neu
 ## 🧰 MCP tools
 
 <details>
-<summary><strong>Core: index, organize, query</strong></summary>
+<summary><strong>Core: ingest, organize, query</strong></summary>
 
 | Tool | Description |
 |---|---|
-| `knowledge_index(path)` | Chunk a file or directory → returns JSON list of chunks |
+| `knowledge_ingest(path)` / `knowledge_ingest_status` | Graph-ize a folder or a single document server-side in one call · status of the ingest jobs |
+| `knowledge_index(path)` | Chunk a file or directory → returns JSON list of chunks (manual path) |
 | `knowledge_add_node(name, node_type, parent_name?, triggers?)` | Create a node in the hierarchy |
 | `knowledge_add_chunks(node_name, chunks)` | Attach previously indexed chunks to a node |
+| `knowledge_import(mapping)` | Bulk-import a folder tree from a YAML mapping, deterministically |
 | `knowledge_query(query, top_n?)` | Search: vector **and** BM25 always, fused with RRF, then MMR-diversified |
+| `knowledge_confirm(...)` | Mark results as useful together, so their links strengthen |
+
+</details>
+
+<details>
+<summary><strong>Curation</strong></summary>
+
+| Tool | Description |
+|---|---|
+| `knowledge_rename_node` / `knowledge_remove_node` | Rename a node (updates its path and its subtree's) · delete a node and its entire subtree |
+| `knowledge_reindex` | Re-embed every chunk with the active embedding model (after changing `embed_model`) |
+| `knowledge_skill(name)` | Full text of a NeuRAG skill on demand (e.g. `usage`) |
 
 </details>
 
@@ -285,10 +299,12 @@ NEURAG_TURSO_DATABASE_URL=libsql://... NEURAG_TURSO_AUTH_TOKEN=... python -m neu
 </details>
 
 <details>
-<summary><strong>Cross-linking</strong></summary>
+<summary><strong>Cross-linking & navigation</strong></summary>
 
 | Tool | Description |
 |---|---|
+| `knowledge_neighbors(query)` | Structured neighbourhood of a node: parent, children, links |
+| `knowledge_related(query, k?)` | Associative expansion: spreading activation from a node, k hops |
 | `knowledge_link_graph` | Show all node links with weights and evidence |
 | `knowledge_rebuild_links` | Clear all links and rebuild from tags + cross-refs |
 

@@ -133,10 +133,10 @@ def check_wiring() -> list[dict]:
         if hook_root is not None and Path(hook_root) != Path(root):
             rec("registry", False,
                 f"GM scrive in {root}, l'hook legge {hook_root}",
-                "reinstalla l'hook: gray-matter repair")
+                "reinstalla l'hook: gray-matter repair --reinstall")
         elif not tools:
             rec("registry", False, f"nessun tool registrato in {root}",
-                "gray-matter repair (riscrive il registro)")
+                "gray-matter repair --reinstall (riscrive il registro)")
         else:
             rec("registry", True, f"{root} -> {', '.join(tools)}")
     except Exception as exc:  # noqa: BLE001
@@ -156,10 +156,10 @@ def check_wiring() -> list[dict]:
         if broken:
             rec("hook_entry", False,
                 f"interprete inesistente: {_hook_interpreter(broken[0])}",
-                "gray-matter repair (riscrive la entry)")
+                "gray-matter repair --reinstall (riscrive la entry)")
         elif not ours:
             rec("hook_entry", False, "nessuna entry SessionStart registrata",
-                "gray-matter repair")
+                "gray-matter repair --reinstall")
         else:
             rec("hook_entry", True, f"{len(ours)} entry, interprete presente")
     except (json.JSONDecodeError, OSError) as exc:
@@ -171,7 +171,7 @@ def check_wiring() -> list[dict]:
         src = _find_clients_root() / "claude-code-hook" / "neuron_sessionstart_hook.py"
         dst = _claude_dir() / "hooks" / "neuron_sessionstart_hook.py"
         if not dst.exists():
-            rec("hook_file", False, f"non deployato: {dst}", "gray-matter repair")
+            rec("hook_file", False, f"non deployato: {dst}", "gray-matter repair --reinstall")
         elif src.exists() and src.read_bytes() != dst.read_bytes():
             # "Diverso" non vuol dire STANTIO. Il deployato puo' essere piu'
             # AVANTI del sorgente: modificato in loco e mai portato nel repo.
@@ -184,10 +184,10 @@ def check_wiring() -> list[dict]:
                     f"{dst} ha {added} righe che il sorgente non ha: il deploy "
                     f"e' PIU' AVANTI del repo",
                     "NON riparare (perderesti quelle righe): portale nel "
-                    "sorgente, poi gray-matter repair")
+                    "sorgente, poi gray-matter repair --reinstall")
             else:
                 rec("hook_file", False, f"{dst} e' diverso dal sorgente",
-                    "gray-matter repair (ri-deploya l'hook)")
+                    "gray-matter repair --reinstall (ri-deploya l'hook)")
         else:
             rec("hook_file", True, str(dst))
     except OSError as exc:

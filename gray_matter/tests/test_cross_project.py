@@ -697,3 +697,21 @@ def test_every_server_reports_its_own_version_not_the_sdk_s():
                     if ln.startswith("app = Server("))
         assert "version=" in line, f"{project}: {line.strip()}"
     assert checked, "nessun sorgente server presente in questo albero"
+
+
+class TestBrainstormHint:
+    """pre_turn on a problem gets one line pointing at gray_matter_brainstorm;
+    a neutral turn gets nothing; the knob switches it off."""
+
+    def test_fires_on_problem_words(self):
+        import gray_matter.server as srv
+        assert "gray_matter_brainstorm" in srv._brainstorm_hint(
+            {"topic": "bug nel daemon", "keywords": ["daemon"]})
+        assert "gray_matter_brainstorm" in srv._brainstorm_hint(
+            {"topic": "scelta", "keywords": ["decisione", "cache"]})
+
+    def test_silent_otherwise(self, monkeypatch):
+        import gray_matter.server as srv
+        assert srv._brainstorm_hint({"topic": "tabelle README", "keywords": ["docs"]}) == ""
+        monkeypatch.setattr(srv, "BRAINSTORM_HINT", False)
+        assert srv._brainstorm_hint({"topic": "bug", "keywords": []}) == ""

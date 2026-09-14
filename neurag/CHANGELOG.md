@@ -1,6 +1,9 @@
 ﻿# Changelog — NeuRAG
 
 ## Unreleased
+- **README: tutti i 19 tool.** Mancavano `knowledge_ingest`/`_status`,
+  `confirm`, `import`, `rename_node`, `remove_node`, `reindex`, `neighbors`,
+  `related`, `skill`.
 - **Un file vive in un nodo solo.** Il replace-per-file di `index_into_node`
   era per coppia (nodo, sorgente): re-ingerire un documento in un nodo
   diverso — un file singolo con un altro `godnode`, una cartella rinominata —

@@ -159,7 +159,7 @@ entries) and deploys per-client hooks.
 Once installed, your AI client can call:
 
 - **`gray_matter_pulse(topic)`** — the unified memory + knowledge call
-- **Any Neuron/NeuRAG tool** — passed through transparently (e.g. `neuron_store_turn`,
+- **Any Neuron/NeuRAG tool** — passed through transparently (e.g. `store_turn`,
   `knowledge_query`, `knowledge_index`)
 
 ### Teardown
@@ -176,36 +176,49 @@ gray-matter uninstall --purge-data # wipes everything, no questions
 ## 🧰 MCP tools
 
 <details>
-<summary><strong>The unified pulse</strong></summary>
+<summary><strong>Gray Matter's own tools</strong></summary>
 
 | Tool | Description |
 |---|---|
 | `gray_matter_pulse(topic, top_n?)` | Combined memory + knowledge + bridges + flash in one call |
+| `gray_matter_brainstorm(seed, n?)` | What surrounds a problem, with its history: mid-band memory nodes (related but not obvious) with their facts and link rationales, plus the nearest knowledge chunks. For dilemmas, bugs and decisions |
 | `gray_matter_status()` | Server summary: version, flash counter, registered servers |
 | `gray_matter_bridge(neuron_concept, neurag_node, rationale?)` | Persist a cross-store bridge manually |
+| `gray_matter_state_set` / `gray_matter_state_get` / `gray_matter_state_delta` | Blackboard: publish `key=value` with an optional TTL · read a key · changes since a version |
 
 </details>
 
 <details>
 <summary><strong>Pass-through: Neuron tools</strong></summary>
 
-All Neuron tools are republished with their original schemas:
+Republished with their original names and schemas (`mcp__gray-matter__pre_turn`, …):
 
-`neuron_pre_turn`, `neuron_store_turn`, `neuron_confirm`, `neuron_get_context`,
-`neuron_status`, `neuron_summary`, `neuron_vector_search`, `neuron_find_candidates`,
-`neuron_merge`, `neuron_auto`, `neuron_extract`, `neuron_switch_context`,
-`neuron_list_contexts`, `neuron_forgotten`, `neuron_prune`, `neuron_export`, `neuron_reset`
+`pre_turn`, `store_turn`, `confirm`, `dismiss`, `get_context`, `status`,
+`find_candidates`, `forgotten`, `recall`, `switch_context`, `list_contexts`,
+`help`, `skill` — plus Neuron's admin tools (`around`, `vector_search`, `merge`,
+`consolidate`, `prune`, `export`, `reset`, …) reachable by name.
 
 </details>
 
 <details>
 <summary><strong>Pass-through: NeuRAG tools</strong></summary>
 
-All NeuRAG tools are republished with their original schemas:
+`knowledge_query`, `knowledge_confirm`, `knowledge_ingest`, `knowledge_ingest_status`,
+`knowledge_index`, `knowledge_add_node`, `knowledge_add_chunks`, `knowledge_import`,
+`knowledge_rename_node`, `knowledge_remove_node`, `knowledge_reindex`,
+`knowledge_status`, `knowledge_tree`, `knowledge_health`, `knowledge_neighbors`,
+`knowledge_related`, `knowledge_link_graph`, `knowledge_rebuild_links`, `knowledge_skill`
 
-`knowledge_query`, `knowledge_index`, `knowledge_add_node`, `knowledge_add_chunks`,
-`knowledge_status`, `knowledge_tree`, `knowledge_health`,
-`knowledge_link_graph`, `knowledge_rebuild_links`
+</details>
+
+<details>
+<summary><strong>A tool that reminds you of another tool</strong></summary>
+
+`around`/`brainstorm` are reads that no loop calls on its own. So the gateway
+tells the model when: a `pre_turn` whose topic or keywords name a bug, error,
+dilemma or decision gets one extra line — *call `gray_matter_brainstorm(seed)`
+before answering*. Knob `brainstorm_hint` (default on) switches it off; the
+session-start hook carries the same rule statically.
 
 </details>
 
@@ -219,7 +232,7 @@ All NeuRAG tools are republished with their original schemas:
 |---|---|
 | `gray-matter install [--dry-run]` | Idempotent gateway install: reap orphans, register GM, deploy hooks |
 | `gray-matter uninstall [--purge-data] [--yes] [--dry-run]` | Remove GM (interactive on memory) |
-| `gray-matter repair` | Clean reinstall: choose what to delete, what to keep |
+| `gray-matter repair [keys] [--reinstall]` | Clean repair: choose what to delete; `--reinstall` then runs the installer with -Force |
 | `gray-matter start` | Start the GM daemon |
 | `gray-matter stop` | Stop the GM daemon |
 
@@ -251,6 +264,7 @@ All NeuRAG tools are republished with their original schemas:
 | `gray-matter bridges` | List persisted cross-store bridges |
 | `gray-matter bridges-transfer` | Move bridges between local and cloud |
 | `gray-matter bridge` | Expose the suite over HTTP for remote connectors |
+| `gray-matter backup [--force]` | Copy the three stores (Neuron graphs, NeuRAG vault, GM bridges) into `<suite>/backups/gm-graph-backup_<date>/`; the daemon does it once a day and keeps 7 days |
 
 ### Configuration
 
@@ -336,6 +350,8 @@ and **environment variables** (set before starting the daemon).
 | Knob | Default | What it controls |
 |---|---|---|
 | `flash_min_gap` | `3` | Minimum pulses between serendipitous flashbacks (anti-spam) |
+| `stimulus_safety_net` / `stimulus_safety_gap` | `True` / `5` | Re-launch the stimulus from GM when Neuron's piggyback goes silent for N tool turns |
+| `brainstorm_hint` | `True` | On a `pre_turn` that names a bug, error, dilemma or decision, append *call `gray_matter_brainstorm`* |
 | `cache_ttl_seconds` | `60` | TTL for the context cache — raise if topics repeat quickly |
 | `cache_max_size` | `100` | LRU cap on cached pulse results |
 | `prewarm` | `True` | Pre-warm worker models at startup (set `False` to save memory) |

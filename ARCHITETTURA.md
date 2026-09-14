@@ -399,7 +399,7 @@ Client → gray_matter_pulse(topic="Java bytecode")
 ```bash
 gray-matter install [--dry-run]          # Idempotent gateway install
 gray-matter uninstall [--purge-data]     # Remove gateway (interactive on memory)
-gray-matter repair                       # Clean reinstall: scegli cosa cancellare
+gray-matter repair [--reinstall]         # Pulizia selettiva; --reinstall rilancia l'installer -Force
 gray-matter start / stop                 # Avvia/ferma daemon
 gray-matter ping / status / doctor       # Diagnostica
 gray-matter stats                        # Contatori: cache hit, flash, bridges, latenza
