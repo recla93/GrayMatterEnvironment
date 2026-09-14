@@ -297,7 +297,10 @@ python gray_matter/selfcheck.py      # Gray Matter deterministics
    would fire all three at once, and a prefix that is not the folder name is
    how a tag gets published and never mirrored — `release-gm.yml` once fired on
    `gm-v*` while the mirror looked for `gray_matter-v*`. The mirror renames the
-   tag on the way out, so `neuron-v6.5.2` lands on Neuron as `v6.5.2` — which is what that repo's Releases page should say.
+   tag on the way out, so `neuron-v6.5.2` lands on Neuron as `v6.5.2`, and
+   then publishes the same Release there (wheels attached, notes generated
+   from the mirror's history) — the tag alone left that repo's Releases page
+   frozen on the last hand-made release while the tags moved on.
 
 A version bump touches five files per project: `pyproject.toml`, `__init__.py`,
 the README badge, `CHANGELOG.md`, and the vendored Gray Matter wheel in the

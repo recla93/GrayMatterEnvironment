@@ -128,6 +128,7 @@ jobs:
       # release insieme; di la' deve arrivare `v1.2.3`, o la pagina Releases di
       # quel repo smette di avere senso.
       - name: Tag sul mirror, rinominato
+        id: mirror
         working-directory: .
         env:
           TOKEN: ${{ secrets.MIRROR_TOKEN }}
@@ -140,3 +141,20 @@ jobs:
           echo "  $TAG -> recla93/Neuron come $OUT ($SHA)"
           URL="https://x-access-token:$TOKEN@github.com/recla93/Neuron.git"
           git push "$URL" "$SHA:refs/tags/$OUT"
+          echo "tag=$OUT" >> "$GITHUB_OUTPUT"
+
+      # La Release sul mirror, non solo il tag. Senza questo passo la pagina
+      # Releases di recla93/Neuron restava ferma all'ultima release fatta a mano
+      # (agosto) mentre i tag avanzavano: chi apriva quel repo vedeva "Latest
+      # vX" con il codice tre versioni avanti. Stessi artefatti del Release
+      # qui sopra; le note le genera GitHub dalla storia del mirror.
+      - name: Release sul mirror
+        if: steps.mirror.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: recla93/Neuron
+          token: ${{ secrets.MIRROR_TOKEN }}
+          tag_name: ${{ steps.mirror.outputs.tag }}
+          files: neuron/dist/*
+          generate_release_notes: true
+          make_latest: true
