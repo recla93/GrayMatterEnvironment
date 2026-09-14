@@ -337,15 +337,15 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Promuove in conoscenza permanente (NeuRAG) i concetti stabili della "
         "memoria (Neuron): vecchi abbastanza e confermati, o ancorati da link "
         "forti. Ogni concetto arriva con le ragioni dei suoi link e i suoi "
-        "episodi come chunk, più un bridge. NON scrive niente senza --apply.",
+        "episodi come chunk, sotto il godnode 'memoria promossa'. NON scrive niente senza --apply.",
         "Su una memoria vissuta: un concetto ripetuto per centinaia di turni "
         "resta nello store che decade e non diventa mai conoscenza. Lancialo "
         "prima senza --apply e leggi la lista — un nodo promosso non decade, "
         "quindi promuovere rumore è più costoso che non promuovere niente.",
         "Promotes stable memory concepts (Neuron) into permanent knowledge "
         "(NeuRAG): old enough and confirmed, or anchored by strong links. Each "
-        "one lands with its link rationales and episodes as chunks, plus a "
-        "bridge. Writes NOTHING unless you pass --apply.",
+        "one lands with its link rationales and episodes as chunks, under the "
+        "'memoria promossa' godnode. Writes NOTHING unless you pass --apply.",
         "On a memory with history: a concept repeated across hundreds of turns "
         "stays in the decaying store and never becomes knowledge. Run it without "
         "--apply first and read the list — a promoted node does not decay, so "

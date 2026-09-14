@@ -242,18 +242,36 @@ async def _do_promote(apply: bool = False) -> dict:
         return {"error": f"Neuron non raggiungibile o export illeggibile: {exc}"}
 
     cands = _promote.candidates(export)
-    written, skipped, chunks_written = [], [], 0
-    if apply:
+    written, skipped, already, chunks_written = [], [], [], 0
+    if apply and cands:
+        # One godnode for everything that comes from memory: a `fundamental`
+        # needs a parent (NeuRAG raises without one — the old apply never
+        # wrote a single node), and the vault tree stays readable: the
+        # ingested repo on one side, the promoted memory on the other.
+        try:
+            await _call_server_async("neurag", "knowledge_add_node", {
+                "name": _promote.PROMOTE_PARENT, "node_type": "godnode",
+                "triggers": ["memoria", "promosso", "promote", "neuron"]})
+        except Exception as exc:  # noqa: BLE001 — "already exists" arrives as text, not as an error
+            return {"error": f"godnode '{_promote.PROMOTE_PARENT}' non creabile: {exc}"}
         for c in cands:
             try:
                 # The tags it already shares travel with it — that is what makes
                 # a promotion a JOIN between the two graphs instead of an orphan
                 # dropped into NeuRAG (§4).
-                res = await _call_server_async("neurag", "knowledge_add_node", {
+                res = str(await _call_server_async("neurag", "knowledge_add_node", {
                     "name": c["keyword"], "node_type": "fundamental",
+                    "parent_name": _promote.PROMOTE_PARENT,
                     "triggers": c["tags"] or [c["keyword"]],
-                })
-                if "not found" in str(res).lower():
+                })).lower()
+                if "already exists" in res:
+                    # ponytail: a concept is promoted once; chunks have no dedup in
+                    # NeuRAG, so re-applying must not re-add them. Episodes that
+                    # arrive AFTER the promotion stay in Neuron: diff-and-append
+                    # when a real case asks for it.
+                    already.append(c["keyword"])
+                    continue
+                if "not found" in res:
                     skipped.append(c["keyword"])
                     continue
                 written.append(c["keyword"])
@@ -265,16 +283,14 @@ async def _do_promote(apply: bool = False) -> dict:
                     await _call_server_async("neurag", "knowledge_add_chunks", {
                         "node_name": c["keyword"], "chunks": c["chunks"]})
                     chunks_written += len(c["chunks"])
-                # Same concept, two stores: the bridge is what lets pulse and
-                # brainstorm treat them as one.
-                from gray_matter.bridges import add_bridge
-                add_bridge(c["keyword"], c["keyword"],
-                           "promote: " + ", ".join(c.get("why") or []))
+                # No bridge: the node carries the concept's own name, and
+                # _kb_lookup resolves a pre_turn keyword by name — the name IS
+                # the join (add_bridge refuses same-name endpoints anyway).
             except Exception as exc:  # noqa: BLE001 — un nodo rotto non ferma il resto
                 skipped.append(f"{c['keyword']}: {exc}")
     return {"applied": apply, "count": len(cands), "candidates": cands,
-            "written": written, "skipped": skipped, "chunks": chunks_written,
-            "rules": _promote.PROMOTE_RULES}
+            "written": written, "already": already, "skipped": skipped,
+            "chunks": chunks_written, "rules": _promote.PROMOTE_RULES}
 
 
 def _fit(budget: int, blocks: list[str]) -> tuple[str, int]:

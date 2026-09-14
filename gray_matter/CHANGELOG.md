@@ -5,8 +5,14 @@
   nodo con nome e trigger e zero chunk: niente testo, niente embedding,
   `knowledge_query` non lo trovava mai. Ora ogni concetto promosso arriva con
   le ragioni dei suoi link (un *perché* in una frase, per costruzione) e i suoi
-  episodi come chunk (`source=neuron:<kw>`, `section=link|turn N`), più un
-  bridge Neuron↔NeuRAG. E il cancello e' cambiato: misurato sul grafo `ai`
+  episodi come chunk (`source=neuron:<kw>`, `section=link|turn N`), sotto un
+  godnode `memoria promossa` — un `fundamental` senza genitore NeuRAG lo
+  rifiuta, quindi il vecchio `--apply` non ha mai scritto un nodo. Niente
+  bridge: il nodo porta il nome del concetto e `_kb_lookup` lo risolve per
+  nome. Un secondo `--apply` salta i già promossi (i chunk non hanno dedup).
+  Sul vivo: 19 nodi, 62 chunk; `knowledge_query` sul testo di un fatto li
+  trova al primo posto, accanto al documento del repo che racconta lo stesso
+  guasto. E il cancello e' cambiato: misurato sul grafo `ai`
   (380 nodi, 140 turni), salienza e trust non stavano mai sullo stesso nodo —
   la salienza decade, il trust resta — e l'AND fra i due dava 0 candidati.
   Ora: eta' ≥ 50 turni **e** un segnale che non decade (trust, ≥2 link forti,

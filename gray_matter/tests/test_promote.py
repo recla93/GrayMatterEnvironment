@@ -219,3 +219,53 @@ def test_the_self_check_runs():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---------- --apply: parent, chunk, bridge, idempotenza ----------
+
+def _apply(monkeypatch, export, answers):
+    """Esegue _do_promote(apply=True) con NeuRAG finto: `answers` mappa il nome
+    del nodo alla risposta di knowledge_add_node. Ritorna (result, calls)."""
+    import asyncio
+    import json
+    import gray_matter.server as srv
+    import gray_matter.bridges as br
+    calls = []
+
+    async def fake_call(server, tool, args):
+        calls.append((server, tool, args))
+        if tool == "export":
+            return json.dumps(export)
+        if tool == "knowledge_add_node":
+            return answers.get(args["name"], f"Created node '{args['name']}'")
+        return "ok"
+    monkeypatch.setattr(srv, "_call_server_async", fake_call)
+    monkeypatch.setattr(br, "add_bridge", lambda a, b, r="": calls.append(("bridge", a, b)) or True)
+    return asyncio.run(srv._do_promote(apply=True)), calls
+
+
+def _export_with_one_candidate():
+    exp = _exp([_n("quorum", tags=["raft"])])
+    exp["links"][0].update({"weight": "medium", "link_type": "deepening", "rationale": "why"})
+    exp["episodes"] = {"quorum": [{"turn": 12, "text": "chose raft"}]}
+    return exp
+
+
+def test_apply_creates_the_parent_then_the_node_with_chunks(monkeypatch):
+    from gray_matter.promote import PROMOTE_PARENT
+    r, calls = _apply(monkeypatch, _export_with_one_candidate(), {})
+    adds = [c[2] for c in calls if c[1] == "knowledge_add_node"]
+    assert adds[0]["name"] == PROMOTE_PARENT and adds[0]["node_type"] == "godnode"
+    assert adds[1]["parent_name"] == PROMOTE_PARENT   # senza parent NeuRAG rifiuta un fundamental
+    chunks = [c[2] for c in calls if c[1] == "knowledge_add_chunks"]
+    assert [ch["section"] for ch in chunks[0]["chunks"]] == ["link", "turn 12"]
+    assert not [c for c in calls if c[0] == "bridge"]   # il nome e' il join, niente self-bridge
+    assert r["written"] == ["quorum"] and r["chunks"] == 2
+
+
+def test_apply_twice_does_not_duplicate_chunks(monkeypatch):
+    """NeuRAG non deduplica i chunk: un nodo gia' promosso va saltato del tutto."""
+    r, calls = _apply(monkeypatch, _export_with_one_candidate(),
+                      {"quorum": "Node 'quorum' already exists (type=fundamental)."})
+    assert r["already"] == ["quorum"] and r["written"] == [] and r["chunks"] == 0
+    assert not [c for c in calls if c[1] == "knowledge_add_chunks"]

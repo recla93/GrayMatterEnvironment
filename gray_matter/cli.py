@@ -386,8 +386,9 @@ def cmd_promote(apply: bool = False, as_json: bool = False) -> None:
     for line in report_lines(r.get("candidates", []), applied=r.get("applied", False)):
         print(line)
     if r.get("applied"):
-        print(f"  scritti: {len(r.get('written', []))}"
-              + (f" | saltati: {len(r.get('skipped', []))}" if r.get("skipped") else ""))
+        print(f"  scritti: {len(r.get('written', []))} nodi, {r.get('chunks', 0)} chunk"
+              + (f" | gia' promossi: {len(r['already'])}" if r.get("already") else "")
+              + (f" | saltati: {len(r['skipped'])}" if r.get("skipped") else ""))
 
 
 def _knob_dict(k, cfg, settings) -> dict:

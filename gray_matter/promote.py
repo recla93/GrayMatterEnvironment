@@ -41,6 +41,10 @@ from __future__ import annotations
 # least one signal that does not decay — confirmed, or structurally reinforced
 # (strong links, Hebbian co-activation). 19 of 380 passed; read by eye, none
 # was noise.
+# Where promoted concepts live in the vault: one godnode, so the tree keeps the
+# ingested repo on one side and the memory that earned permanence on the other.
+PROMOTE_PARENT = "memoria promossa"
+
 PROMOTE_RULES = {
     "min_age_turns": 50,     # survived long enough to be stable, not merely hot
     "min_trust": 0.5,        # actually confirmed useful (B2 feedback) ...
@@ -182,8 +186,9 @@ def report_lines(cands: list[dict], applied: bool = False) -> list[str]:
             lines.append(f"           {ch['section']:>8}: {ch['text'][:110]}")
     if not applied:
         lines.append("")
-        lines.append("Niente è stato scritto. Con --apply diventano nodi NeuRAG, "
-                     "con le righe sopra come chunk e un bridge Neuron<->NeuRAG.")
+        lines.append(f"Niente è stato scritto. Con --apply diventano nodi NeuRAG "
+                     f"sotto '{PROMOTE_PARENT}', con le righe sopra come chunk. "
+                     "Un concetto già promosso viene saltato.")
         lines.append("Un nodo promosso NON decade e un chunk nemmeno: leggi le "
                      "righe, gli episodi possono essere log e non conoscenza.")
     return lines
