@@ -20,6 +20,8 @@ CASES = [
 
 @pytest.mark.parametrize("proj,src,readme", CASES, ids=[c[0] for c in CASES])
 def test_every_served_tool_is_in_the_readme(proj, src, readme):
+    if not src.exists():
+        pytest.skip(f"{proj} non e' in questo albero (standalone)")
     served = set(re.findall(r'\bname="([a-z_]+)"', src.read_text(encoding="utf-8")))
     served = {t for t in served if proj != "gray_matter" or t.startswith("gray_matter_")}
     assert served, f"{src}: nessun Tool(name=...) trovato"
