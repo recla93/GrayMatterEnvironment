@@ -1,5 +1,19 @@
 # Changelog — Gray Matter
 
+## Unreleased
+- **`promote` porta la memoria, non solo il nome.** Scriveva in NeuRAG un
+  nodo con nome e trigger e zero chunk: niente testo, niente embedding,
+  `knowledge_query` non lo trovava mai. Ora ogni concetto promosso arriva con
+  le ragioni dei suoi link (un *perché* in una frase, per costruzione) e i suoi
+  episodi come chunk (`source=neuron:<kw>`, `section=link|turn N`), più un
+  bridge Neuron↔NeuRAG. E il cancello e' cambiato: misurato sul grafo `ai`
+  (380 nodi, 140 turni), salienza e trust non stavano mai sullo stesso nodo —
+  la salienza decade, il trust resta — e l'AND fra i due dava 0 candidati.
+  Ora: eta' ≥ 50 turni **e** un segnale che non decade (trust, ≥2 link forti,
+  o co-attivazione ≥3). 19 candidati, 62 chunk, letti a occhio: due righe di
+  log su `mirror-workflow`, il resto conoscenza. Il dry-run resta il default e
+  il report mostra ogni riga che verrebbe scritta.
+
 ## 1.5.3 (2026-09-14)
 - **Un tool ricorda l'altro: `pre_turn` su un problema suggerisce
   `brainstorm`.** `around`/`brainstorm` sono letture che nessun loop chiama da

@@ -334,16 +334,18 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "day, later work is not in it yet. The daemon need not be running.",
     ),
     ("gray-matter", "promote"): (
-        "Promuove in conoscenza permanente (NeuRAG) i concetti che si sono "
-        "dimostrati validi nella memoria (Neuron): molto rinforzati, confermati "
-        "utili e stabili nel tempo. NON scrive niente finché non passi --apply.",
+        "Promuove in conoscenza permanente (NeuRAG) i concetti stabili della "
+        "memoria (Neuron): vecchi abbastanza e confermati, o ancorati da link "
+        "forti. Ogni concetto arriva con le ragioni dei suoi link e i suoi "
+        "episodi come chunk, più un bridge. NON scrive niente senza --apply.",
         "Su una memoria vissuta: un concetto ripetuto per centinaia di turni "
         "resta nello store che decade e non diventa mai conoscenza. Lancialo "
         "prima senza --apply e leggi la lista — un nodo promosso non decade, "
         "quindi promuovere rumore è più costoso che non promuovere niente.",
-        "Promotes concepts that proved themselves in memory (Neuron) into "
-        "permanent knowledge (NeuRAG): heavily reinforced, confirmed useful and "
-        "stable over time. Writes NOTHING unless you pass --apply.",
+        "Promotes stable memory concepts (Neuron) into permanent knowledge "
+        "(NeuRAG): old enough and confirmed, or anchored by strong links. Each "
+        "one lands with its link rationales and episodes as chunks, plus a "
+        "bridge. Writes NOTHING unless you pass --apply.",
         "On a memory with history: a concept repeated across hundreds of turns "
         "stays in the decaying store and never becomes knowledge. Run it without "
         "--apply first and read the list — a promoted node does not decay, so "

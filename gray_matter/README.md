@@ -264,6 +264,7 @@ session-start hook carries the same rule statically.
 | `gray-matter bridges` | List persisted cross-store bridges |
 | `gray-matter bridges-transfer` | Move bridges between local and cloud |
 | `gray-matter bridge` | Expose the suite over HTTP for remote connectors |
+| `gray-matter promote [--apply]` | CLS consolidation: stable Neuron concepts (old enough, and confirmed or anchored by strong links) become NeuRAG nodes **with their link rationales and episodes as chunks** and a bridge. Dry run by default — read the list, promoted text does not decay |
 | `gray-matter backup [--force]` | Copy the three stores (Neuron graphs, NeuRAG vault, GM bridges) into `<suite>/backups/gm-graph-backup_<date>/`; the daemon does it once a day and keeps 7 days |
 
 ### Configuration

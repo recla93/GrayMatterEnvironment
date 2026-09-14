@@ -242,7 +242,7 @@ async def _do_promote(apply: bool = False) -> dict:
         return {"error": f"Neuron non raggiungibile o export illeggibile: {exc}"}
 
     cands = _promote.candidates(export)
-    written, skipped = [], []
+    written, skipped, chunks_written = [], [], 0
     if apply:
         for c in cands:
             try:
@@ -253,12 +253,27 @@ async def _do_promote(apply: bool = False) -> dict:
                     "name": c["keyword"], "node_type": "fundamental",
                     "triggers": c["tags"] or [c["keyword"]],
                 })
-                (written if "not found" not in str(res).lower() else skipped).append(
-                    c["keyword"])
+                if "not found" in str(res).lower():
+                    skipped.append(c["keyword"])
+                    continue
+                written.append(c["keyword"])
+                # The memory, not just the name: link rationales and episodes
+                # become chunks, so knowledge_query can FIND the promoted concept
+                # by the text of one of its facts. Before this a promoted node
+                # was a bare label — no text, no embedding, never retrieved.
+                if c.get("chunks"):
+                    await _call_server_async("neurag", "knowledge_add_chunks", {
+                        "node_name": c["keyword"], "chunks": c["chunks"]})
+                    chunks_written += len(c["chunks"])
+                # Same concept, two stores: the bridge is what lets pulse and
+                # brainstorm treat them as one.
+                from gray_matter.bridges import add_bridge
+                add_bridge(c["keyword"], c["keyword"],
+                           "promote: " + ", ".join(c.get("why") or []))
             except Exception as exc:  # noqa: BLE001 — un nodo rotto non ferma il resto
                 skipped.append(f"{c['keyword']}: {exc}")
     return {"applied": apply, "count": len(cands), "candidates": cands,
-            "written": written, "skipped": skipped,
+            "written": written, "skipped": skipped, "chunks": chunks_written,
             "rules": _promote.PROMOTE_RULES}
 
 

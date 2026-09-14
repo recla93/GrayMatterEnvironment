@@ -25,15 +25,22 @@ def _n(keyword, salience=9, trust=0.8, born=10, tags=None):
             "turn": 199, "born": born, "tags": tags or [], "topic": "t", "domain": "d"}
 
 
-# ---------- ogni soglia è un AND ----------
+# ---------- età come soglia, poi UN segnale che non decade ----------
+#
+# Misurato sul grafo `ai` il 14 settembre 2026 (380 nodi, 140 turni): salienza
+# e trust non stanno mai sullo stesso nodo. La salienza decade a ogni turno,
+# il trust lo scrive `confirm` e resta. Un AND fra i due passava solo un nodo
+# confermato nel turno stesso in cui era caldo: mai successo, 0 candidati.
 
-def test_a_concept_meeting_every_floor_is_promoted():
-    assert [c["keyword"] for c in candidates(_exp([_n("quorum")]))] == ["quorum"]
+def test_a_confirmed_old_concept_is_promoted():
+    c = candidates(_exp([_n("quorum")]))
+    assert [x["keyword"] for x in c] == ["quorum"]
+    assert c[0]["why"] == ["trust"]
 
 
-def test_frequent_but_never_confirmed_is_not_promoted():
-    """Il caso che una soglia sola sul prodotto lascerebbe passare: salienza
-    altissima, trust zero. È esattamente ciò che non va reso permanente."""
+def test_hot_but_never_confirmed_and_unanchored_is_not_promoted():
+    """Salienza altissima, trust zero, un solo link medio: niente che resti.
+    È esattamente ciò che non va reso permanente."""
     assert candidates(_exp([_n("hot", salience=400, trust=0.0)])) == []
 
 
@@ -41,20 +48,61 @@ def test_trusted_but_too_young_is_not_promoted():
     assert candidates(_exp([_n("nuovo", born=199)])) == []
 
 
-def test_rarely_reinforced_is_not_promoted():
-    assert candidates(_exp([_n("raro", salience=1)])) == []
+def test_salience_no_longer_gates():
+    """Un concetto confermato a luglio ha trust 1.0 e salienza 0 a settembre:
+    è il caso reale, e deve passare."""
+    assert candidates(_exp([_n("confermato", salience=0, trust=1.0)]))
+
+
+def test_strong_links_open_the_gate_without_trust():
+    """Il caso reale: `extraheader`, `subtree-prefix` — mai confermati, ma
+    ancorati da link forti con la loro ragione. Le ragioni diventano chunk."""
+    exp = {"turn_count": 200,
+           "nodes": [{"keyword": "x", "salience": 0, "trust": 0.0, "turn": 199}],
+           "links": [{"source": "x", "target": "y", "created_turn": 10, "weight": "strong",
+                      "link_type": "cause-effect", "rationale": "perche' uno"},
+                     {"source": "z", "target": "x", "created_turn": 20, "weight": "strong",
+                      "link_type": "deepening", "rationale": "perche' due"}]}
+    c = candidates(exp)
+    assert [k["keyword"] for k in c] == ["x"]
+    assert c[0]["why"] == ["strong-links"]
+    assert [ch["text"] for ch in c[0]["chunks"]] == [
+        "x -[cause-effect]-> y: perche' uno", "z -[deepening]-> x: perche' due"]
+
+
+def test_coactivation_opens_the_gate_without_trust():
+    exp = {"turn_count": 200,
+           "nodes": [{"keyword": "x", "salience": 0, "trust": 0.0, "turn": 199}],
+           "links": [{"source": "x", "target": "y", "created_turn": 10, "weight": "tangential",
+                      "co_activation_count": 3}]}
+    assert candidates(exp)[0]["why"] == ["co-activation"]
+
+
+def test_one_strong_link_is_not_enough():
+    exp = {"turn_count": 200,
+           "nodes": [{"keyword": "x", "salience": 0, "trust": 0.0, "turn": 199}],
+           "links": [{"source": "x", "target": "y", "created_turn": 10, "weight": "strong"}]}
+    assert candidates(exp) == []
+
+
+def test_episodes_travel_as_dated_chunks_after_the_link_rationales():
+    exp = _exp([_n("quorum")])
+    exp["links"][0].update({"weight": "medium", "link_type": "deepening", "rationale": "why"})
+    exp["episodes"] = {"quorum": [{"turn": 12, "text": "chose raft because ..."},
+                                  {"turn": 40, "text": "  "}]}   # empty episode dropped
+    chunks = candidates(exp)[0]["chunks"]
+    assert [(c["section"], c["source"]) for c in chunks] == [
+        ("link", "neuron:quorum"), ("turn 12", "neuron:quorum")]
 
 
 @pytest.mark.parametrize("field,value", [
-    ("salience", PROMOTE_RULES["min_salience"] - 1),
     ("trust", PROMOTE_RULES["min_trust"] - 0.01),
 ])
-def test_just_below_any_floor_is_out(field, value):
+def test_just_below_a_floor_is_out(field, value):
     assert candidates(_exp([_n("borderline", **{field: value})])) == []
 
 
 @pytest.mark.parametrize("field,value", [
-    ("salience", PROMOTE_RULES["min_salience"]),
     ("trust", PROMOTE_RULES["min_trust"]),
 ])
 def test_exactly_at_a_floor_is_in(field, value):
@@ -82,8 +130,11 @@ def test_the_report_is_ranked_by_score():
     assert cands[0]["score"] > cands[1]["score"] > cands[2]["score"]
 
 
-def test_score_is_zero_without_trust():
-    assert score({"salience": 100, "trust": 0.0}, age=500) == 0.0
+def test_salience_only_breaks_ties():
+    """Senza segnali che restano, la salienza da sola vale quasi nulla."""
+    assert score({"salience": 100, "trust": 0.0}, age=500) == pytest.approx(1.0)
+    assert score({"salience": 0, "trust": 1.0}, age=100) == pytest.approx(1.0)
+    assert score({"salience": 0, "trust": 0.0}, age=100, strong=2) == pytest.approx(1.0)
 
 
 # ---------- l'età viene dai link, non da Node.turn ----------
@@ -154,9 +205,10 @@ def test_an_empty_report_shows_the_thresholds():
 def test_the_cut_points_are_constants_not_literals():
     """§8.2: hanno bisogno di dati veri e si muoveranno, quindi stanno in un
     dict da regolare, non sparsi in una query."""
-    assert set(PROMOTE_RULES) == {"min_salience", "min_trust", "min_age_turns"}
+    assert set(PROMOTE_RULES) == {"min_age_turns", "min_trust", "min_strong_links",
+                                  "min_coactivation"}
     loose = candidates(_exp([_n("x", salience=1, trust=0.1, born=199)]),
-                       rules={"min_salience": 0, "min_trust": 0.0, "min_age_turns": 0})
+                       rules={"min_trust": 0.0, "min_age_turns": 0})
     assert [c["keyword"] for c in loose] == ["x"]
 
 
