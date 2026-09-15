@@ -146,7 +146,7 @@ pip install -e ".[cloud,rag,gui]"   # optional: Turso, NeuRAG, web GUI
 ```bash
 gray-matter install --dry-run   # preview: what would be registered
 gray-matter install             # idempotent, .bak backups, manifest
-gray-matter doctor              # health snapshot: servers, workers, cache, bridges
+gray-matter doctor              # health snapshot: wiring + servers, workers, cache, bridges
 gray-matter status              # registered servers with tool lists
 gray-matter stats               # cache hit rate, flashes, bridges, latency
 ```
@@ -242,7 +242,7 @@ session-start hook carries the same rule statically.
 |---|---|
 | `gray-matter ping` | Check if GM is running |
 | `gray-matter status` | Show registered servers with tool lists |
-| `gray-matter doctor` | Health snapshot: servers, workers, cache, bridges |
+| `gray-matter doctor` | Health snapshot: wiring (registry, hook, MCP entries, versions, stale processes), servers, workers, cache, bridges |
 | `gray-matter stats` | Orchestrator counters: cache hit rate, flashes, latency |
 | `gray-matter logs` | Show daemon log (last N lines) |
 

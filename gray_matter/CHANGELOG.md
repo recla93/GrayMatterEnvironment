@@ -1,6 +1,24 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **L'installer riconosce un upgrade.** «Installato» era solo «installato
+  alla stessa versione»: un bump del sorgente (1.4.1 → 1.5.3) finiva nel ramo
+  *prima installazione* — interview completa, niente menu, niente
+  «upgrading». Il caso più comune era l'unico a non passare dal menu. Ora
+  versione diversa = upgrade: `pip install` liscio (la versione nuova può
+  portare dipendenze nuove, `--no-deps` le perderebbe), nessuna domanda, una
+  riga che dice da cosa a cosa. Il menu resta per «stessa versione», e sotto
+  ogni voce mostra il flag equivalente (`-Force`, `-Clear`) e il comando pip
+  che parte davvero. Il modello di embedding si chiede solo se non c'è già un
+  `NS_EMBED_MODEL` salvato: prima tornava a ogni run interattivo, e un `[2]`
+  al posto di `[1]` su un reinstall cambiava lo spazio vettoriale del grafo.
+- **Il doctor `versions` guarda la discordanza, non il conteggio.** Un
+  layout `src/` editable (Neuron) mette `src` in `sys.path` via `.pth`, e lì
+  vive `neuron.egg-info`: due distribuzioni a install sano. Il check si
+  fermava a «2 dist-info» senza mai confrontare etichetta e codice — dopo un
+  `-Force` sarebbe restato rosso. Ora segnala etichette che discordano fra
+  loro (il caso vero: 6.4.0 sotto 6.4.1) o dal codice. La card GUI di `doctor`
+  nomina anche il blocco Wiring.
 - **Il doctor vede un daemon più vecchio del codice.** Riavviare il client
   AI rilancia gli stdio, che si riagganciano al daemon già vivo: dopo un
   cambio di codice `promote` dava 0 candidati con le regole nuove stampate

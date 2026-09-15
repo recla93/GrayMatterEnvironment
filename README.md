@@ -122,7 +122,7 @@ pip install -e gray_matter -e gray_matter"[dev,cloud,rag,gui]" # Gray Matter onl
 ### Verify
 
 ```bash
-gray-matter doctor    # health snapshot: servers, workers, cache, bridges
+gray-matter doctor    # health snapshot: wiring + servers, workers, cache, bridges
 gray-matter status    # registered servers with tool lists
 gray-matter stats     # cache hit rate, flashes, bridges, latency
 ```

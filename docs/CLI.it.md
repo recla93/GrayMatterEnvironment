@@ -122,7 +122,11 @@ gray-matter stats
 
 ### gray-matter doctor
 
-Snapshot salute: server, worker, cache, bridge, tier engine NeuRAG.
+Snapshot salute in due blocchi. **Wiring (install):** registro, file e entry
+dell'hook, entry MCP, `versions` (etichetta dist-info contro `__version__` di
+ogni pacchetto), `processes` (daemon/worker più vecchi dei `.py` sorgente).
+**Runtime:** server, worker, cache, bridge, tier engine NeuRAG. Ogni riga
+rossa porta il comando che la sistema.
 
 ```
 gray-matter doctor

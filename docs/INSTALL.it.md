@@ -107,8 +107,23 @@ standalone di Neuron/NeuRAG dai config dei client (backup salvati come `.bak`).
 
 ## 5. Aggiornamento
 
-Ri-esegui l'installer click-and-go (passo 1). Riusa il venv condiviso e
-ri-registra i client in modo idempotente.
+Prima chiudi i client AI: l'installer ferma ogni processo del venv condiviso
+prima che pip scriva (su Windows un `.pyd` caricato non si può sostituire).
+Poi ri-esegui l'installer click-and-go (passo 1). Cosa fa dipende da cosa trova:
+
+| Installato | Comportamento |
+|---|---|
+| niente | prima installazione: chiede modello di embedding e client |
+| una versione diversa | **upgrade**: `pip install` liscio, nessuna domanda, una riga «X is installed; this source is Y - upgrading» |
+| la stessa versione | menu — `[R]einstall` `[D]eps` `[C]lean` `[W]ipe` `[S]kip`; sotto ogni voce il flag che la riproduce (`-Force`, `-Clear`) e il comando pip che parte |
+
+Dati, impostazioni e registrazioni nei client restano in ogni ramo. Il modello
+di embedding si chiede solo se non ce n'è già uno salvato (`-EmbedModel` /
+`GM_EMBED_MODEL` lo forzano). `install.ps1 -Force` è `[R]` senza menu.
+
+Poi `gray-matter doctor`: la riga `versions` deve essere verde (etichetta e
+codice coincidono per i tre pacchetti) e anche `processes` (daemon più nuovo
+del codice).
 
 ## 6. Disinstallazione
 

@@ -11,6 +11,20 @@
 
 **Soluzione:** `gray-matter start`. Se fallisce il bind, controlla processi bloccati: su Windows `netstat -ano | findstr 9876`, su Linux `lsof -i :9876`. Uccidi il processo bloccato, poi `gray-matter start`.
 
+## doctor: `[!!] versions: <pkg>: dist-info X, codice Y`
+
+**Sintomo:** l'etichetta installata (dist-info) e il codice (`__version__`) non coincidono — tipicamente dopo un bump di versione nel sorgente, o un install fallito a metà sotto un server vivo.
+
+**Diagnosi:** `gray-matter doctor` stampa la coppia per pacchetto. Due etichette che discordano fra loro (`2 dist-info (6.4.0, 6.4.1)`) significano una disinstallazione mai completata.
+
+**Soluzione:** chiudi tutti i client AI, poi ri-esegui l'installer (`install.ps1` / `install.sh`): una versione diversa aggiorna da sola, la stessa versione offre `[R]einstall` (= `install.ps1 -Force`). Dati e impostazioni restano.
+
+## doctor: `[!!] processes: codice piu' nuovo del processo: daemon`
+
+**Sintomo:** un `.py` sorgente è più nuovo del daemon o del worker in esecuzione. Riavviare il client AI non basta: i suoi stdio si riagganciano al daemon già vivo, e il codice vecchio continua a girare.
+
+**Soluzione:** `gray-matter stop && gray-matter start`.
+
 ## Nessun server visibile in gray-matter status
 
 **Sintomo:** `gray-matter status` mostra 0 server.

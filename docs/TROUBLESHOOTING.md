@@ -11,6 +11,20 @@
 
 **Fix:** `gray-matter start`. If it fails to bind, check for stale processes: on Windows use `netstat -ano | findstr 9876`, on Linux `lsof -i :9876`. Kill the stale process, then `gray-matter start` again.
 
+## doctor: `[!!] versions: <pkg>: dist-info X, codice Y`
+
+**Symptom:** the installed label (dist-info) and the code (`__version__`) disagree — typically after a version bump in the source, or an install that half-failed under a running server.
+
+**Diagnosis:** `gray-matter doctor` prints the pair per package. Two labels that disagree with each other (`2 dist-info (6.4.0, 6.4.1)`) mean an uninstall never completed.
+
+**Fix:** close every AI client, then re-run the installer (`install.ps1` / `install.sh`): a different version upgrades on its own, the same version offers `[R]einstall` (= `install.ps1 -Force`). Data and settings are kept.
+
+## doctor: `[!!] processes: codice piu' nuovo del processo: daemon`
+
+**Symptom:** a source `.py` is newer than the running daemon or worker. Restarting the AI client does not help: its stdio servers reattach to the daemon that is already alive, so the old code keeps running.
+
+**Fix:** `gray-matter stop && gray-matter start`.
+
 ## No servers visible in gray-matter status
 
 **Symptom:** `gray-matter status` shows 0 servers.

@@ -122,7 +122,11 @@ gray-matter stats
 
 ### gray-matter doctor
 
-Health snapshot: servers, workers, cache, bridges, NeuRAG engine tier.
+Health snapshot in two blocks. **Wiring (install):** registry, hook file and
+entry, MCP entries, `versions` (dist-info label vs `__version__` of each
+package), `processes` (daemon/workers older than the source `.py` files).
+**Runtime:** servers, workers, cache, bridges, NeuRAG engine tier. Every red
+line carries the command that fixes it.
 
 ```
 gray-matter doctor

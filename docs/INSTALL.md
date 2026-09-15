@@ -125,8 +125,22 @@ Neuron/NeuRAG entries (backups saved as `.bak`).
 
 ## 5. Upgrade
 
-Re-run the one-click installer (step 1). It reuses the shared venv and
-re-registers clients idempotently.
+Close your AI clients first: the installer stops every process of the shared
+venv before pip writes (a loaded `.pyd` cannot be replaced on Windows). Then
+re-run the one-click installer (step 1). What happens depends on what it finds:
+
+| Installed | Behaviour |
+|---|---|
+| nothing | first install: asks embedding model and clients |
+| a different version | **upgrade**: plain `pip install`, no questions, one line "X is installed; this source is Y - upgrading" |
+| the same version | menu — `[R]einstall` `[D]eps` `[C]lean` `[W]ipe` `[S]kip`; each entry shows the flag that reproduces it (`-Force`, `-Clear`) and the pip command it runs |
+
+Data, settings and client registrations are kept in every branch. The
+embedding model is asked only when none is saved yet (`-EmbedModel` /
+`GM_EMBED_MODEL` override it). `install.ps1 -Force` is `[R]` without the menu.
+
+Then `gray-matter doctor`: the `versions` line must be green (label and code
+agree for all three packages) and `processes` too (daemon newer than the code).
 
 ## 6. Uninstall
 
