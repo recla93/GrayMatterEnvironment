@@ -110,9 +110,9 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "The first thing to check when your AI 'forgets': if the servers are missing here, nothing else can work.",
     ),
     ("gray-matter", "doctor"): (
-        "Controllo di salute completo: server, worker, cache, ponti, tier di storage.",
+        "Controllo di salute completo: cablaggio (registro, hook, entry MCP, versioni, processi stantii), server, worker, cache, ponti, tier di storage.",
         "Quando qualcosa non va e non sai da dove partire. È il comando diagnostico da lanciare per primo.",
-        "Full health check: servers, workers, cache, bridges, storage tier.",
+        "Full health check: wiring (registry, hook, MCP entries, versions, stale processes), servers, workers, cache, bridges, storage tier.",
         "When something is wrong and you do not know where to start. This is the first diagnostic to run.",
     ),
     ("gray-matter", "ping"): (

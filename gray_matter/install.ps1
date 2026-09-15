@@ -506,10 +506,17 @@ function Prompt-InstallChoice([string]$label, [string]$ver, [string]$module, [st
         Write-Host "  -> the installed code is NOT this source: [R] is the one you want."
     }
     Write-Host ""
+    # Sotto ogni voce: il flag che la riproduce senza menu e il comando che
+    # parte davvero. Un nome ("Reinstall") non dice cosa tocca; pip si'.
+    $pipRe = if (Test-HasMCP) { "pip install --force-reinstall --no-deps" } else { "pip install" }
     Write-Host "  [R]einstall - refresh the code. Data, settings and registrations KEPT"
+    Write-Host "                = install.ps1 -Force   ->  $pipRe $srcDir"
     Write-Host "  [D]eps      - repair the venv dependencies only, tools untouched"
+    Write-Host "                ->  pip install $srcDir"
     Write-Host "  [C]lean     - delete the venv and rebuild it, then reinstall. Data KEPT"
+    Write-Host "                = install.ps1 -Clear   ->  rm $Venv; python -m venv; $pipRe $srcDir"
     Write-Host "  [W]ipe      - FULL RESET: also deletes memory, knowledge and settings"
+    Write-Host "                ->  gray-matter uninstall (purge), then [C]lean"
     Write-Host "  [S]kip      - keep the current installation"
     # No console (GUI installer: CreateNoWindow, stdin not redirected) => Read-Host
     # throws, and ErrorActionPreference=Stop would abort the whole install. The

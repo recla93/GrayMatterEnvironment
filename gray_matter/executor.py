@@ -248,11 +248,15 @@ def check_wiring() -> list[dict]:
                      if (getattr(d, "name", "") or "").lower() == dist]
             if not found:
                 continue
-            if len(found) > 1:
-                vs = sorted({d.version for d in found})
+            # Un layout `src/` editable mette `src` in sys.path via .pth, e
+            # li' vive `neuron.egg-info`: DUE distribuzioni per costruzione,
+            # anche a install sano. Il segnale e' l'etichetta che discorda,
+            # non il conteggio (6.4.0 sotto 6.4.1: quello era il caso vero).
+            vs = sorted({d.version for d in found})
+            if len(vs) > 1:
                 problems.append(f"{dist}: {len(found)} dist-info ({', '.join(vs)})")
                 continue
-            declared = found[0].version
+            declared = vs[0]
             try:
                 body = getattr(importlib.import_module(env["module"]), "__version__", "")
             except Exception:  # noqa: BLE001 — pacchetto rotto: lo dice il check 4

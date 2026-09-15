@@ -119,6 +119,26 @@ def test_wiring_catches_two_dist_info_for_the_same_package(env, monkeypatch):
     assert r["ok"] is False and "2 dist-info" in r["detail"], r
 
 
+def test_wiring_sees_through_the_src_layout_egg_info(env, monkeypatch):
+    """Layout `src/` editable: il .pth mette `src` in sys.path e li' c'e'
+    `neuron.egg-info` — due distribuzioni a install SANO. Il doctor si fermava
+    al conteggio e non arrivava mai a confrontare etichetta e codice: dopo un
+    -Force restava rosso con "2 dist-info (6.5.3)"."""
+    import importlib.metadata as md
+    import neuron
+    monkeypatch.setattr(md, "distributions",
+                        lambda: [_FakeDist("neuron", "6.4.2"),
+                                 _FakeDist("neuron", "6.4.2")])
+    monkeypatch.setattr(neuron, "__version__", "6.5.3", raising=False)
+
+    r = _wiring(env)["versions"]
+    assert r["ok"] is False
+    assert "dist-info 6.4.2" in r["detail"] and "codice 6.5.3" in r["detail"], r
+
+    monkeypatch.setattr(neuron, "__version__", "6.4.2", raising=False)
+    assert _wiring(env)["versions"]["ok"] is True
+
+
 def test_wiring_catches_the_registry_mirror_drifting(env, monkeypatch):
     """Il controllo che avrebbe risparmiato la caccia: GM e l'hook devono
     guardare la stessa cartella. L'hook rispecchia `gme_root()` senza importarlo,
