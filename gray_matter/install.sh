@@ -525,9 +525,25 @@ print('EMBED_MODEL_READY')" 2>&1 | sed 's/^/    /'; then
 }
 
 # Embedding model for Neuron (full-suite users never see neuron/install.sh).
+# Si chiede SOLO se non c'e' gia' un modello salvato: ad ogni run interattivo
+# la domanda tornava, e un [2] battuto al posto di [1] su un reinstall cambia
+# lo spazio vettoriale del grafo. GM_EMBED_MODEL esplicito vince sempre.
+gm_saved_embed_model() {  # $1 = venv python
+    "$1" -I -c "import re
+from neuron.config import user_env_file
+m = re.search(r'^NS_EMBED_MODEL=(.+)$', open(user_env_file(), encoding='utf-8').read(), re.M)
+print(m.group(1).strip() if m else '')" 2>/dev/null || echo ""
+}
 if [ -n "$NEURON_DIR" ]; then
-    gm_select_embed_model
-    gm_save_embed_model "$VPY"
+    GM_SAVED=""
+    [ -z "${GM_EMBED_MODEL:-}" ] && GM_SAVED=$(gm_saved_embed_model "$VPY")
+    if [ -n "$GM_SAVED" ]; then
+        echo ""
+        echo "  Embedding model: keeping $GM_SAVED (set GM_EMBED_MODEL to change it)."
+    else
+        gm_select_embed_model
+        gm_save_embed_model "$VPY"
+    fi
 fi
 
 # Where to register: GM_CLIENT wins, else ask on a tty, else "detected" (never

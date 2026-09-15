@@ -230,6 +230,25 @@ def test_every_sh_has_every_feature(project, why, token):
     assert token in _read(project, ".sh"), f"{project}/install.sh is missing {why}"
 
 
+@pytest.mark.parametrize("suffix", (".ps1", ".sh"))
+def test_gm_keeps_a_saved_embedding_model(suffix):
+    """La domanda sul modello tornava a OGNI run interattivo: un [2] battuto al
+    posto di [1] su un reinstall cambia lo spazio vettoriale del grafo. Si
+    chiede solo se non c'e' gia' un NS_EMBED_MODEL salvato."""
+    src = _read("gray_matter", suffix)
+    assert "NS_EMBED_MODEL=(.+)" in src and "keeping" in src, (
+        f"gray_matter/install{suffix}: the embedding question is not gated on a saved model")
+
+
+def test_gm_ps1_upgrades_a_different_version_without_the_interview():
+    """Sorgente 1.5.3 sopra un dist-info 1.4.1 finiva nel ramo "prima
+    installazione": interview completa, niente menu. Ora "installato" e' un
+    dist-info a qualunque versione, e versione diversa = "upgrade"."""
+    src = _read("gray_matter", ".ps1")
+    assert 'return "upgrade"' in src
+    assert '-eq $src) { return $inst.Trim() }' not in src, "installed == same version again"
+
+
 def _offered_models(project: str, suffix: str) -> list[str]:
     """The model names a picker offers. `""` is a real entry — NeuRAG's "follow
     Neuron" — so absence and empty string are different answers here."""

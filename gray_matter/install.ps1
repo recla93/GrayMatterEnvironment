@@ -432,7 +432,11 @@ except Exception:
 "@ | Set-Content $probe -Encoding ASCII
     $inst = & $VPy -I "$probe"
     Remove-Item -Force $probe -ErrorAction SilentlyContinue
-    if ($inst -and $inst.Trim() -eq $src) { return $inst.Trim() }
+    # Installato = c'e' un dist-info, a QUALUNQUE versione. Prima rispondeva
+    # solo a parita' di versione: un bump del sorgente (1.4.1 -> 1.5.3) finiva
+    # nel ramo "prima installazione" — interview completa, niente menu, niente
+    # "upgrading". Il caso piu' comune era l'unico a non passare dal menu.
+    if ($inst -and $inst.Trim()) { return $inst.Trim() }
     return $null
 }
 # "Stessa versione" NON vuol dire "stesso codice": un install andato a meta'
@@ -485,7 +489,7 @@ except Exception:
     return "$out".Trim()
 }
 
-# Returns: "skip", "reinstall", "deps", "clean" or "wipe". Non-interactive =>
+# Returns: "skip", "upgrade", "reinstall", "deps", "clean" or "wipe". Non-interactive =>
 # "skip", TRANNE quando il codice installato non e' quello del sorgente: li' lo
 # "skip" non e' una scelta dell'utente ma un default, e un default non deve
 # tenere in vita codice vecchio.
@@ -493,6 +497,14 @@ except Exception:
 # e chiedere sempre la deriva di gray_matter mostrerebbe al peer il dato di un
 # altro pacchetto.
 function Prompt-InstallChoice([string]$label, [string]$ver, [string]$module, [string]$srcDir) {
+    # Versione diversa = upgrade: non e' una domanda. pip liscio, non
+    # --force-reinstall --no-deps: la versione nuova puo' portare dipendenze
+    # nuove, e --no-deps le perderebbe.
+    $src = Get-SrcVersion $srcDir
+    if ($src -and $ver -ne $src) {
+        Write-Host "`n$label $ver is installed; this source is $src - upgrading. Data, settings and registrations KEPT."
+        return "upgrade"
+    }
     $drift = Get-CodeDrift $module $srcDir
     if ($Force) { return "reinstall" }
     # Codice diverso a parita' di versione: non lo si puo' chiedere come se
@@ -587,8 +599,8 @@ if ($gmVer) {
         & $VPy -m pip install --upgrade pip | Out-Null
     }
     if ($choice -ne "skip" -and $choice -ne "deps") {
-        Write-Host "Reinstalling Gray-Matter..."
-        $Repair = Get-RepairArgs -Always
+        Write-Host "$(if ($choice -eq "upgrade") { "Upgrading" } else { "Reinstalling" }) Gray-Matter..."
+        $Repair = if ($choice -eq "upgrade") { @() } else { Get-RepairArgs -Always }
         & $VPy -m pip install @Repair $Here
         if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1 }
@@ -656,15 +668,16 @@ function Install-Peer([string]$dir, [string]$label) {
                 if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
                 if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: gray-matter reinstall failed after venv rebuild."; return }
             }
-            Write-Host "Reinstalling $label..."
+            Write-Host "$(if ($choice -eq "upgrade") { "Upgrading" } else { "Reinstalling" }) $label..."
             # -Always: la reinstallazione e' stata CHIESTA. Senza forzare, pip
             # risponde "already satisfied" a parita' di versione e non copia
             # niente — ed e' proprio da qui che e' passato un neuron con 72 file
             # vecchi sotto la versione giusta. Il gate su mcp resta dentro
             # Get-RepairArgs: --no-deps su un venv senza deps consegna un
             # install morto, e un peer non capato trascina le shared dep oltre
-            # il cap di GM.
-            $Repair = Get-RepairArgs -Always
+            # il cap di GM. "upgrade": pip liscio, la versione nuova risolve
+            # da se' (e porta le dipendenze nuove).
+            $Repair = if ($choice -eq "upgrade") { @() } else { Get-RepairArgs -Always }
             & $VPy -m pip install @Find @Repair $dir
             if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Repair $dir }
             if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $label reinstall failed - continuing." }
@@ -999,9 +1012,32 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Embedding model for Neuron (full-suite users never see neuron/install.ps1).
+# Si chiede SOLO se non c'e' gia' un modello salvato: ad ogni run interattivo
+# la domanda tornava, e un [2] battuto al posto di [1] su un reinstall cambia
+# lo spazio vettoriale del grafo. -EmbedModel esplicito vince sempre.
+function Get-SavedEmbedModel {
+    $probe = Join-Path $env:TEMP "gm_embed_$PID.py"
+    @"
+try:
+    import re
+    from neuron.config import user_env_file
+    m = re.search(r'^NS_EMBED_MODEL=(.+)$', open(user_env_file(), encoding='utf-8').read(), re.M)
+    print(m.group(1).strip() if m else '')
+except Exception:
+    print('')
+"@ | Set-Content $probe -Encoding ASCII
+    $out = & $VPy -I "$probe"
+    Remove-Item -Force $probe -ErrorAction SilentlyContinue
+    return "$out".Trim()
+}
 if ($NeuronDir) {
-    $GmChosen = Select-GmEmbedModel
-    Save-GmEmbedModel $VPy $GmChosen
+    $saved = if ($EmbedModel) { "" } else { Get-SavedEmbedModel }
+    if ($saved) {
+        Write-Host "`n  Embedding model: keeping $saved (pass -EmbedModel to change it)."
+    } else {
+        $GmChosen = Select-GmEmbedModel
+        Save-GmEmbedModel $VPy $GmChosen
+    }
 }
 
 # Registro path sorgente (SoC): ogni componente registra il PROPRIO sorgente nel
