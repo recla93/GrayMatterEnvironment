@@ -1,6 +1,18 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **pyturso 0.8.3 e WAL multiprocesso su Windows.** `db.TURSO_OPEN_KW`
+  (backend `experimental_win_iocp` + `multiprocess_wal`): un secondo processo
+  apre lo stesso grafo su `turso-local` invece di finire `degraded` in sola
+  lettura. Verificato: 2 writer x 300 insert, 600 righe, `integrity_check` ok,
+  `sqlite3 mode=ro` legge. Ogni apertura deve passare gli stessi flag. Piu'
+  `PRAGMA busy_timeout=5000`. Una wheel `abi3` in `vendor/` copre 3.10-3.14.
+- **La connessione in cache e' thread-safe.** La 0.8.3 va in panic
+  (`wal.rs:3590`) se due thread entrano nella stessa connessione, e il panic
+  abbatte il processo; la 0.6.1 lanciava un'eccezione. `_CachedLocalConn`
+  passa ogni chiamata nativa, cursori compresi, da un `RLock`.
+- **L'installer standalone applica il pin di pyturso anche in riparazione**
+  (`--no-deps` non lo aggiornava), leggendolo da `pyproject.toml`.
 - **`export` include gli episodi.** `keyword -> [{turn, text}]`: i fatti, non
   solo i temi. Serve al `promote` di Gray Matter, che prima riceveva un grafo
   senza le sue tracce.

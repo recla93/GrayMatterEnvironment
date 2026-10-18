@@ -119,7 +119,7 @@ Neuron/
 |---|---|---|
 | `mcp>=1.28.0,<2.0` | yes | MCP SDK |
 | `fastembed>=0.5.0,<1.0` | yes | 384-dim semantic embedding |
-| `pyturso==0.6.1` | yes | Local Turso DB engine (vector_distance_cos) |
+| `pyturso==0.8.3` | yes | Local Turso DB engine (vector_distance_cos); on Windows with multi-process WAL (`db.TURSO_OPEN_KW`) |
 | `libsql-client>=0.3.1` | no (`neuron[cloud]`) | Real Turso cloud DB, used when `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` are set |
 | `ollama` | no | LLM provider for chat mode |
 | `openai` | no | LLM provider for chat mode |

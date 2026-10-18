@@ -11,4 +11,5 @@ dist/
 *.db
 *.db-wal
 *.db-shm
+*.db-tshm
 *.bak

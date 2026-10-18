@@ -1356,7 +1356,9 @@ async def _build_doctor() -> dict:
             "neurag": out.get("neurag_engine")
                       or ("Turso (cloud)" if _has("NEURAG_TURSO_DATABASE_URL")
                           and (shared or _has("NEURAG_TURSO_AUTH_TOKEN")) else "local"),
-            "gm_bridges": "Turso (cloud)" if _b.REMOTE_TURSO else "SQLite (local)",
+            # Il motore vero, non un'etichetta: "SQLite (local)" scritto a mano
+            # lo diceva anche con bridges.py su Turso locale.
+            "gm_bridges": _b.ENGINE_NAME,
         }
     except Exception:  # noqa: BLE001
         pass

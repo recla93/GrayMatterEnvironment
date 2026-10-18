@@ -41,6 +41,15 @@ sys.path.insert(0, str(NEURON))
 sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _private_bridges_db(tmp_path, monkeypatch):
+    """Never the real store. Without this, add_bridge() wrote conc_*/weight_*/
+    café_* rows into %LOCALAPPDATA%\\...\\bridges.db on every run (90 of 92 rows
+    on 2026-10-18), and opened it next to the live daemon. GM's own tests
+    already isolate it the same way."""
+    monkeypatch.setenv("GRAY_MATTER_BRIDGES", str(tmp_path / "bridges.db"))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # SECTION 1 — BRIDGE RESOLUTION (full suite vs standalone)
 # ═══════════════════════════════════════════════════════════════════════

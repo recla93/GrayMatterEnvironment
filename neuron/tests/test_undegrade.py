@@ -29,7 +29,7 @@ def test_degrade_flag_clears_on_successful_reopen(tmp_path, monkeypatch):
 
     class _Turso:
         @staticmethod
-        def connect(_p):
+        def connect(_p, **_kw):
             if fails[0]:
                 raise RuntimeError("Locking error: os error 33")
             return _Conn()
@@ -76,7 +76,7 @@ def test_lock_violation_says_another_process_holds_it(tmp_path, monkeypatch, cap
 
     class _Turso:
         @staticmethod
-        def connect(_p):
+        def connect(_p, **_kw):
             raise RuntimeError("Locking error: Failed locking file (os error 33)")
     monkeypatch.setattr(db, "_local_turso", _Turso)
 
@@ -109,7 +109,7 @@ def _fake_engine(monkeypatch, fails):
 
     class _Turso:
         @staticmethod
-        def connect(_p):
+        def connect(_p, **_kw):
             if fails[0]:
                 raise RuntimeError("Locking error: os error 33")
             return _Conn()

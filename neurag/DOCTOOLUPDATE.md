@@ -110,7 +110,7 @@ def _connect(self) -> None:
     # ...
 ```
 
-**Turso auto-provisioning**: se pyturso non è installato, NeuRAG tenta `pip install pyturso==0.6.1` dalle wheel vendored, fino a `NEURAG_TURSO_ATTEMPTS` volte. Solo allora degrada a sqlite3.
+**Turso auto-provisioning**: se pyturso non è installato, NeuRAG tenta `pip install pyturso==0.8.3` dalla wheel vendorata, fino a `NEURAG_TURSO_ATTEMPTS` volte. Solo allora degrada a sqlite3.
 
 ```python
 def _ensure_turso(self, db_path) -> None:

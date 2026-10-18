@@ -17,6 +17,7 @@ venv/
 *.db
 *.db-wal
 *.db-shm
+*.db-tshm
 
 # OS / editors
 .DS_Store

@@ -16,6 +16,7 @@ knowledge_grown/
 *.db
 *.db-wal
 *.db-shm
+*.db-tshm
 
 # ...but the seed knowledge DB MUST be versioned and shipped in the package.
 # Allow it in both the legacy location and the packaged location.

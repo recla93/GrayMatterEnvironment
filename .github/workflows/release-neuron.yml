@@ -4,9 +4,9 @@ name: Release
 # a GitHub runner that already has Rust + MSVC + Windows SDK), builds the Neuron
 # package, and publishes a GitHub Release with all artifacts attached.
 #
-# Python matrix includes 3.14: a team member runs Neuron on 3.14 and the wheel
-# pyturso-0.6.1-cp314-cp314-win_amd64.whl is vendored manually — this job keeps
-# it regenerated automatically on every release / pyturso bump.
+# One abi3 wheel (pyturso-<ver>-cp310-abi3-win_amd64.whl) covers Python
+# 3.10-3.14; it is vendored in neuron/vendor and this job rebuilds it on every
+# release / pyturso bump.
 on:
   push:
     tags: ["neuron-v*"]
@@ -63,19 +63,15 @@ jobs:
     # moriva prima di partire -- "the directory name is invalid" -- perche' la
     # cartella non esiste su un runner senza checkout. wheelhouse/ nasce nella
     # radice del workspace, dove upload-artifact la cerca gia'.
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    # Una sola build: da 0.7 pyturso esce abi3-py310, una wheel per 3.10-3.14.
     steps:
       - uses: actions/setup-python@v5
         with:
-          python-version: "${{ matrix.python }}"
-          allow-prereleases: true    # 3.14 may still be pre-release on the runner
-      - run: pip wheel "pyturso==0.6.1" --no-deps -w wheelhouse
+          python-version: "3.12"
+      - run: pip wheel "pyturso==0.8.3" --no-deps -w wheelhouse
       - uses: actions/upload-artifact@v4
         with:
-          name: pyturso-win-${{ matrix.python }}
+          name: pyturso-win-abi3
           path: wheelhouse/*.whl
 
   # --- 2. Build the Neuron package + 3. Publish the Release ---

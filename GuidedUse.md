@@ -37,10 +37,13 @@ wrong place.
 gray-matter doctor
 ```
 
-Read the `engine` line. `Turso (local)` is the good tier. `SQLite (read-only:
-owned by another process)` is also fine — it means something else has the vault
-open, usually the server, and you are reading a borrowed copy. `corrupt` is the
-only word that means trouble, and it will tell you what to do about it.
+Read the `engine` line. `Turso (local)` is the good tier — on Windows you get it
+even while the server has the vault open: since pyturso 0.8.3 the processes
+share the WAL (multi-process mode) instead of locking each other out.
+`SQLite (read-only: owned by another process)` is also fine — where that mode is
+off, it means something else has the vault open and you are reading a borrowed
+copy. `corrupt` is the only word that means trouble, and it will tell you what
+to do about it.
 
 **2. Give it something to read.**
 

@@ -1,6 +1,19 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **pyturso 0.8.3, una wheel sola.** Da 0.7 pyturso esce `abi3-py310`: in
+  `vendor/` c'e' `pyturso-0.8.3-cp310-abi3-win_amd64.whl` al posto delle
+  cinque `cp310`…`cp314`, e il job `build-pyturso-win` della CI fa un solo
+  build. Compilabile in locale con i soli Build Tools (~3 GB).
+- **I bridge su Windows con WAL multiprocesso.** `bridges.py` apre con
+  `TURSO_OPEN_KW` (backend IOCP + `multiprocess_wal`, come Neuron e NeuRAG) e
+  `PRAGMA busy_timeout=5000`: Turso ha 0 di default, e `test_concurrent_bridge_writes`
+  passava solo perche' 9 thread su 10 degradavano a sqlite3.
+- **L'installer applica sempre il pin di pyturso.** Lo installava solo se
+  mancava: sopra una 0.6.1 un `-Force` lasciava la versione vecchia, che
+  rifiuta i flag nuovi → ogni store `degraded`. Gia' a posto = no-op di pip.
+- **doctor: il tier dei bridge e' il motore vero.** Era l'etichetta fissa
+  `SQLite (local)` anche con i bridge su Turso locale; ora `ENGINE_NAME`.
 - **L'installer riconosce un upgrade.** «Installato» era solo «installato
   alla stessa versione»: un bump del sorgente (1.4.1 → 1.5.3) finiva nel ramo
   *prima installazione* — interview completa, niente menu, niente

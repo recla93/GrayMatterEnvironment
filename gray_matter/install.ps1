@@ -842,12 +842,14 @@ function Test-PyModule([string]$module) {
 
 # Best-effort turso tier: wheel vendored (Neuron\vendor o vendor del peer),
 # altrimenti PyPI. Se fallisce NON blocca: si degrada al tier sqlite3.
-if (-not (Test-PyModule "turso")) {
-    Write-Host "Enabling the Turso vector tier (best-effort)..."
-    & $VPy -m pip install @Find "pyturso==0.6.1"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  pyturso not available here - running on the sqlite3 tier (still fully functional)."
-    }
+# Sempre, non solo se manca: il pin cambia (0.6.1 -> 0.8.3) e il codice nuovo
+# passa a turso.connect() flag che la versione vecchia rifiuta. "turso c'e'"
+# non vuol dire "c'e' quella giusta", e la riparazione --no-deps non lo
+# aggiorna. Se la versione e' gia' quella, pip non fa niente.
+Write-Host "Enabling the Turso vector tier (best-effort)..."
+& $VPy -m pip install -q @Find "pyturso==0.8.3"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  pyturso not available here - running on the sqlite3 tier (still fully functional)."
 }
 
 # Best-effort GUI nativa: pywebview. Senza, la GUI degrada al browser — che

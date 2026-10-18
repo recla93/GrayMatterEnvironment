@@ -74,6 +74,12 @@ except ImportError:                      # nessuna wheel per questo ABI
     _local_turso = None
     LOCAL_TURSO_ENGINE = False
 
+# WAL multiprocesso (pyturso >= 0.8): su Windows solo il backend IOCP lo
+# coordina. Ogni apertura dello stesso file deve passare gli stessi flag.
+# keep-in-sync con Neuron/db.py TURSO_OPEN_KW.
+TURSO_OPEN_KW = ({"vfs": "experimental_win_iocp", "experimental_features": "multiprocess_wal"}
+                 if os.name == "nt" else {})
+
 ENGINE_NAME = ("Turso (cloud)" if REMOTE_TURSO
                else "Turso (local)" if LOCAL_TURSO_ENGINE else "SQLite")
 
@@ -311,7 +317,9 @@ def _open_local_turso(path: str):
     last = None
     for attempt in range(3):
         try:
-            return _local_turso.connect(path)
+            conn = _local_turso.connect(path, **TURSO_OPEN_KW)
+            conn.execute("PRAGMA busy_timeout=5000")   # Turso: 0 di default, sqlite3: 5 s
+            return conn
         except Exception as e:  # noqa: BLE001 — transient concurrent-open race
             last = e
             time.sleep(0.05 * (attempt + 1))

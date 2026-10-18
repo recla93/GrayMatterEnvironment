@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import struct
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,97 @@ try:
     TURSO_AVAILABLE = True
 except ImportError:
     TURSO_AVAILABLE = False
+
+# Multi-process WAL (pyturso >= 0.8). On Windows only the IOCP backend can
+# coordinate a shared WAL; the default one refuses the feature. EVERY opener of
+# a file must pass the same flags: one without them takes the exclusive lock and
+# does not coordinate. keep-in-sync with Neuron/db.py TURSO_OPEN_KW.
+TURSO_OPEN_KW = ({"vfs": "experimental_win_iocp", "experimental_features": "multiprocess_wal"}
+                 if os.name == "nt" else {})
+
+
+class _ThreadSafeCursor:
+    """A cursor whose native calls take the connection's lock: SELECT rows are
+    stepped lazily inside fetch*(), so guarding execute() alone is not enough."""
+
+    def __init__(self, cur, lock):
+        object.__setattr__(self, "_cur", cur)
+        object.__setattr__(self, "_lock", lock)
+
+    def _locked(name):
+        def call(self, *a, **k):
+            with self._lock:
+                return getattr(self._cur, name)(*a, **k)
+        return call
+
+    fetchone = _locked("fetchone")
+    fetchall = _locked("fetchall")
+    fetchmany = _locked("fetchmany")
+    close = _locked("close")
+    del _locked
+
+    def __iter__(self):
+        while (row := self.fetchone()) is not None:
+            yield row
+
+    def __getattr__(self, name):        # description, rowcount, lastrowid...
+        return getattr(self._cur, name)
+
+
+class _ThreadSafeConn:
+    """One pyturso connection shared by the worker's threads (ingest jobs run in
+    background threads next to the queries). pyturso 0.8.3 PANICS when two
+    threads are inside the same connection at once (wal.rs:3590, turso_assert),
+    and a Rust panic takes the whole process down: on 2026-10-18 fifteen
+    parallel knowledge_ingest calls killed the NeuRAG worker. 0.6.1 raised a
+    Python error instead. One RLock around every native call; verified with 4
+    threads x 200 insert+commit: 800 rows, 0 errors, with and without
+    TURSO_OPEN_KW. A connection per thread is NOT the fix: under multiprocess
+    WAL it lost rows (database is locked, IoError write)."""
+
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_lock", threading.RLock())
+
+    def execute(self, *a, **k):
+        with self._lock:
+            return _ThreadSafeCursor(self._conn.execute(*a, **k), self._lock)
+
+    def executemany(self, *a, **k):
+        with self._lock:
+            return _ThreadSafeCursor(self._conn.executemany(*a, **k), self._lock)
+
+    def cursor(self, *a, **k):
+        with self._lock:
+            return _ThreadSafeCursor(self._conn.cursor(*a, **k), self._lock)
+
+    def commit(self):
+        with self._lock:
+            return self._conn.commit()
+
+    def rollback(self):
+        with self._lock:
+            return self._conn.rollback()
+
+    def close(self):
+        with self._lock:
+            return self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):  # row_factory goes to the real connection
+        setattr(self._conn, name, value)
+
+
+def _turso_open(path: str):
+    """turso_connect + busy_timeout + thread-safety. Turso's busy_timeout
+    defaults to 0 ("database is locked" at once), sqlite3 waits 5 s. Reads the
+    turso_connect global at call time, so the auto-provisioning rebind and the
+    tests' monkeypatch still apply."""
+    conn = turso_connect(path, **TURSO_OPEN_KW)
+    conn.execute("PRAGMA busy_timeout=5000")
+    return _ThreadSafeConn(conn)
 
 # --- Cloud Turso (multi-machine) — libsql-client facade ----------------------
 # Decoupled port (2026-07-21), keep-in-sync with Neuron/src/neuron/db.py. NeuRAG
@@ -306,6 +398,8 @@ def _ensure_parent_dir(path: str) -> None:
 # within one process (which would fail on the second open). Reads from other
 # processes work fine (shared lock); only concurrent writes would fail, and
 # neurag CLI routes writes through GM when it's active (_run_via_gm in cli.py).
+# 2026-10-18, pyturso 0.8.3: with TURSO_OPEN_KW (Windows) the lock is gone and a
+# second process is a full peer; without it the above still holds.
 _turso_conn_cache: dict[str, object] = {}
 
 
@@ -335,7 +429,7 @@ def _open_local_turso(path: str, errors: "list[str] | None" = None):
     # Try to open — transient errors (dir not ready) get a few retries
     import time as _t
     try:
-        conn = turso_connect(path)
+        conn = _turso_open(path)
         _turso_conn_cache[path] = conn
         return conn
     except Exception as e:  # noqa: BLE001
@@ -348,7 +442,7 @@ def _open_local_turso(path: str, errors: "list[str] | None" = None):
             _t.sleep(0.05 * (attempt + 1))
             _ensure_parent_dir(path)
             try:
-                conn = turso_connect(path)
+                conn = _turso_open(path)
                 _turso_conn_cache[path] = conn
                 return conn
             except Exception as e2:  # noqa: BLE001
@@ -810,7 +904,7 @@ class KnowledgeGraph:
             except Exception as e:  # noqa: BLE001 — non ancora installato
                 self._turso_errors.append(f"tentativo {i}: import turso KO ({e!r})")
                 if autoinstall:
-                    cmd = [_sys.executable, "-m", "pip", "install", "pyturso==0.6.1"]
+                    cmd = [_sys.executable, "-m", "pip", "install", "pyturso==0.8.3"]
                     if vendor:
                         cmd[4:4] = ["--find-links", str(vendor)]
                     try:

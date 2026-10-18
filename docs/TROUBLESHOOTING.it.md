@@ -65,7 +65,7 @@ neurag-mcp
 
 **Diagnosi:** pyturso non e installato. NeuRAG degrada a sqlite3 + cosine Python brute-force.
 
-**Soluzione:** Installa pyturso dai wheel vendored: `pip install Neuron/vendor/pyturso-0.6.1-*.whl` (specifico per piattaforma). Il tier completo dà `vector_distance_cos()` SQL nativo.
+**Soluzione:** Installa pyturso dai wheel vendored: `pip install neuron/vendor/pyturso-0.8.3-cp310-abi3-win_amd64.whl` (una wheel per Python 3.10-3.14). Il tier completo dà `vector_distance_cos()` SQL nativo.
 
 ## Errore "open: NotFound" (bug L2)
 

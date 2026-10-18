@@ -106,7 +106,7 @@ def test_url_candidates_normalisation():
 
 
 def test_local_open_degrades_to_none(monkeypatch):
-    def _boom(_path):
+    def _boom(_path, **_kw):
         raise OSError("open: NotFound")
     monkeypatch.setattr(db, "turso_connect", _boom, raising=False)
     assert db._open_local_turso("/tmp/does/not/matter.db") is None  # caller logs error

@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import re as _re
 import sqlite3 as _sqlite3
+import threading as _threading
 import time as _time
 from pathlib import Path
 from typing import Any, Sequence
@@ -51,6 +52,18 @@ try:
 except ImportError:
     _local_turso = None
     LOCAL_TURSO_ENGINE = False
+
+# Multi-process WAL (pyturso >= 0.8). On Windows only the IOCP backend can
+# coordinate a shared WAL; the default one refuses the feature. EVERY opener of
+# a file must pass the same flags: one without them takes the exclusive lock and
+# does not coordinate. Verified 2026-10-18: two writers x 300 inserts, 600 rows,
+# integrity ok, sqlite3 mode=ro reads it. keep-in-sync with NeuRAG/db.py and
+# gray_matter/bridges.py.
+TURSO_OPEN_KW = ({"vfs": "experimental_win_iocp", "experimental_features": "multiprocess_wal"}
+                 if os.name == "nt" else {})
+# Turso's busy_timeout defaults to 0: a writer that finds the WAL taken fails
+# at once with "database is locked". sqlite3 waits 5 s by default; match it.
+TURSO_BUSY_TIMEOUT_MS = 5000
 
 if REMOTE_TURSO:
     try:
@@ -507,21 +520,75 @@ def _ensure_parent_dir(path: str) -> None:
 # pytest run. Caching by path and no-op'ing close() cuts total native
 # opens from "one per operation" to "one per unique file". Upgrade path:
 # drop this once pyturso actually releases handles on close().
+# 2026-10-18, pyturso 0.8.3: WITHOUT the multi-process flags the lock still
+# survives close(); WITH them (TURSO_OPEN_KW on Windows) another process
+# opens the file after close(), and 2000 open/close in one process did not
+# exhaust anything. Kept anyway: one connection per file is still cheaper.
 _local_conn_cache: dict[str, object] = {}
+
+
+class _LockedCursor:
+    """Cursor whose native calls take the connection's lock: SELECT rows are
+    stepped lazily inside fetch*(), so guarding execute() alone is not enough."""
+    __slots__ = ("_cur", "_lock")
+
+    def __init__(self, cur, lock):
+        object.__setattr__(self, "_cur", cur)
+        object.__setattr__(self, "_lock", lock)
+
+    def fetchone(self):
+        with self._lock:
+            return self._cur.fetchone()
+
+    def fetchall(self):
+        with self._lock:
+            return self._cur.fetchall()
+
+    def fetchmany(self, *a, **k):
+        with self._lock:
+            return self._cur.fetchmany(*a, **k)
+
+    def __iter__(self):
+        while (row := self.fetchone()) is not None:
+            yield row
+
+    def __getattr__(self, name):        # description, rowcount, lastrowid...
+        return getattr(object.__getattribute__(self, "_cur"), name)
 
 
 class _CachedLocalConn:
     """Transparent proxy over a cached local Turso connection.
 
     ``close()`` only drops our reference — the real connection stays alive
-    in ``_local_conn_cache`` for the next caller on the same path. Every
-    other attribute/method (execute, executemany, commit, rollback, ...)
-    passes straight through.
+    in ``_local_conn_cache`` for the next caller on the same path.
+
+    Every native call takes one RLock. The cached connection is shared by every
+    thread of the process, and pyturso 0.8.3 PANICS when two threads are inside
+    it at once (wal.rs:3590) — a Rust panic kills the process; 0.6.1 raised a
+    Python error. On 2026-10-18 parallel ingests killed the NeuRAG worker this
+    way. keep-in-sync with NeuRAG/db.py _ThreadSafeConn.
     """
-    __slots__ = ("_conn",)
+    __slots__ = ("_conn", "_lock")
 
     def __init__(self, conn):
         object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_lock", _threading.RLock())
+
+    def execute(self, *a, **k):
+        with self._lock:
+            return _LockedCursor(self._conn.execute(*a, **k), self._lock)
+
+    def executemany(self, *a, **k):
+        with self._lock:
+            return _LockedCursor(self._conn.executemany(*a, **k), self._lock)
+
+    def commit(self):
+        with self._lock:
+            return self._conn.commit()
+
+    def rollback(self):
+        with self._lock:
+            return self._conn.rollback()
 
     def close(self) -> None:
         pass  # cached connection stays open — see _open_local_engine
@@ -557,7 +624,8 @@ def _open_local_engine(path: str):
     last: Exception | None = None
     for attempt in range(3):
         try:
-            conn = _CachedLocalConn(_local_turso.connect(path))
+            conn = _CachedLocalConn(_local_turso.connect(path, **TURSO_OPEN_KW))
+            conn.execute(f"PRAGMA busy_timeout={TURSO_BUSY_TIMEOUT_MS}")
             _local_conn_cache[path] = conn
             # Un-degrade: the sqlite3 fallback is never cached, so every
             # connect() already retries Turso. Only the FLAG was sticky, so

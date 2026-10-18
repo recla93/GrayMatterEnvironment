@@ -70,7 +70,7 @@ def test_snapshot_leaves_a_live_wal_alone(tmp_path):
     turso = pytest.importorskip("turso")
     from neuron import db
     path = str(tmp_path / "graph_ai.db")
-    live = turso.connect(path)
+    live = turso.connect(path, **db.TURSO_OPEN_KW)
     live.execute("CREATE TABLE nodes (context TEXT, keyword TEXT)")
     live.executemany("INSERT INTO nodes VALUES ('ai', ?)", [(f"k{i}",) for i in range(200)])
     live.commit()

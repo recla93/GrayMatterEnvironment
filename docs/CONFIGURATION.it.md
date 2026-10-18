@@ -159,5 +159,5 @@ Al momento della scrittura (luglio 2026):
 | Gray Matter | 1.1.0 | `__version__.py` |
 | NeuRAG | 1.2.0 | `pyproject.toml` |
 | Protocollo MCP | >=1.28.0,<2.0 | `pyproject.toml` Neuron |
-| pyturso | ==0.6.1 | `pyproject.toml` Neuron (pinned) |
+| pyturso | ==0.8.3 | `pyproject.toml` Neuron (pinned) |
 | fastembed | >=0.5.0,<1.0 | `pyproject.toml` Neuron |

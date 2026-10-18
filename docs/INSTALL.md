@@ -157,8 +157,8 @@ never deleted without `--purge-data`.
 
 - **`pip` tries to compile pyturso / "Microsoft Visual C++ required" (Windows):**
   you skipped the vendored wheels. Re-run with `--find-links neuron/vendor`.
-- **`pyturso` wheel doesn't match my Python:** the vendored wheels cover
-  cp310–cp314 on `win_amd64`. Use Python 3.10–3.14, or install on Linux/macOS
+- **`pyturso` wheel doesn't match my Python:** the vendored abi3 wheel covers
+  Python 3.10–3.14 on `win_amd64`. Use one of those, or install on Linux/macOS
   where PyPI serves matching wheels.
 - **`ModuleNotFoundError: fastembed` / `mcp`:** the venv is incomplete — re-run
   the installer, or `pip install -e .` in each repo.

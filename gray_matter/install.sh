@@ -441,12 +441,12 @@ stop_venv_procs
 # Best-effort turso tier: prova le wheel vendored (Neuron/vendor o vendor del
 # peer), poi PyPI (mac/linux le ha). Se fallisce NON è un errore: NeuRAG e
 # Neuron degradano al tier sqlite3 e funzionano comunque.
-if ! "$VPY" -c "import turso" >/dev/null 2>&1; then
-    echo "Enabling the Turso vector tier (best-effort)..."
-    # shellcheck disable=SC2086
-    "$VPY" -m pip install $FINDLINKS "pyturso==0.6.1" \
-        || echo "  pyturso not available here — running on the sqlite3 tier (still fully functional)."
-fi
+# Sempre, non solo se manca: un pin nuovo va applicato anche sopra una versione
+# vecchia (il codice passa flag che la vecchia rifiuta). Gia' a posto = no-op.
+echo "Enabling the Turso vector tier (best-effort)..."
+# shellcheck disable=SC2086
+"$VPY" -m pip install -q $FINDLINKS "pyturso==0.8.3" \
+    || echo "  pyturso not available here — running on the sqlite3 tier (still fully functional)."
 
 # Best-effort semantic tier: fastembed = retrieval preciso sul vault
 # multi-disciplinare (meno chunk, meno token). Come pyturso: mai bloccante,

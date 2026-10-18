@@ -13,7 +13,7 @@ dependencies = [
     # fallback automatico (db.py lo gestisce a runtime se turso non è
     # disponibile). Le wheel win_amd64 sono vendored in vendor/ e installate
     # dall'installer via --find-links, così non serve il toolchain Rust/MSVC.
-    "pyturso==0.6.1",
+    "pyturso==0.8.3",
     # Hard dependency, exactly as in Neuron. It was an optional `semantic`
     # extra, and no installer ever requested that extra — so a STANDALONE
     # NeuRAG got NullEmbedder and fell back to lexical search. It embedded only

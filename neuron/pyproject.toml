@@ -28,7 +28,7 @@ dependencies = [
     # pre-builds a win_amd64 wheel and install.ps1 feeds it via --find-links;
     # a loose ">=" could resolve to a newer version with no vendored wheel and
     # silently fall back to compiling. Bump this together with release.yml.
-    "pyturso==0.6.1",
+    "pyturso==0.8.3",
     "fastembed>=0.5.0,<1.0",
 ]
 

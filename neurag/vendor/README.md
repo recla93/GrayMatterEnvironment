@@ -9,36 +9,28 @@ present next to NeuRAG.
 must be prebuilt. On macOS/Linux pip fetches matching wheels from PyPI, so this
 folder is only consulted (via `--find-links`) when it has an ABI match.
 
-## Expected layout (full set)
+## Layout
 
 ```
 neurag/vendor/
-├─ pyturso-0.6.1-cp310-cp310-win_amd64.whl
-├─ pyturso-0.6.1-cp311-cp311-win_amd64.whl
-├─ pyturso-0.6.1-cp312-cp312-win_amd64.whl
-├─ pyturso-0.6.1-cp313-cp313-win_amd64.whl
-└─ pyturso-0.6.1-cp314-cp314-win_amd64.whl
+└─ pyturso-0.8.3-cp310-abi3-win_amd64.whl
 ```
 
-> One wheel = one Python minor version. A `cp312` wheel installs only on Python
-> 3.12. A real release needs the full 3.10–3.14 set.
+> One wheel covers Python 3.10–3.14: since 0.7 pyturso is built `abi3-py310`
+> (PyO3 stable ABI). The old per-minor set (`cp310` … `cp314`) is gone.
 
 ## Build fresh (needs Rust + MSVC + Windows SDK)
 
-**Your Python version only** (quick, for testing the no-compile path):
+The Visual Studio **Build Tools** are enough (C++ x64 tools + Windows SDK, ~3 GB);
+the full IDE is not needed. From inside `neurag/vendor/`:
 
 ```powershell
-python -m pip wheel "pyturso==0.6.1" --no-deps --find-links . -w .
+python -m pip wheel "pyturso==0.8.3" --no-deps --no-binary pyturso -w .
 ```
 
-Run it from inside `neurag/vendor/`. It drops
-`pyturso-0.6.1-cp<XY>-cp<XY>-win_amd64.whl` here, where `<XY>` is your Python
-minor (e.g. `cp313` for 3.13).
-
-**Full set (3.10–3.14):** don't build these by hand — the
-`.github/workflows/release.yml` → `build-pyturso-win` job compiles all five on
-`windows-latest` runners on every tag push (`v*`) and attaches them to the
-Release. That is the source of truth for a published set.
+Any Python >= 3.10 builds the same abi3 wheel. The
+`build-pyturso-win` job in the release workflow rebuilds it on every tag push and
+attaches it to the Release.
 
 When you bump the `pyturso` pin, change it in **both** `pyproject.toml`
 (`[turso]` extra) and the `build-pyturso-win` job in `release.yml`, then rebuild.

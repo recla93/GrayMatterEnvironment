@@ -28,10 +28,10 @@ def _wal(path: str):
 
 def test_a_read_only_open_leaves_the_live_wal_alone(tmp_path):
     turso = pytest.importorskip("turso")
-    from neuron.db import connect_read_only
+    from neuron.db import TURSO_OPEN_KW, connect_read_only
 
     path = str(tmp_path / "g.db")
-    live = turso.connect(path)
+    live = turso.connect(path, **TURSO_OPEN_KW)
     live.execute("CREATE TABLE t (v TEXT)")
     live.execute("INSERT INTO t VALUES ('A')")
     live.commit()
@@ -86,7 +86,7 @@ def test_the_lock_fallback_is_read_only_and_names_the_reason(tmp_path, monkeypat
 
     class _Turso:
         @staticmethod
-        def connect(_p):
+        def connect(_p, **_kw):
             raise RuntimeError("Locking error: Failed locking file (os error 33)")
     monkeypatch.setattr(db, "_local_turso", _Turso)
 
@@ -107,7 +107,7 @@ def test_other_open_failures_still_get_a_writable_single_opener(tmp_path, monkey
 
     class _Boom:
         @staticmethod
-        def connect(_path):
+        def connect(_path, **_kw):
             raise OSError("open: NotFound")
     monkeypatch.setattr(db, "_local_turso", _Boom, raising=False)
     monkeypatch.setattr(db, "LOCAL_TURSO_ENGINE", True, raising=False)

@@ -280,6 +280,13 @@ PY
     # shellcheck disable=SC2086
     "$VPY" -m pip install $FL $CONS $(repair_args) "$HERE" || "$VPY" -m pip install $CONS $(repair_args) "$HERE" \
         || { echo "ERROR: NeuRAG install failed — check network, or try: pip install --upgrade pip"; exit 1; }
+    # The pyturso pin must land in repair mode too: --no-deps leaves the old
+    # wheel, and 0.6.1 rejects the flags db.py passes. pyproject.toml is the one
+    # source of the pin; already satisfied = pip no-op.
+    TURSO_PIN=$(sed -n 's/.*"\(pyturso==[^"]*\)".*/\1/p' "$HERE/pyproject.toml" | head -n 1)
+    # shellcheck disable=SC2086
+    [ -n "$TURSO_PIN" ] && { "$VPY" -m pip install -q $FL "$TURSO_PIN" \
+        || echo "  WARNING: $TURSO_PIN not installed — NeuRAG runs on the sqlite3 tier."; }
     save_embed_model "$VPY"
     # Ship our OWN copy of gray_matter (the vendored wheel) into the standalone
     # venv: without it `import gray_matter` fails, silently disabling the

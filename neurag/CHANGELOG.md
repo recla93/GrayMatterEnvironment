@@ -1,5 +1,24 @@
 # Changelog — NeuRAG
 
+## Unreleased
+- **pyturso 0.8.3 e WAL multiprocesso su Windows.** `db.TURSO_OPEN_KW`
+  (backend IOCP + `multiprocess_wal`): un secondo processo apre il vault su
+  `Turso (local)` e puo' scrivere, invece del tier in prestito in sola
+  lettura (che resta dove il flag e' spento). `PRAGMA busy_timeout=5000`.
+  Una wheel `abi3` in `vendor/` copre 3.10-3.14.
+- **La connessione del vault e' thread-safe.** Il 2026-10-18 quindici
+  `knowledge_ingest` in parallelo hanno ucciso il worker: pyturso 0.8.3 va in
+  panic (`wal.rs:3590`) se due thread entrano nella stessa connessione.
+  `_ThreadSafeConn` passa ogni chiamata nativa, cursori compresi (le SELECT si
+  leggono pigre in `fetch*()`), da un `RLock`. Una connessione per thread non
+  basta: con il WAL multiprocesso perdeva righe. Test:
+  `test_thread_safe_conn.py`, che fallisce senza il proxy.
+- **I test non scrivono piu' nel `bridges.db` vero.** `test_mega_integration.py`
+  aggiungeva righe `conc_*`/`weight_*`/`café_*` a ogni run (90 su 92 righe il
+  2026-10-18): ora `GRAY_MATTER_BRIDGES` punta a `tmp_path`.
+- **L'installer standalone applica il pin di pyturso anche in riparazione**
+  (`--no-deps` non lo aggiornava), leggendolo da `pyproject.toml`.
+
 ## 1.4.3 (2026-09-14)
 - **README: tutti i 19 tool.** Mancavano `knowledge_ingest`/`_status`,
   `confirm`, `import`, `rename_node`, `remove_node`, `reindex`, `neighbors`,

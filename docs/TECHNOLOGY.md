@@ -16,7 +16,7 @@
 
 **Choice:** libSQL (Turso fork) with 3-tier fallback: remote Turso → local pyturso → SQLite.
 
-**Why:** libSQL reads plain SQLite files (zero migration from local). The 3-tier fallback means it works offline, on LAN, or cloud. pyturso==0.6.1 is pinned for wheel compatibility across Python 3.10-3.14.
+**Why:** libSQL reads plain SQLite files (zero migration from local). The 3-tier fallback means it works offline, on LAN, or cloud. pyturso==0.8.3 is pinned: one vendored abi3 wheel covers Python 3.10-3.14. On Windows the multi-process WAL is on (IOCP backend).
 
 **Accepted limits:** pyturso wheels are platform-specific (win_amd64, macosx, manylinux). Vector index (`libsql_vector_idx`) not yet used — full-scan cosine is fine for vaults under ~50K chunks.
 

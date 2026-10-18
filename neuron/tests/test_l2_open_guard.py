@@ -52,7 +52,7 @@ def test_local_open_degrades_to_sqlite(tmp_path, monkeypatch):
     """Local pyturso engine present but failing every open -> degrade to sqlite3."""
     class _Boom:
         @staticmethod
-        def connect(_path):
+        def connect(_path, **_kw):
             raise OSError("open: NotFound")
 
     monkeypatch.setattr(_db, "_local_turso", _Boom, raising=False)

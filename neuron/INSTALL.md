@@ -98,33 +98,23 @@ the wheel(s) in it:
 Neuron-master\
 ├─ install.ps1
 ├─ vendor\
-│   ├─ pyturso-0.6.1-cp310-cp310-win_amd64.whl
-│   ├─ pyturso-0.6.1-cp311-cp311-win_amd64.whl
-│   ├─ pyturso-0.6.1-cp312-cp312-win_amd64.whl
-│   └─ pyturso-0.6.1-cp313-cp313-win_amd64.whl
+│   └─ pyturso-0.8.3-cp310-abi3-win_amd64.whl
 └─ ...
 ```
 
-To build a wheel for **your** Python version (needs Rust + MSVC installed):
+> **One wheel for every Python 3.10–3.14.** Since 0.7 pyturso is built
+> `abi3-py310` (PyO3 stable ABI), so the old per-version set (`cp310` …
+> `cp314`) is gone.
+
+To rebuild it (needs Rust + the Visual Studio **Build Tools** — C++ x64 tools and
+the Windows SDK, ~3 GB; the full IDE is not needed):
 
 ```powershell
-python -m pip wheel "pyturso==0.6.1" --no-deps --find-links vendor -w vendor
+python -m pip wheel "pyturso==0.8.3" --no-deps --no-binary pyturso -w vendor
 ```
 
-(`--find-links vendor` makes pip prefer an already-vendored wheel matching your Python's
-ABI over compiling from source, if one happens to already be there — harmless either way,
-but avoids an unnecessary compile when a wheel already exists.)
-
-This drops `pyturso-0.6.1-cp<XY>-cp<XY>-win_amd64.whl` into `vendor\`, where
-`<XY>` is your Python minor version (e.g. `cp313` for Python 3.13).
-
-> **One wheel = one Python version.** A `cp313` wheel only installs on Python
-> 3.13; a 3.12 user needs `cp312`, etc. For a real release you need the full set
-> (3.10–3.14). You don't build those by hand — the `release.yml` GitHub workflow
-> compiles all four on `windows-latest` runners (which already have the
-> toolchain) and attaches them to the Release automatically. The single local
-> build above is mainly for **testing the no-compile install path** on your own
-> machine before publishing.
+Any Python >= 3.10 produces the same abi3 wheel. The `build-pyturso-win` job of
+the release workflow rebuilds it on every tag and attaches it to the Release.
 
 When you bump `pyturso`, change the pin in **both** `pyproject.toml` and the
 `build-pyturso-win` job in `.github/workflows/release.yml`, then rebuild.
@@ -259,16 +249,15 @@ You're on Windows without a matching prebuilt wheel. Either:
   Open a **new** terminal afterwards so `cargo`/`cl` are on `PATH`, then retry.
 
 ### `pyturso` wheel doesn't match my Python
-A tagged release bundles prebuilt `vendor/` wheels for the full Python 3.10–3.14
-range (`win_amd64`); a source checkout vendors only the maintainers' versions
-(currently `cp313`/`cp314`). On any Python minor version without a matching wheel
-— or a different architecture (e.g. ARM64) — pip falls back to compiling. Install
-a supported CPython, or build the toolchain.
+`vendor/` holds one abi3 wheel (`win_amd64`) that installs on any CPython
+3.10–3.14. Below 3.10, or on another architecture (e.g. ARM64), there is no
+matching wheel and pip falls back to compiling. Install a supported CPython, or
+install the Build Tools.
 
 ### `ModuleNotFoundError: No module named 'fastembed'` (or `mcp`)
 The venv install didn't complete. Re-run inside the activated venv:
 ```bash
-pip install mcp fastembed "pyturso==0.6.1"
+pip install --find-links vendor mcp fastembed "pyturso==0.8.3"
 ```
 
 ### The seed knowledge DB is missing / `base_knowledge.db not found`

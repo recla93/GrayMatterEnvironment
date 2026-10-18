@@ -139,8 +139,8 @@ La memoria (grafo, vault, bridge) non viene mai cancellata senza `--purge-data`.
 
 - **`pip` prova a compilare pyturso / "Microsoft Visual C++ required" (Windows):**
   hai saltato le wheel vendored. Ri-esegui con `--find-links Neuron/vendor`.
-- **La wheel `pyturso` non combacia col mio Python:** le wheel vendored coprono
-  cp310–cp314 su `win_amd64`. Usa Python 3.10–3.14, oppure installa su
+- **La wheel `pyturso` non combacia col mio Python:** la wheel abi3 vendorata copre
+  Python 3.10–3.14 su `win_amd64`. Usa una di queste, oppure installa su
   Linux/macOS dove PyPI serve le wheel giuste.
 - **`ModuleNotFoundError: fastembed` / `mcp`:** il venv è incompleto — ri-esegui
   l'installer, o `pip install -e .` in ogni repo.

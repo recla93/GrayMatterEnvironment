@@ -1,9 +1,10 @@
-"""pyturso connection cache tests.
+"""pyturso connection cache and second-process tests.
 
-pyturso 0.6.1 on Windows does NOT release the OS file lock on conn.close().
-A second process CANNOT open the same file at all. These tests verify:
-  1. Module cache prevents multiple pyturso connections to the same file
-  2. Cross-process access fails cleanly (confirms exclusive lock behavior)
+Two worlds, chosen by db.TURSO_OPEN_KW:
+  - multi-process WAL ON (Windows, pyturso >= 0.8, IOCP backend): a second
+    process opens the same vault on the Turso tier and can read AND write.
+  - OFF (elsewhere): pyturso takes an EXCLUSIVE lock; a second process borrows
+    a read-only sqlite3 tier and must not write.
 """
 import os
 import subprocess
@@ -110,11 +111,16 @@ def test_second_process_degrades_to_sqlite_instead_of_having_no_connection(tmp_p
         a.kill()
         a.wait(timeout=10)
     ctx = f"stdout={b.stdout!r} stderr={b.stderr!r}"
+    assert "CORRUPT False" in b.stdout, f"a held vault is not a damaged one: {ctx}"
+    if neurag_db.TURSO_OPEN_KW:
+        # Multi-process WAL: no lock to borrow around. B is a full peer.
+        assert "Turso (local)" in b.stdout, f"expected the shared Turso tier: {ctx}"
+        assert "WROTE yes" in b.stdout, f"a coordinated second writer must write: {ctx}"
+        return
     # The lock still holds: B does not get the Turso tier...
     assert "Turso (local)" not in b.stdout, f"expected the lock to hold: {ctx}"
     # ...it degrades to a tier that works, rather than to no connection...
     assert "read-only" in b.stdout, ctx
-    assert "CORRUPT False" in b.stdout, f"a locked vault is not a damaged one: {ctx}"
     assert "NODES" in b.stdout, f"the borrowed tier must actually read: {ctx}"
     # ...and it does NOT write. The exclusive lock was enforcing single-writer
     # by accident; the fallback removed that, letting two engines with two WAL
@@ -171,7 +177,8 @@ def test_borrowed_vault_answers_a_search_instead_of_returning_the_lock_error(tmp
         a.kill()
         a.wait(timeout=10)
     ctx = f"stdout={b.stdout!r} stderr={b.stderr!r}"
-    assert "read-only" in b.stdout, f"expected the borrowed tier: {ctx}"
+    expected = "Turso (local)" if neurag_db.TURSO_OPEN_KW else "read-only"
+    assert expected in b.stdout, f"expected the {expected} tier: {ctx}"
     assert "RAISED" not in b.stdout, (
         f"the reinforcement write must not fail the search: {ctx}")
     assert "HITS 1" in b.stdout, f"the borrowed tier must answer: {ctx}"

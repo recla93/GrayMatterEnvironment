@@ -18,7 +18,7 @@ letto automaticamente all'avvio di ogni chat: contiene le regole di lavoro sulle
 - **Asset handshake:** `src/neuron/clients/` — hook Claude Code, plugin Cowork e OpenCode.
   Viaggiano nel wheel, deployati dall'installer GM.
 - **Test:** `tests/` (37 file, **272 test**) — `python -m pytest tests -q`.
-- **Wheel offline:** `vendor/` — pyturso cp310→cp314 win_amd64 (`--find-links`).
+- **Wheel offline:** `vendor/` — una wheel pyturso abi3 win_amd64 per Python 3.10→3.14 (`--find-links`).
 
 Versione corrente: **6.1.0** (vedi CHANGELOG.md).
 

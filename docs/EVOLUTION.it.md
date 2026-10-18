@@ -131,12 +131,12 @@ più — stava fuori da ogni repo.
 
 | Thread | Stato | Prossimo |
 |---|---|---|
-| Race WAL daemon L2 | Intermittente, causa radice identificata | Respawn worker on failure, o rimozione `_graphs.clear()` |
+| Race WAL daemon L2 | Intermittente, causa radice identificata. 2026-10-18: pyturso 0.8.3 con WAL multiprocesso (IOCP) su Windows, i processi coordinano il WAL | Osservare il daemon vivo; i flag sono ancora `experimental` |
 | Indicizzazione incrementale (D5) | Non iniziato | watchdog/mtime su `neurag watch <dir>` |
 | Feedback loop (B1-B4) | Parzialmente implementato (trust in) | Bridge auto-learning completo, Neuron `confirm` → salience feedback da GM |
 | Embedding multilingue | Modello inglese, accettabile su ITA | Considerare `multilingual-e5-small` se la qualità diventa un problema |
 | Allineamento versioni | Drift tra file | Riconciliare RELEASE-CHECKLIST vs README vs pyproject |
-| Lock Turso in manutenzione | Coperto da L2 guard | Tool di manutenzione nei worker (reembed/backup via MCP); sqld se multi-sessione |
+| Lock Turso in manutenzione | Coperto da L2 guard; su Windows dal 2026-10-18 il lock esclusivo non c'è più (WAL multiprocesso) | Tool di manutenzione nei worker (reembed/backup via MCP) |
 | Explainability retrieval | Non iniziato | Flag `why` su get_context/pre_turn (link, episode, salience) |
 | Routing del pulse da blackboard | Non iniziato | mode → instradamento nel pulse |
 | Reembed vettori neuron | Fatto (2026-08-03) | `--all` per i contesti inattivi (arredamento, frontend, veicoli) se serviranno |

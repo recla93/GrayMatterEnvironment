@@ -421,6 +421,17 @@ function Install-Standalone {
         & $Vpy -m pip install @Repair $Here
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: NeuRAG install failed — check network, or try: pip install --upgrade pip"; exit 1 }
     }
+    # The pyturso pin must land in repair mode too: --no-deps leaves the old
+    # wheel in place, and 0.6.1 rejects the flags db.py now passes
+    # (TURSO_OPEN_KW) -> every store degraded. pyproject.toml is the one source
+    # of the pin; already satisfied = pip no-op.
+    $TursoPin = (Select-String -Path (Join-Path $Here "pyproject.toml") -Pattern '"(pyturso==[^"]+)"' |
+                 Select-Object -First 1).Matches.Groups[1].Value
+    if ($TursoPin) {
+        if (Test-Path $Vendor) { & $Vpy -m pip install -q --find-links $Vendor $TursoPin }
+        else { & $Vpy -m pip install -q $TursoPin }
+        if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $TursoPin not installed - NeuRAG runs on the sqlite3 tier." }
+    }
     Save-EmbedModel $Vpy $Chosen
     # Ship our OWN copy of gray_matter (the wheel we vendor) into the standalone
     # venv. Without it `import gray_matter` fails here, which silently disabled:

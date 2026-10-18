@@ -144,7 +144,7 @@ that decides which component owns a new capability.
 
 | Thread | Status | Next |
 |---|---|---|
-| L2 daemon WAL race | ◐ Mitigato (retry 3x + degrade sqlite3 su stesso file, 2026-07-21) | Verifica su daemon vivo con pyturso reale; considerare WAL checkpoint periodico |
+| L2 daemon WAL race | ◐ Mitigato (retry 3x + degrade sqlite3 su stesso file, 2026-07-21). 2026-10-18: pyturso 0.8.3 con WAL multiprocesso (IOCP) su Windows — i processi coordinano il WAL; verificato con 2 writer x 300 insert | Osservare il daemon vivo; i flag sono ancora `experimental` |
 | Incremental indexing (D5) | Non iniziato | watchdog/mtime su `neurag watch <dir>` |
 | Feedback loop (B1-B4) | ✅ Completo | Bridge auto-learning + confirm → salience/trust |
 | Multilingual embeddings | ✅ Paraphrase-multilingual-MiniLM-L12-v2 (384-dim) | Nessuna azione richiesta |

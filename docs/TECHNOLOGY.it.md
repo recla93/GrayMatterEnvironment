@@ -16,7 +16,7 @@
 
 **Scelta:** libSQL (fork Turso) con fallback a 3 livelli: Turso remoto → pyturso locale → SQLite.
 
-**Perché:** libSQL legge file SQLite (zero migrazione da locale). Il fallback a 3 livelli funziona offline, in LAN o cloud. pyturso==0.6.1 è pinnato per compatibilità wheel su Python 3.10-3.14.
+**Perché:** libSQL legge file SQLite (zero migrazione da locale). Il fallback a 3 livelli funziona offline, in LAN o cloud. pyturso==0.8.3 è pinnato: una wheel abi3 vendorata copre Python 3.10-3.14. Su Windows il WAL multiprocesso è acceso (backend IOCP).
 
 **Limiti accettati:** Le wheel pyturso sono specifiche per piattaforma (win_amd64, macosx, manylinux). L'indice vettoriale (`libsql_vector_idx`) non è ancora usato — il cosine full-scan va bene per vault sotto ~50K chunk.
 

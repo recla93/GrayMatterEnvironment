@@ -65,7 +65,7 @@ neurag-mcp
 
 **Diagnosis:** pyturso is not installed. NeuRAG falls back to sqlite3 + Python brute-force cosine.
 
-**Fix:** Install pyturso from vendored wheels: `pip install Neuron/vendor/pyturso-0.6.1-*.whl` (platform-specific). Full tier gives native `vector_distance_cos()` SQL support.
+**Fix:** Install pyturso from vendored wheels: `pip install neuron/vendor/pyturso-0.8.3-cp310-abi3-win_amd64.whl` (one wheel for Python 3.10-3.14). Full tier gives native `vector_distance_cos()` SQL support.
 
 ## "open: NotFound" error (L2 bug)
 
@@ -75,7 +75,9 @@ neurag-mcp
 
 **Mitigation (2026-07-21):** `db._open_local_engine` retries up to 3 times on open failure, then degrades to sqlite3 on the same file (compatible format). A `store_turn` degrades instead of crashing.
 
-**Fix:** Restart Gray Matter (`gray-matter stop && gray-matter start`) to get fresh workers. If persistent, the WAL race between concurrent pyturso processes is the root cause. A full fix requires single-writer serialization or WAL checkpoint coordination.
+**Fix:** Restart Gray Matter (`gray-matter stop && gray-matter start`) to get fresh workers. If persistent, the WAL race between concurrent pyturso processes is the root cause.
+
+**Since 2026-10-18 (pyturso 0.8.3):** on Windows every opener passes `TURSO_OPEN_KW` (IOCP backend + `multiprocess_wal`), so processes coordinate the WAL instead of racing or locking each other out, and `PRAGMA busy_timeout=5000` makes a writer wait instead of failing with `database is locked`. Every opener must pass the same flags — a process without them takes the exclusive lock and does not coordinate — so after an upgrade restart all clients (or run the installer, which stops them). If the worker dies with `panicked at core\storage\wal.rs`, two threads entered one connection at once: the cached connections are wrapped in an `RLock` proxy for exactly that.
 
 ## Graph appears empty after install
 
