@@ -31,6 +31,10 @@ except ImportError:
 # does not coordinate. keep-in-sync with Neuron/db.py TURSO_OPEN_KW.
 TURSO_OPEN_KW = ({"vfs": "experimental_win_iocp", "experimental_features": "multiprocess_wal"}
                  if os.name == "nt" else {})
+# How long a writer waits for another thread's open transaction (_ThreadSafeConn).
+# add_chunk commits per chunk, so a transaction lasts one chunk; 60 s is the IPC
+# tool timeout — waiting longer would only fail later and less clearly.
+_TX_WAIT_S = 60.0
 
 
 class _ThreadSafeCursor:
@@ -70,31 +74,76 @@ class _ThreadSafeConn:
     Python error instead. One RLock around every native call; verified with 4
     threads x 200 insert+commit: 800 rows, 0 errors, with and without
     TURSO_OPEN_KW. A connection per thread is NOT the fix: under multiprocess
-    WAL it lost rows (database is locked, IoError write)."""
+    WAL it lost rows (database is locked, IoError write).
+
+    The RLock is per CALL, and that was not enough (2026-10-20): a connection has
+    ONE transaction, so two ingests in parallel wrote into the same one — one's
+    rollback erased the other's rows, commits landed mid-way, with no error at
+    all (4 threads x delete+50 inserts: 217, 35, 82, 118 rows instead of 50
+    each), and pyturso sometimes panicked too (pager.rs:3755). So the first
+    write of a thread also claims the TRANSACTION, until its commit/rollback:
+    other threads' writes wait. Reads never wait. It is what @Transactional does
+    in Spring — the connection belongs to the thread for the whole transaction."""
 
     def __init__(self, conn):
         object.__setattr__(self, "_conn", conn)
-        object.__setattr__(self, "_lock", threading.RLock())
+        object.__setattr__(self, "_lock", threading.RLock())   # one native call at a time
+        object.__setattr__(self, "_tx", threading.Lock())      # one open transaction at a time
+        object.__setattr__(self, "_tx_owner", None)
 
-    def execute(self, *a, **k):
-        with self._lock:
-            return _ThreadSafeCursor(self._conn.execute(*a, **k), self._lock)
+    def _claim_tx(self, sql) -> None:
+        if not (isinstance(sql, str) and _is_write_sql(sql)):
+            return
+        me = threading.get_ident()
+        if self._tx_owner == me:
+            return
+        # Outside _lock: a writer waiting here must not stop the readers.
+        if not self._tx.acquire(timeout=_TX_WAIT_S):
+            raise sqlite3.OperationalError(
+                f"neurag: another thread has held the vault's write transaction for "
+                f"over {_TX_WAIT_S:.0f} s (a long ingest?). Retry when it finishes.")
+        object.__setattr__(self, "_tx_owner", me)
 
-    def executemany(self, *a, **k):
+    def _release_tx(self) -> None:
+        if self._tx_owner == threading.get_ident():
+            object.__setattr__(self, "_tx_owner", None)
+            self._tx.release()
+
+    def execute(self, sql, *a, **k):
+        self._claim_tx(sql)
         with self._lock:
-            return _ThreadSafeCursor(self._conn.executemany(*a, **k), self._lock)
+            return _ThreadSafeCursor(self._conn.execute(sql, *a, **k), self._lock)
+
+    def executemany(self, sql, *a, **k):
+        self._claim_tx(sql)
+        with self._lock:
+            return _ThreadSafeCursor(self._conn.executemany(sql, *a, **k), self._lock)
 
     def cursor(self, *a, **k):
         with self._lock:
             return _ThreadSafeCursor(self._conn.cursor(*a, **k), self._lock)
 
     def commit(self):
-        with self._lock:
-            return self._conn.commit()
+        try:
+            with self._lock:
+                return self._conn.commit()
+        finally:
+            self._release_tx()
 
     def rollback(self):
-        with self._lock:
-            return self._conn.rollback()
+        try:
+            with self._lock:
+                return self._conn.rollback()
+        finally:
+            self._release_tx()
+
+    def release_thread(self) -> None:
+        """The calling thread is done with the connection (KnowledgeGraph.close).
+        A transaction it left open is rolled back — sqlite3's own meaning of
+        closing without commit — and handed on, or every other writer would wait
+        on a thread that no longer exists."""
+        if self._tx_owner == threading.get_ident():
+            self.rollback()
 
     def close(self):
         with self._lock:
@@ -990,6 +1039,9 @@ class KnowledgeGraph:
         if self._conn:
             # Don't close cached pyturso connections — other KG instances may be using them
             if self._engine_name == "Turso (local)":
+                release = getattr(self._conn, "release_thread", None)
+                if release:
+                    release()      # hand on a transaction this thread left open
                 self._conn = None  # release reference, keep connection alive in cache
             else:
                 self._conn.close()

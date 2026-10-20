@@ -13,6 +13,17 @@
   leggono pigre in `fetch*()`), da un `RLock`. Una connessione per thread non
   basta: con il WAL multiprocesso perdeva righe. Test:
   `test_thread_safe_conn.py`, che fallisce senza il proxy.
+- **Una transazione alla volta sulla connessione condivisa.** Il lock per
+  chiamata non bastava: una connessione ha UNA transazione, e due ingest in
+  parallelo ci scrivevano dentro insieme. Il rollback di uno cancellava le
+  righe dell'altro, i commit cadevano a meta', senza nessun errore (4 thread x
+  delete + 50 insert: 217, 35, 82, 118 righe invece di 50 ciascuno); a volte
+  pyturso andava anche in panic (`pager.rs:3755`, il 2026-10-20). Ora la prima
+  scrittura di un thread prende la transazione fino al suo commit o rollback,
+  e le scritture degli altri thread aspettano (al massimo 60 s); le letture
+  no. `KnowledgeGraph.close()` fa rollback di una transazione lasciata aperta
+  dal thread, come `sqlite3`. Test: `test_parallel_transactions_do_not_mix`.
+  Il problema logico c'era anche con la 0.6.1.
 - **I test non scrivono piu' nel `bridges.db` vero.** `test_mega_integration.py`
   aggiungeva righe `conc_*`/`weight_*`/`café_*` a ogni run (90 su 92 righe il
   2026-10-18): ora `GRAY_MATTER_BRIDGES` punta a `tmp_path`.
