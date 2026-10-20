@@ -1264,11 +1264,16 @@ async def _sleep_monitor():
             for s in _registry.all_servers():
                 s.status = "sleeping"
             # Idle maintenance: let unused bridges (unconfirmed hypotheses) decay.
-            try:
-                from gray_matter.bridges import decay
-                decay()
-            except Exception:  # noqa: BLE001
-                pass
+            # Daemon only, like the backup above: every stdio gateway runs this
+            # monitor with its OWN idle clock, so the decay ran once per open
+            # client and its speed depended on how many were open (ADR-010 F0).
+            # The daemon sees every gateway's calls: its idle is the real one.
+            if _IS_DAEMON:
+                try:
+                    from gray_matter.bridges import decay
+                    decay()
+                except Exception:  # noqa: BLE001
+                    pass
         elif idle < IDLE_SLEEP_TIMEOUT and _is_sleeping:
             _is_sleeping = False
 
@@ -1534,6 +1539,7 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
         through gather and KILLED the daemon. Dispatch can no longer kill the
         listener, and long calls run in parallel instead of blocking everyone
         (serialization stays in _call_server_async's per-server lock)."""
+        global _last_call_time
         loop = asyncio.get_running_loop()
         try:
             try:
@@ -1598,6 +1604,11 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     # Every stdio gateway's worker calls land here: this is the
                     # counter `stats` shows, across sessions, until restart.
                     _tool_calls[tool_name] = _tool_calls.get(tool_name, 0) + 1
+                    # ...and the daemon's idle clock. Only call_tool (stdio)
+                    # moved it, and the daemon has no stdio: it fell asleep 600 s
+                    # after start and never woke, so the doctor read "sleeping"
+                    # on busy servers and on_sleep work could run once per life.
+                    _last_call_time = time.time()
                     try:
                         result = await _call_server_async(srv, tool_name, tool_args)
                         response = {"result": result}

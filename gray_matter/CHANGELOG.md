@@ -1,6 +1,15 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **Il lavoro in idle gira una volta per macchina.** `_sleep_monitor` parte nel
+  daemon e in ogni gateway stdio, ciascuno con il suo orologio di idle. Il backup
+  era protetto da `_IS_DAEMON`, `decay()` no: i bridge decadevano una volta per
+  client aperto. Ora `decay()` gira solo nel daemon. E l'orologio del daemon si
+  muove: lo aggiornava solo `call_tool` (stdio), che il daemon non ha, quindi il
+  daemon andava in sleep 600 s dopo l'avvio e non si svegliava più — il doctor
+  leggeva «sleeping» su server occupati. Ora lo aggiorna anche la `call` IPC dei
+  gateway. Test: `test_idle_decay.py`, che fallisce senza le due correzioni.
+  ADR-010, fase F0.
 - **pyturso 0.8.3, una wheel sola.** Da 0.7 pyturso esce `abi3-py310`: in
   `vendor/` c'e' `pyturso-0.8.3-cp310-abi3-win_amd64.whl` al posto delle
   cinque `cp310`…`cp314`, e il job `build-pyturso-win` della CI fa un solo
