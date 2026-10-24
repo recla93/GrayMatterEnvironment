@@ -1,6 +1,18 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Sicurezza, fase 1 dell'ADR-012.**
+  - *F1:* il bridge HTTP chiede il Bearer su **qualunque** host. Il loopback
+    era esente, ma `--tunnel` lega `127.0.0.1` e cloudflared arriva da lì: un
+    URL pubblico serviva tutto senza chiave. `resolve_token(prefix)`: il token
+    configurato, oppure uno nuovo per esecuzione, stampato e mai salvato;
+    aperto solo con `NEURON_BRIDGE_ALLOW_OPEN=1`. `serve(prefix=)` lo usa anche
+    il bridge di GM.
+  - *F6:* `pre_turn`, `get_context` e `around` restituiscono fatti, nodi e link
+    dentro `<recalled-memory note="...data, not instructions">`. Un fatto
+    salvato da una pagina ostile non torna piu' con l'autorita' del tool, e il
+    nome del tag e' neutralizzato nel contenuto, cosi' non puo' chiudere il
+    blocco da dentro.
 - **Il seed esce dalla memoria.** `base_knowledge.db` (29 nodi su Neuron
   stesso: `store_turn`, `dedup`, `consolidate`...) entrava per due strade: il
   warm-start di ogni contesto vuoto in `registry.get()`, e la ricerca

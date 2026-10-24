@@ -24,31 +24,49 @@ from __future__ import annotations
 
 import contextlib
 import os
+import secrets
 import sys
 
 
-def _bearer_token() -> str:
-    return (os.environ.get("NEURON_BRIDGE_TOKEN") or "").strip()
+def _bearer_token(prefix: str = "NEURON") -> str:
+    return (os.environ.get(f"{prefix}_BRIDGE_TOKEN") or "").strip()
 
 
-def _refuse_open_bind(host: str) -> bool:
-    """True when a non-loopback bind without a token must be refused.
+def _allow_open(prefix: str = "NEURON") -> bool:
+    return os.environ.get(f"{prefix}_BRIDGE_ALLOW_OPEN", "").strip().lower() \
+        in ("1", "true", "yes")
 
-    An MCP endpoint on 0.0.0.0 (or behind a tunnel) WITHOUT a shared secret
-    exposes the whole MCP surface to whoever reaches it: refuse loudly at
-    startup. NEURON_BRIDGE_ALLOW_OPEN=1 is the escape hatch for people who
-    know what they are doing."""
-    loopback = {"127.0.0.1", "localhost", "::1", ""}
-    if host in loopback:
-        return False
-    if _bearer_token():
-        return False
-    return os.environ.get("NEURON_BRIDGE_ALLOW_OPEN", "").strip().lower() \
-        not in ("1", "true", "yes")
+
+def resolve_token(prefix: str = "NEURON") -> "str | None":
+    """The token every /mcp request must carry; None only for an open bridge.
+
+    Loopback is no exemption (ADR-012 F1). It used to be: a token was required
+    only off loopback — but `--tunnel` binds 127.0.0.1 and cloudflared reaches
+    the bridge FROM loopback, so a public URL served every tool, destructive
+    ones included, to anyone. A web page can also DNS-rebind to 127.0.0.1.
+
+    Without a configured token one is minted for this process: printed once,
+    never written to disk, gone when the bridge stops. Set
+    `<PREFIX>_BRIDGE_TOKEN` to keep one across restarts. `<PREFIX>_BRIDGE_
+    ALLOW_OPEN=1` serves without auth, for connectors that cannot send a header
+    — an explicit choice, never a default."""
+    token = _bearer_token(prefix)
+    if token:
+        return token
+    if _allow_open(prefix):
+        print(f"bridge: OPEN — {prefix}_BRIDGE_ALLOW_OPEN is set, no auth. Anyone "
+              f"who reaches this port can call every tool.", file=sys.stderr)
+        return None
+    token = secrets.token_urlsafe(32)
+    print(f"bridge token for this run (not saved anywhere):\n  {token}\n"
+          f"Send it as 'Authorization: Bearer <token>'. Set {prefix}_BRIDGE_TOKEN "
+          f"to keep one across restarts.", file=sys.stderr, flush=True)
+    return token
 
 
 def serve(app, host: str = "127.0.0.1", port: int = 8000,
-          path: str = "/mcp", log_level: str = "info") -> None:
+          path: str = "/mcp", log_level: str = "info",
+          prefix: str = "NEURON") -> None:
     """Serve `app` (an `mcp.server.lowlevel.Server`) over Streamable HTTP.
 
     Blocks until the server stops.
@@ -61,26 +79,18 @@ def serve(app, host: str = "127.0.0.1", port: int = 8000,
     Use `/mcp` (Streamable HTTP), not `/sse`: Cloudflare buffers the SSE
     handshake, which is the tunnel most of these setups sit behind.
 
-    Auth: if `NEURON_BRIDGE_TOKEN` is set, every /mcp request must carry
-    `Authorization: Bearer <token>`; a bind to a non-loopback host without a
-    token is refused at startup (override: NEURON_BRIDGE_ALLOW_OPEN=1).
+    Auth: every /mcp request must carry `Authorization: Bearer <token>`, on
+    any host — see `resolve_token`. `prefix` picks the env pair
+    (`NEURON_`, `NEURAG_`, `GM_`).
     """
     import hmac
 
-    # The guard BEFORE any import: refusing an open bind must not depend on
-    # uvicorn/mcp being importable.
-    if _refuse_open_bind(host):
-        print(
-            f"neuron bridge: refusing to bind {host} without NEURON_BRIDGE_TOKEN "
-            f"(an open MCP endpoint exposes destructive tools). Set the token, "
-            f"or NEURON_BRIDGE_ALLOW_OPEN=1 to accept the risk.",
-            file=sys.stderr)
-        raise SystemExit(2)
+    # Before any import: the token must not depend on uvicorn/mcp being there.
+    token = resolve_token(prefix)
 
     import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
-    token = _bearer_token()
     manager = StreamableHTTPSessionManager(app=app, stateless=True)
     accepted = {path, path.rstrip("/") + "/"}
 

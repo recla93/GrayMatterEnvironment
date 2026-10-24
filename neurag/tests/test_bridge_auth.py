@@ -1,37 +1,54 @@
-"""The HTTP bridge must not publish itself open without a key.
+"""The HTTP bridge never serves without a key unless told to, on any host.
 
-`--host 0.0.0.0` and tunnels expose destructive tools (knowledge_remove_node,
-knowledge_ingest): without a shared secret, refuse the bind at startup instead
-of publishing it and hoping nobody finds it.
+keep-in-sync with neuron/tests/test_bridge_auth.py: same attack, same defense,
+env prefixed NEURAG_.
+
+Loopback used to be exempt. But `--tunnel` binds 127.0.0.1 and cloudflared
+reaches the bridge FROM loopback: a public URL served every tool to anyone
+(ADR-012 F1).
 """
-import pathlib
 import sys
+from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from neurag import http_transport  # noqa: E402
 
-
-def test_loopback_needs_no_token(monkeypatch):
-    monkeypatch.delenv("NEURAG_BRIDGE_TOKEN", raising=False)
-    assert not http_transport._refuse_open_bind("127.0.0.1")
-    assert not http_transport._refuse_open_bind("localhost")
+P = "NEURAG"
 
 
-def test_open_bind_without_token_is_refused(monkeypatch):
-    monkeypatch.delenv("NEURAG_BRIDGE_TOKEN", raising=False)
-    monkeypatch.delenv("NEURAG_BRIDGE_ALLOW_OPEN", raising=False)
-    assert http_transport._refuse_open_bind("0.0.0.0")
-    with pytest.raises(SystemExit):
-        http_transport.serve(app=None, host="0.0.0.0", port=1)
+def _clean(monkeypatch):
+    monkeypatch.delenv(f"{P}_BRIDGE_TOKEN", raising=False)
+    monkeypatch.delenv(f"{P}_BRIDGE_ALLOW_OPEN", raising=False)
 
 
-def test_open_bind_with_token_or_escape_hatch_passes(monkeypatch):
-    monkeypatch.setenv("NEURAG_BRIDGE_TOKEN", "s3cret")
-    assert not http_transport._refuse_open_bind("0.0.0.0")
+def test_loopback_without_a_configured_token_still_gets_one(monkeypatch, capsys):
+    _clean(monkeypatch)
+    token = http_transport.resolve_token(P)
+    assert token and len(token) >= 32, "senza token configurato il bridge resta aperto"
+    assert token in capsys.readouterr().err, "il token generato va mostrato, o nessuno lo usa"
 
-    monkeypatch.delenv("NEURAG_BRIDGE_TOKEN", raising=False)
-    monkeypatch.setenv("NEURAG_BRIDGE_ALLOW_OPEN", "1")
-    assert not http_transport._refuse_open_bind("0.0.0.0")
+
+def test_every_run_mints_a_different_token(monkeypatch):
+    _clean(monkeypatch)
+    assert http_transport.resolve_token(P) != http_transport.resolve_token(P)
+
+
+def test_a_configured_token_wins(monkeypatch):
+    _clean(monkeypatch)
+    monkeypatch.setenv(f"{P}_BRIDGE_TOKEN", "s3cret")
+    assert http_transport.resolve_token(P) == "s3cret"
+
+
+def test_open_only_when_asked_and_said_out_loud(monkeypatch, capsys):
+    _clean(monkeypatch)
+    monkeypatch.setenv(f"{P}_BRIDGE_ALLOW_OPEN", "1")
+    assert http_transport.resolve_token(P) is None
+    assert "OPEN" in capsys.readouterr().err
+
+
+def test_the_prefix_keeps_the_bridges_apart(monkeypatch):
+    _clean(monkeypatch)
+    monkeypatch.setenv("GM_BRIDGE_TOKEN", "gm-only")
+    assert http_transport.resolve_token("GM") == "gm-only"
+    assert http_transport.resolve_token(P) != "gm-only"

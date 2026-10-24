@@ -29,6 +29,9 @@ DEFAULTS = {
     # which is the right answer for every shipped model (all truncate at 128
     # tokens). Raise it only for a model with a genuinely bigger window.
     "chunk_max_chars": 0,
+    # Folders the AI may index through knowledge_ingest / knowledge_index,
+    # os.pathsep-separated. Empty = none (ADR-012 F3). The CLI is not gated.
+    "ingest_roots": "",
 }
 
 # Per-knob help + suggestions surfaced by the control center (GUI reads these so
@@ -45,6 +48,11 @@ HELP = {
                        "circa 400 caratteri). Oltre il limite il testo viene "
                        "troncato dall'embedder e diventa NON cercabile. "
                        "Cambiarlo richiede un re-index.",
+    "ingest_roots": "Cartelle che l'IA può indicizzare (knowledge_ingest, "
+                    "knowledge_index), separate da ';' su Windows e ':' "
+                    "altrove. Vuoto = nessuna: l'IA non legge il disco finché "
+                    "non scegli tu. Chiavi e credenziali restano escluse anche "
+                    "dentro. La CLI non ha questo limite.",
 }
 # Free-text knobs that still have good known values → GUI shows a picker but
 # keeps custom input allowed.

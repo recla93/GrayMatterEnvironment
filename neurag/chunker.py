@@ -409,9 +409,35 @@ def chunk_file(filepath: Path, max_chars: "int | None" = None) -> list[Chunk]:
     return enforce_budget(chunks, budget)
 
 
+# Never indexed, wherever it sits and whoever asks (ADR-012 F3). A vault is
+# searched by an AI and copied into backups: a key that gets in leaks twice.
+_SECRET_DIRS = {".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker"}
+_SECRET_SUFFIXES = {".env", ".pem", ".key", ".pfx", ".p12", ".ppk", ".kdbx",
+                    ".jks", ".keystore", ".asc"}
+_SECRET_NAMES = {".netrc", ".git-credentials", ".pgpass", "credentials",
+                 "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+
+
+def is_secret(path) -> bool:
+    p = Path(path)
+    name = p.name.lower()
+    return (name in _SECRET_NAMES or name.startswith(".env")
+            or p.suffix.lower() in _SECRET_SUFFIXES
+            or any(part.lower() in _SECRET_DIRS for part in p.parts))
+
+
 def scan_directory(root: Path) -> Iterator[Path]:
+    """Every indexable file under `root`. Never a secret, never inside a hidden
+    folder (.git, .ssh, ...), never a symlink that leads out of `root`: a link
+    inside an allowed folder must not open the rest of the disk. Every walk —
+    ingest, index, CLI — goes through here, so one rule covers all of them."""
+    base = root.resolve()
     for path in root.rglob("*"):
-        if path.is_file() and path.suffix.lower() in _SUPPORTED_EXTENSIONS:
+        rel = path.relative_to(root)
+        if (path.is_file() and path.suffix.lower() in _SUPPORTED_EXTENSIONS
+                and not is_secret(rel)
+                and not any(p.startswith(".") for p in rel.parts[:-1])
+                and path.resolve().is_relative_to(base)):
             yield path
 
 

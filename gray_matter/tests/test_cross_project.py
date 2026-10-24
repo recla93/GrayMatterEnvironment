@@ -633,6 +633,9 @@ def test_register_flow_says_so_when_there_is_nothing_installed(monkeypatch):
 BRIDGES = {
     "neuron": ROOT / "neuron" / "src" / "neuron" / "bridge.py",
     "neurag": ROOT / "neurag" / "bridge.py",
+    # Last to leave mcp-proxy, and the costly one: no auth, full suite on a
+    # public tunnel URL (ADR-012 F1).
+    "gray_matter": ROOT / "gray_matter" / "bridge.py",
 }
 TRANSPORTS = {
     "neuron": ROOT / "neuron" / "src" / "neuron" / "http_transport.py",

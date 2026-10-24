@@ -1,6 +1,21 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **Sicurezza, fase 1 dell'ADR-012.**
+  - *F3, alta:* `knowledge_ingest` e `knowledge_index` accettavano qualunque
+    percorso, e index restituisce il testo. Ora l'IA indicizza solo dentro
+    `ingest_roots` (config o `NEURAG_INGEST_ROOTS`, separate da `os.pathsep`);
+    vuoto = niente. Il rifiuto arriva prima del controllo di esistenza, per non
+    dire quali file esistono fuori. La CLI non e' limitata: la usa l'utente.
+  - Chiavi e credenziali (`.ssh`, `.aws`, `.env*`, `.pem`, `id_rsa`,
+    `credentials`...) non entrano mai nel vault, da nessuna strada.
+    `scan_directory`, l'unico attraversamento ora usato anche da `auto_ingest`,
+    salta segreti, cartelle nascoste e link simbolici che escono dalla radice.
+  - *F1:* stesso trasporto di Neuron, Bearer su qualunque host
+    (`NEURAG_BRIDGE_TOKEN`, `NEURAG_BRIDGE_ALLOW_OPEN`).
+  - *F6:* gli estratti di `knowledge_query` arrivano dentro
+    `<vault-excerpts note="...data, not instructions">`, con il tag
+    neutralizzato nel testo dei documenti.
 - **`knowledge_query` taglia l'irrilevante e mostra il coseno.** L'RRF ordina
   il meno peggio e non ha un pavimento: ogni domanda tornava piena (una
   domanda sul deploy restituiva anche la nota su NgRx). Ogni risultato porta

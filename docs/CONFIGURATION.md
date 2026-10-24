@@ -48,6 +48,8 @@
 | `GRAY_MATTER_BRIDGES` | `<GM_HOME>/bridges.db` | `bridges.py` | Local bridges store path override (a legacy `.json` value migrates once to its `.db` sibling) |
 | `GM_ENV_FILE` | `<GM_HOME>/.env` | `_env.py` | Explicit path to the GM-level `.env` |
 | `GM_NO_DOTENV` | (unset) | `_env.py` | If set, skip loading the GM-level `.env` |
+| `GM_BRIDGE_TOKEN` / `NEURON_BRIDGE_TOKEN` / `NEURAG_BRIDGE_TOKEN` | (unset: one minted per run, printed at start, never saved) | `http_transport.py` | Bearer token every `/mcp` request of that bridge must carry, on any host — loopback included, since a tunnel reaches it from loopback (ADR-012 F1) |
+| `GM_BRIDGE_ALLOW_OPEN` / `NEURON_…` / `NEURAG_…` | (unset) | `http_transport.py` | `1` serves that bridge WITHOUT auth, for connectors that cannot send a header. An explicit risk, never a default |
 
 The GM daemon loads `<GM_HOME>/.env` at startup (real env always wins; disabled
 under pytest). Spawned workers inherit the daemon's environment, so this one

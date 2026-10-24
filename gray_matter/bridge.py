@@ -1,7 +1,9 @@
 """Gray Matter HTTP Bridge — full suite entry point over Streamable HTTP.
 
-Exposes the complete orchestrator (Neuron + NeuRAG + GM orchestration) via
-mcp-proxy so remote LLMs (Perplexity, ChatGPT, etc.) see ALL tools.
+Exposes the complete orchestrator (Neuron + NeuRAG + GM orchestration) over the
+MCP SDK's Streamable HTTP, so remote LLMs (Perplexity, ChatGPT, etc.) see ALL
+tools. Every request needs `Authorization: Bearer <token>`: ``GM_BRIDGE_TOKEN``,
+or one minted per run and printed at start (ADR-012 F1).
 
 Port 8002 (distinct from Neuron=8000, NeuRAG=8001).
 
@@ -12,7 +14,8 @@ Usage::
     gray-matter bridge --tunnel         # launch tunnel after bridge
     gray-matter bridge --bind all       # 0.0.0.0 for LAN
 
-Env vars: ``GM_BRIDGE_HOST``, ``GM_BRIDGE_PORT``, ``GM_BRIDGE_TUNNEL``
+Env vars: ``GM_BRIDGE_HOST``, ``GM_BRIDGE_PORT``, ``GM_BRIDGE_TUNNEL``,
+``GM_BRIDGE_TOKEN``, ``GM_BRIDGE_ALLOW_OPEN`` (explicit no-auth, never default)
 """
 from __future__ import annotations
 
@@ -26,7 +29,6 @@ import sys
 import time
 from typing import List, Optional
 
-WIN = os.name == "nt"
 DEFAULT_PORT = 8002
 
 
@@ -62,19 +64,6 @@ def resolve_gm_cmd(override: list[str] | None) -> list[str]:
     # The find_spec check that used to sit here was dead code: both branches
     # returned the identical value.
     return [sys.executable, "-m", "gray_matter.server"]
-
-def resolve_proxy_runner() -> list[str] | None:
-    """Find a way to run mcp-proxy."""
-    if shutil.which("mcp-proxy"):
-        return ["mcp-proxy"]
-    if shutil.which("uvx"):
-        return ["uvx", "mcp-proxy"]
-    if shutil.which("uv"):
-        return ["uv", "tool", "run", "mcp-proxy"]
-    if shutil.which("pipx"):
-        return ["pipx", "run", "mcp-proxy"]
-    return None
-
 
 def preflight(server_cmd: list[str], seconds: float = 3.0) -> bool:
     """Start the MCP server briefly; if it exits immediately, show why."""
@@ -159,43 +148,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="How many ports to try if the primary is busy (default: 10)")
     p.add_argument("--tunnel", action="store_true", default=env_tunnel,
                     help="Auto-launch a tunnel after the bridge starts")
-    p.add_argument("--proxy", default=None,
-                    help="Explicit mcp-proxy command (overrides auto-detect)")
     p.add_argument("--no-check", action="store_true",
                     help="Skip the preflight check")
-    p.add_argument("--print-cmd", action="store_true",
-                    help="Print the mcp-proxy command and exit")
     args = p.parse_args(argv)
 
     if args.bind == "all":
         args.host = "0.0.0.0"
 
-    gm_cmd = resolve_gm_cmd(None)
-    proxy = resolve_proxy_runner()
-    if proxy is None:
-        print("No way to run 'mcp-proxy' was found.\n"
-              "Install one: pip install mcp-proxy | pipx install mcp-proxy\n"
-              "Or use uv/uvx: uvx mcp-proxy\n"
-              "Or pass --proxy 'your-command mcp-proxy'")
-        return 1
+    # The transport Neuron and NeuRAG already use: the MCP SDK's own Streamable
+    # HTTP, with a Bearer token required on every host (ADR-012 F1). This
+    # bridge used to shell out to mcp-proxy — no auth at all, so `--tunnel`
+    # published every tool, destructive ones included, at a public URL; and
+    # mcp-proxy no longer even imports against MCP SDK >= 1.28.
+    try:
+        from neuron.http_transport import serve
+    except ImportError:
+        from neurag.http_transport import serve
 
     port = args.port
     port = _find_free_port(port, args.port_range) or port
-
     url = f"http://{args.host}:{port}"
-    full = [*proxy, f"--port={port}", f"--host={args.host}", "--", *gm_cmd]
 
-    if args.print_cmd:
-        print(" ".join(full))
-        return 0
-
-    if not args.no_check and not preflight(gm_cmd):
+    if not args.no_check and not preflight(resolve_gm_cmd(None)):
         return 1
 
     bind_info = f"{'all interfaces' if args.host == '0.0.0.0' else args.host}:{port}"
 
-    print(f"\nStarting Gray Matter bridge via: {' '.join(proxy)}")
-    print(f"  local endpoint : {url}")
+    print("\nStarting Gray Matter bridge (MCP Streamable HTTP, Bearer auth)")
+    print(f"  local endpoint : {url}/mcp")
     print(f"  bind           : {bind_info}")
     print(f"  server         : gray_matter.server (full suite — Neuron + NeuRAG + GM)")
     if args.tunnel:
@@ -207,28 +187,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  Use /mcp (Streamable HTTP), not /sse — Cloudflare buffers the SSE handshake.\n")
     sys.stdout.flush()
 
+    from gray_matter import server as _gm
+    _gm._ensure_daemon()          # calls go to the daemon's shared workers
+    tunnel_proc = _launch_tunnel(args.host, port) if args.tunnel else None
     try:
-        flags = 0x08000000 if WIN else 0
-
-        if args.tunnel:
-            tunnel_proc = _launch_tunnel(args.host, port)
-            try:
-                rc = subprocess.call(full, creationflags=flags)
-            except KeyboardInterrupt:
-                rc = 0
-            finally:
-                if tunnel_proc and tunnel_proc.poll() is None:
-                    tunnel_proc.terminate()
-        else:
-            try:
-                rc = subprocess.call(full, creationflags=flags)
-            except KeyboardInterrupt:
-                rc = 0
-
-        return rc
-    except Exception as exc:
-        print(f"Failed to start the proxy: {exc}", file=sys.stderr)
+        serve(_gm.app, host=args.host, port=port, prefix="GM")
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to start the bridge: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if tunnel_proc and tunnel_proc.poll() is None:
+            tunnel_proc.terminate()
 
 
 if __name__ == "__main__":

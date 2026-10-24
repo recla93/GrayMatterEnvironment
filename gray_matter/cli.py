@@ -1112,7 +1112,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("stats", help="Orchestrator counters: cache hit rate, flashes, bridges, latency")
     sub.add_parser("doctor", help="Health snapshot: servers, workers, cache, bridges")
 
-    br_p = sub.add_parser("bridge", help="Expose full suite over HTTP for remote LLM connectors")
+    br_p = sub.add_parser("bridge", help="Expose full suite over HTTP for remote LLM connectors "
+                                         "(Bearer token required: GM_BRIDGE_TOKEN or one per run)")
     br_p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     br_p.add_argument("--bind", choices=["local", "all"], default="local",
                        help="Shorthand: 'local' → 127.0.0.1, 'all' → 0.0.0.0")
@@ -1121,9 +1122,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="How many ports to try if busy (default: 10)")
     br_p.add_argument("--tunnel", action="store_true", default=False,
                        help="Auto-launch a tunnel after bridge starts")
-    br_p.add_argument("--proxy", default=None, help="Explicit mcp-proxy command")
     br_p.add_argument("--no-check", action="store_true", help="Skip preflight check")
-    br_p.add_argument("--print-cmd", action="store_true", help="Print the command and exit")
 
     kn_p = sub.add_parser("knowledge", help="NeuRAG knowledge base management")
     kn_p.add_argument("subcmd", choices=["status", "rebuild-links", "link-graph"],
@@ -1270,12 +1269,8 @@ def main() -> None:
             bridge_args += ["--port-range", str(args.port_range)]
         if args.tunnel:
             bridge_args.append("--tunnel")
-        if args.proxy:
-            bridge_args += ["--proxy", args.proxy]
         if args.no_check:
             bridge_args.append("--no-check")
-        if args.print_cmd:
-            bridge_args.append("--print-cmd")
         sys.exit(bridge_main(bridge_args))
     elif args.command == "config":
         cmd_config(args.action, args.key, args.value, args.json)

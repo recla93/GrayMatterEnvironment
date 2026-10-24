@@ -1,6 +1,20 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **Sicurezza, fase 1 dell'ADR-012.**
+  - *F1, critica:* `gray-matter bridge` usava `mcp-proxy`, senza nessuna
+    autenticazione: con `--tunnel` metteva tutti i tool, anche quelli
+    distruttivi, su un URL pubblico. Ora serve `gray_matter.server.app` con il
+    trasporto MCP di Neuron/NeuRAG e un Bearer obbligatorio: `GM_BRIDGE_TOKEN`,
+    o un token nuovo a ogni avvio, stampato e mai salvato. Aperto solo con
+    `GM_BRIDGE_ALLOW_OPEN=1`. Tolti `--proxy` e `--print-cmd`.
+  - *F2, alta:* la GUI consegnava la pagina col token a qualunque `Host`, quindi
+    a un sito che fa DNS rebinding (provato con `curl -H "Host:
+    attacker.example"`). Ora accetta solo `127.0.0.1:<porta>` e
+    `localhost:<porta>`, su GET e POST.
+- **Pulizia dello store dei bridge:** tolti 42 bridge lasciati dai test prima
+  del 18 ottobre (`café_N`, `weight_N`, `thread N`...), dopo un backup. Restano
+  i 2 veri.
 - **Il lavoro in idle gira una volta per macchina.** `_sleep_monitor` parte nel
   daemon e in ogni gateway stdio, ciascuno con il suo orologio di idle. Il backup
   era protetto da `_IS_DAEMON`, `decay()` no: i bridge decadevano una volta per

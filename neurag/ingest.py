@@ -31,7 +31,7 @@ import time
 import uuid
 from pathlib import Path
 
-from neurag.chunker import _SUPPORTED_EXTENSIONS
+from neurag.chunker import _SUPPORTED_EXTENSIONS, is_secret, scan_directory
 
 # Cartelle che non sono conoscenza: build, cache, VCS, ambienti.
 # (Le cartelle che iniziano con "." sono già escluse da _skippable.)
@@ -60,6 +60,39 @@ _DOC_EXTENSIONS = {".md", ".txt", ".pdf", ".docx"}
 def _skippable(rel_parts: tuple) -> bool:
     return any(p.startswith(".") or p in _SKIP_DIRS or p.endswith(".egg-info")
                for p in rel_parts)
+
+
+def ingest_roots() -> "list[Path]":
+    """The folders the AI may index, as the user declared them.
+
+    `ingest_roots` in config.json or NEURAG_INGEST_ROOTS, os.pathsep-separated
+    (`;` on Windows). Empty means none: the AI indexes nothing until the user
+    picks a folder."""
+    import os
+    from neurag import settings
+    raw = os.environ.get("NEURAG_INGEST_ROOTS") or settings.get("ingest_roots") or ""
+    return [Path(r).expanduser().resolve() for r in raw.split(os.pathsep) if r.strip()]
+
+
+def ai_ingest_refusal(path) -> "str | None":
+    """Why an MCP (AI-initiated) ingest or index of `path` is refused, or None.
+
+    knowledge_ingest and knowledge_index took ANY path, and index returns the
+    text: an AI steered by a hostile document, or anyone reaching an open
+    bridge, could read a config full of secrets off the disk (ADR-012 F3). The
+    CLI is not gated — whoever types `neurag ingest` is the user choosing."""
+    p = Path(path).expanduser().resolve()
+    if is_secret(p):
+        return f"refused: {p} looks like keys or credentials, never indexed"
+    roots = ingest_roots()
+    if not roots:
+        return ("refused: no ingest roots declared. The user picks the folders "
+                "the AI may index: neurag config set ingest_roots "
+                "\"<folder>[;<folder>]\" (or NEURAG_INGEST_ROOTS).")
+    if not any(p == r or p.is_relative_to(r) for r in roots):
+        return (f"refused: {p} is outside the declared ingest roots "
+                f"({'; '.join(map(str, roots))})")
+    return None
 
 
 def _ensure_godnode(kg, name: str, report: dict, say) -> dict:
@@ -96,6 +129,8 @@ def ingest_file(kg, path, godnode: "str | None" = None, say=None) -> dict:
     path = Path(path).expanduser().resolve()
     report = {"godnode": "", "nodes": 0, "files": 0, "chunks": 0,
               "links": {}, "skipped": []}
+    if is_secret(path):
+        raise ValueError(f"{path.name}: chiavi o credenziali, mai indicizzate (ADR-012 F3)")
     if path.suffix.lower() not in _SUPPORTED_EXTENSIONS:
         # Messaggio azionabile: questo arriva in faccia all'utente nella GUI.
         raise ValueError(
@@ -164,7 +199,7 @@ def auto_ingest(kg, root, godnode: "str | None" = None, say=None,
 
     # File → chunk nel nodo della propria cartella (documenti; codice solo con `code`).
     allowed = _SUPPORTED_EXTENSIONS if code else _DOC_EXTENSIONS
-    for f in sorted(p for p in root.rglob("*") if p.is_file()):
+    for f in sorted(scan_directory(root)):
         if f.suffix.lower() not in allowed:
             continue
         if _skippable(f.relative_to(root).parts[:-1]):

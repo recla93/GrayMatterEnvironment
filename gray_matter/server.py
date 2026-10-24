@@ -574,9 +574,27 @@ GM_INSTRUCTIONS = (
   # server_name -> consecutive failures
 
 
+_subservers_ready = False
+
+
+async def _ensure_subservers() -> None:
+    """Register Neuron/NeuRAG once per process, however `app` is served.
+
+    Only the stdio main() ran `_bootstrap_subservers`. The HTTP bridges import
+    `app` and serve it directly, so a remote client saw GM's own 7 tools and
+    none of Neuron's or NeuRAG's — a bridge that "worked" with most of the
+    suite missing, measured 2026-10-24. Once, like main(): a sub-server that
+    fails here is retried by the same paths that retry it under stdio."""
+    global _subservers_ready
+    if not _subservers_ready:
+        _subservers_ready = True
+        await _bootstrap_subservers()
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """Dynamically list tools from all registered servers."""
+    await _ensure_subservers()
     tools = []
 
     # Gray-Matter's own tools
@@ -679,6 +697,7 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     global _last_call_time, _flash_counter
 
+    await _ensure_subservers()
     _last_call_time = time.time()
     _flash_counter += 1
     _tool_calls[name] = _tool_calls.get(name, 0) + 1

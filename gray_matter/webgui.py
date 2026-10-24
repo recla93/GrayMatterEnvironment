@@ -1179,7 +1179,20 @@ def _build_server(api: Api):
             self.end_headers()
             self.wfile.write(body)
 
+        def _foreign_host(self) -> bool:
+            """DNS rebinding (ADR-012 F2). A site that points its own name at
+            127.0.0.1 is same-origin with this server as far as the browser
+            knows: it could read the page, token included, and drive /api/run.
+            Only the browser's own name for us carries the right Host."""
+            port = self.server.server_address[1]
+            if self.headers.get("Host", "") in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                return False
+            self._send(403, b'{"error":"forbidden host"}', "application/json")
+            return True
+
         def do_GET(self):
+            if self._foreign_host():
+                return
             # The page is served over http, not file://, so a relative path to
             # assets/ would 404. One tiny route beats inlining a 1.4 MB logo as
             # base64 into every page load.
@@ -1193,6 +1206,8 @@ def _build_server(api: Api):
             self._send(200, holder["html"].encode("utf-8"), "text/html; charset=utf-8")
 
         def do_POST(self):
+            if self._foreign_host():
+                return
             got = self.headers.get("X-GM-Token", "")
             if not hmac.compare_digest(got.encode(), token.encode()):
                 self._send(403, b'{"error":"forbidden"}', "application/json")

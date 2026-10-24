@@ -49,6 +49,15 @@ def test_both_entry_points_bootstrap_the_subservers(entry):
     )
 
 
+@pytest.mark.parametrize("handler", ["list_tools", "call_tool"])
+def test_the_app_registers_the_subservers_however_it_is_served(handler):
+    """Il terzo ingresso: i bridge HTTP importano `app` e lo servono senza
+    passare da main(). Misurato il 2026-10-24: tools/list via bridge dava i 7
+    tool di GM e nessuno di Neuron o NeuRAG."""
+    assert "_ensure_subservers" in _called_names(handler), (
+        f"{handler}() non garantisce il registro: servito via HTTP parte vuoto")
+
+
 def test_the_daemon_does_not_wait_for_the_bootstrap_before_listening():
     """Il bootstrap interroga i worker: spawn del subprocess più caricamento del
     modello, decine di secondi. Aspettarlo PRIMA di `_ipc_listener` teneva la
