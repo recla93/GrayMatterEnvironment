@@ -1,6 +1,28 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **`knowledge_query` taglia l'irrilevante e mostra il coseno.** L'RRF ordina
+  il meno peggio e non ha un pavimento: ogni domanda tornava piena (una
+  domanda sul deploy restituiva anche la nota su NgRx). Ogni risultato porta
+  ora `cos` e `bm25` accanto all'RRF, e `_cut_irrelevant` scarta prima dell'MMR
+  cio' che e' debole su entrambi: sotto `CUT_COS` (0.35) resta solo il miglior
+  match lessicale della domanda (>= 0.9 del BM25 massimo), sotto
+  `CUT_COS_FLOOR` (0.15) niente. Nessun segnale basta da solo: sul bench la
+  risposta giusta scende a cos 0.23, una domanda fuori tema arriva a 0.41, e
+  il BM25 assoluto segue la lunghezza della domanda. Misurato: recall@5
+  0.933 -> 0.933, MRR@10 0.768 -> 0.793; sei domande fuori tema da 5 risultati
+  a 4, 1, 0, 0, 0, 0. Limite: domande tecniche a cui il vault non risponde
+  (React, Kubernetes) restano a 5, l'embedding le valuta come risposte vere.
+  Le soglie sono sulla scala del MiniLM di default.
+- **Un titolo senza corpo non passa col solo coseno.** Il 10% del vault reale
+  (683 chunk su 6715) e' fatto di righe come `### Variabili d'ambiente`: vicine
+  a tutto, vuote come risposta. `_heading_only` le riconosce dalla forma (tutte
+  le righe sono titoli), non dalla lunghezza: una frase breve vera e'
+  contenuto. Sul vault reale "carbonara" passa da 5 risultati a 2, "best
+  hiking trails" a 1; bench invariato.
+- **Il bench indicizza di nuovo il codice.** Da quando l'ingest prende solo
+  documenti (2026-09-13) `bench/run.py` saltava i `.py`, meta' della ground
+  truth, e si fermava a `check_ground_truth`. Ora `auto_ingest(code=True)`.
 - **pyturso 0.8.3 e WAL multiprocesso su Windows.** `db.TURSO_OPEN_KW`
   (backend IOCP + `multiprocess_wal`): un secondo processo apre il vault su
   `Turso (local)` e puo' scrivere, invece del tier in prestito in sola

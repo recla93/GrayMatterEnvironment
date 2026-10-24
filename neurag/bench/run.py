@@ -106,7 +106,10 @@ def ensure_vault(corpus: pathlib.Path, vault: pathlib.Path,
         print(f"[bench] ingesting {corpus} -> {vault} (embeds every chunk, "
               f"takes minutes; reused on the next run)", file=sys.stderr)
         t0 = time.time()
-        report = auto_ingest(kg, corpus)
+        # code=True: the corpus IS a code repo, and half the ground truth is
+        # .py files. Since the ingest went documents-only (2026-09-13) the
+        # default skipped them and every run stopped at check_ground_truth.
+        report = auto_ingest(kg, corpus, code=True)
         decontaminate(kg)
         print(f"[bench] {report['files']} files, {report['chunks']} chunks, "
               f"links {report['links']}, {time.time() - t0:.0f}s", file=sys.stderr)

@@ -594,7 +594,9 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text="No results found.")]
         lines = [f"Query: {query}", f"Top {len(top)} results:", ""]
         for i, c in enumerate(top):
-            lines.append(f"  [{i+1}] {c['source']} :: {c['section'] or ''}")
+            # cos is the absolute relevance (0-1); the order is the fused rank.
+            rel = f"  (cos {c['cos']:.2f})" if c.get("cos") is not None else ""
+            lines.append(f"  [{i+1}] {c['source']} :: {c['section'] or ''}{rel}")
             lines.append(f"       {c['text'][:200]}...")
             lines.append("")
         return [TextContent(type="text", text="\n".join(lines))]

@@ -2336,6 +2336,49 @@ class KnowledgeGraph:
     # paper and is not sensitive — it only damps the head of each ranking.
     RRF_K = 60
     MMR_LAMBDA = 0.7        # 1.0 = pure relevance, 0.0 = pure diversity
+    # Irrelevance cut (see `_cut_irrelevant`), tuned on bench/ 2026-10-24.
+    # ponytail: CUT_COS is on the scale of the default MiniLM; another
+    # NEURAG_EMBED_MODEL has its own cosine range — re-tune with bench/run.py.
+    CUT_COS = 0.35
+    CUT_BM25_REL = 0.9
+    CUT_COS_FLOOR = 0.15
+
+    @staticmethod
+    def _heading_only(text: str) -> bool:
+        """`## Da sapere sull'ambiente` and nothing else: 10% of the real vault.
+        Near everything in meaning, empty as an answer. Judged by shape, not
+        length — a short real sentence is content."""
+        lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+        return bool(lines) and all(ln.lstrip().startswith("#") for ln in lines)
+
+    @classmethod
+    def _cut_irrelevant(cls, rows: list[dict]) -> list[dict]:
+        """Drop the rows that are weak on BOTH signals, before MMR.
+
+        RRF has no floor: it ranks the least bad, so every query came back
+        full — a deploy question returned the NgRx note too. Neither signal
+        works alone. On bench/ the right answer sits as low as cos 0.23 (an
+        identifier, a rare word), while an off-topic query reaches 0.41; and
+        BM25's absolute value tracks query length, so "come si cambia la
+        camera d'aria" scored 11.9 on stopwords. So: below CUT_COS a row stays
+        only if it is (nearly) this query's best lexical match, and below
+        CUT_COS_FLOOR not even then — several chunks tie on the best BM25 of a
+        common word, and they came back at cosine 0 or below. A heading with no
+        body never gets the cosine pass: on the real vault "carbonara" went
+        5 -> 2 rows with it, bench unchanged.
+
+        Measured: recall@5 0.933 -> 0.933, MRR@10 0.768 -> 0.793; six off-topic
+        queries 5 rows each -> 4, 1, 0, 0, 0, 0. Technical queries the vault
+        cannot answer (React, Kubernetes) still get 5: the embedding scores
+        them like real answers, and no threshold here separates the two. The
+        floor keeps 0.08 of margin under the lowest first right answer (0.23);
+        0.20 measured the same with 0.03."""
+        best_bm25 = max((r.get("bm25") or 0.0 for r in rows), default=0.0)
+        return [r for r in rows
+                if r.get("cos") is None
+                or (r["cos"] >= cls.CUT_COS and not cls._heading_only(r.get("text")))
+                or (r["cos"] >= cls.CUT_COS_FLOOR and best_bm25 > 0
+                    and r.get("bm25", 0.0) >= cls.CUT_BM25_REL * best_bm25)]
 
     def search(self, query: str, top_n: int = 5, node_id: "int | None" = None,
                diversify: bool = True, deep: bool = False,
@@ -2375,7 +2418,8 @@ class KnowledgeGraph:
         # model reads whole. Paying six seconds to reorder what was already
         # visible, while making paraphrase worse, is the opposite of the trade
         # it promised. Full numbers in the CHANGELOG.
-        results = self._retrieve(query, max(top_n * 4, 20), node_id=node_id, deep=deep)
+        results = self._cut_irrelevant(
+            self._retrieve(query, max(top_n * 4, 20), node_id=node_id, deep=deep))
         if diversify and len(results) > top_n:
             results = self._mmr(query, results, top_n)
         final = [_without_vector(r) for r in results[:top_n]]
@@ -2543,6 +2587,17 @@ class KnowledgeGraph:
         # vault with `embed_model none` lands here (fastembed is a hard
         # dependency since 1.2.2). Give them the vote by fusing every leg that
         # exists, once something needs it.
+        # Every row also keeps the two absolute signals the fused rank throws
+        # away: `cos` (query vs chunk, computed for lexical-only rows too) and
+        # `bm25` (0.0 when the lexical leg did not pick it). RRF orders; only
+        # these can say "not relevant at all" — see `_cut_irrelevant`.
+        bm25 = {r["id"]: r["score"] for r in lexical}
+        for r in vector:
+            r["cos"], r["bm25"] = r["score"], bm25.get(r["id"], 0.0)
+        for r in lexical:
+            blob = r.get("embedding")
+            r["cos"] = self._cosine_sim(qv, self._unpack_vec(blob)) if qv and blob else None
+            r["bm25"] = r["score"]
         if not vector:
             return lexical[:top_n]
         if not lexical:
