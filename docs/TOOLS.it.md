@@ -69,7 +69,7 @@ LOOP DI MEMORIA — PASSO 2. Persiste ci che e nuovo nella memoria a lungo termi
 | `intent` | string (enum) | si | — | Uno tra: `question`, `task`, `exploration`, `clarification`, `feedback` |
 | `sentiment` | string (enum) | si | — | Uno tra: `neutral`, `positive`, `critical`, `urgent` |
 | `context` | string | no | `""` | Percorso contesto (es. `java/spring`). Default: contesto attivo |
-| `episode` | string | no | — | UNA frase compatta (max ~200 caratteri) |
+| `episode` | string | no | — | UNA frase compatta (max 400 caratteri), attaccata a tutte le keyword del turno |
 | `entities` | string[] | no | `[]` | Entita esplicite (max 15) |
 | `tags` | string[] | no | `[]` | Label libere (max 10) |
 | `references` | object[] | no | `[]` | Riferimenti file/URL/commit (max 20) |

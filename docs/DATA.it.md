@@ -18,6 +18,10 @@ Sovrascrivere con `NS_GRAPHS_DIR`. Ogni contesto ha il suo file: `graph_<context
 Il contesto `default` si memorizza in `graph_default.db`.
 
 Un database seed (`base_knowledge.db`) e bundled nel package e read-only a runtime.
+Documenta Neuron stesso e serve solo a classificare il dominio di un turno: non viene mai
+caricato in un grafo, ne' cercato. I nodi del seed copiati in un grafo dalle versioni
+precedenti vengono rimossi al caricamento, se l'utente non li ha usati (topic riscritto, un
+episodio, un suo link).
 
 ### Schema (per file grafo)
 

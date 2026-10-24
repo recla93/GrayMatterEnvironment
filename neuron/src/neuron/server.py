@@ -120,6 +120,14 @@ RATIONALE_MAX_LEN = 40  # truncate rationale in full format
 # Semantic dedup: cosine similarity threshold to treat new keyword as existing
 SEMANTIC_DEDUP_THRESHOLD = 0.90
 
+# Relative cuts, tuned 2026-10-24 on the two field reports (fresh install, 4
+# turns). The absolute 0.3 floor of the vector search let `focus` (0.33) into a
+# question about where the frontend runs (`frontend` 0.59), and with it every
+# link of the Safari bug. A fact is a sentence, so against the query it
+# separates cleanly: right fact 0.37-0.64, best wrong one <= 0.20.
+VEC_FALLBACK_DELTA = 0.20   # vector-fallback node kept if within this of the best
+FACT_DELTA = 0.15           # pre_turn fact kept if within this of the best fact
+
 
 
 # Closed enums, also declared in the MCP schema: validated here so a client
@@ -385,14 +393,11 @@ def _switch_leaves_a_trail(prev_ctx: str, new_ctx: str, keywords) -> None:
     """
     try:
         prev_g = _g.get(prev_ctx)
-        # Seed rows sit at turn 0; anything the user stored is turn >= 1. A
-        # context is never really empty — `get()` warm-starts it from the seed —
-        # so "has nodes?" let through trails whose source was whatever the seed
-        # shipped: the first draft of this recorded "you moved from docs/TOOLS
-        # to benchmark" about work nobody had done. The graph-level
-        # `_seed_loaded` flag is no good here either: adding nodes does not
-        # clear it, only saving does, so it suppresses legitimate trails out of
-        # a context you have written to but not yet checkpointed.
+        # Imported rows (and the seed, when `get()` still warm-started contexts
+        # from it) sit at turn 0; anything the user stored is turn >= 1. "Has
+        # nodes?" let through trails whose source was whatever had been
+        # imported: the first draft of this recorded "you moved from docs/TOOLS
+        # to benchmark" about work nobody had done.
         mine = [n for n in prev_g.nodes if (getattr(n, "turn", 0) or 0) > 0]
         if not mine or not keywords:
             return
@@ -615,7 +620,7 @@ def _all_tools() -> list[Tool]:
                         "description": (f"ONE fact sentence for this turn, max {EPISODE_MAX_CHARS} "
                                         "chars (cut past that, not summarized). E.g. 'chose https "
                                         "over wss because Turso rejects the ws handshake'. Attached "
-                                        "to the first keyword; pre_turn surfaces it as a fact. "
+                                        "to every keyword; pre_turn surfaces it once, as a fact. "
                                         f"A node keeps its {EPISODES_PER_NODE} most recent."),
                     },
                     "entities": {
@@ -1173,7 +1178,9 @@ def _resolve_context(
         existing = {nd.keyword for nd in g.nodes}
         if not search_kws & existing:
             vec_results = _search_embeddings(list(search_kws), top_n=5, graph=g)
-            if vec_results:
+            if vec_results:   # sorted best first
+                vec_results = [(kw, s) for kw, s in vec_results
+                               if s >= vec_results[0][1] - VEC_FALLBACK_DELTA]
                 vec_kws = {kw for kw, _ in vec_results}
                 current = vec_kws.copy()
                 for _ in range(depth):
@@ -1542,12 +1549,18 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                                 entities=entities, tags=tags,
                                 references=references))
 
-    # T56: one compact fact sentence for this turn, attached to the first
-    # (most salient) keyword — nodes carry decisions, not just themes.
+    # T56: one compact fact sentence for this turn — nodes carry decisions, not
+    # just themes. On EVERY keyword: on the first only, a query landing on any
+    # other keyword of the turn never saw it (the proxy bug filed under
+    # `turso`, missed by a search on `firewall`). pre_turn shows each text once.
     _episode_txt = str(arguments.get("episode", "") or "").strip()
     _episode_report: dict = {}
-    if _episode_txt:
-        _episode_report = g.add_episode(keywords[0], _episode_txt, turn)
+    for kw in (keywords if _episode_txt else []):
+        rep = g.add_episode(kw, _episode_txt, turn)
+        if "truncated" in rep:
+            _episode_report["truncated"] = rep["truncated"]   # same text, same cut
+        if "dropped_turns" in rep:
+            _episode_report.setdefault("dropped_turns", {})[g._norm(kw)] = rep["dropped_turns"]
 
     for ld in new_links_data:
         lk = Link(
@@ -1568,6 +1581,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         if tgt:
             tgt.salience += WEIGHT_ORDER.get(lk.weight, 2)
             g.mark_node_dirty(tgt.keyword)
+    _co_links = g.link_cooccurring(keywords, turn)   # after the explicit ones: they win
 
     g.last_sentiment = sentiment
     g.last_topic = topic
@@ -1620,7 +1634,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # di `_tool_auto`, dove `_episode_report` NON esiste (ogni `auto` moriva di
     # NameError). Va qui, dove il report è in scope. Assente se non si è perso
     # niente.
-    _lost = {k: v for k, v in _episode_report.items() if k != "stored"}
+    _lost = _episode_report
     _episode_note = (
         f"\n! episode_lost: {json.dumps(_lost, ensure_ascii=False)} — raise "
         f"NEURON_EPISODE_MAX_CHARS / NEURON_EPISODES_PER_NODE to keep it whole."
@@ -1628,6 +1642,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
 
     return [TextContent(type="text", text=(
         f"Turn {turn} saved. Nodes: {len(g.nodes)}, Links: {len(g.links)}"
+        + (f" (+{_co_links} same-turn)" if _co_links else "")
         + (f", pruned: {removed}" if removed else "")
         + _episode_note
         # T65: surface the context dynamics — committed switch or pending signal
@@ -1903,7 +1918,16 @@ async def _tool_around(arguments: dict, ctx: str, g) -> list[TextContent]:
     if not g.nodes:
         return [TextContent(type="text", text="No nodes in graph.")]
     from neuron.models import _cos
-    qv = _get_embedding(topic)
+    # Nodes are single words, and a whole sentence sits far from all of them:
+    # `brainstorm` got a problem in one sentence and found nothing. Its content
+    # words, joined, measured better on 3 of 5 field cases (firewall 0.74 ->
+    # 0.82, focus 0.35 -> 0.47, angular 0.43 -> 0.69, the last one previously
+    # beaten by websocket at 0.51). Not the max over single words: short ones
+    # (`turso`, `ngrx`) reach 0.65-0.80 against ANY word, "carbonara" included.
+    # Still out of reach: "le query sono lente" -> `latenza`, with any variant.
+    words = SemanticExtractor.extract(topic).keywords
+    probe = " ".join(words) if words else topic
+    qv = _get_embedding(probe)
     lo, hi = MID_BAND
     hub = _hubness(g)
     band, anchor = [], ("", -1.0)
@@ -1920,7 +1944,8 @@ async def _tool_around(arguments: dict, ctx: str, g) -> list[TextContent]:
     # what the memory takes this topic to BE. Similarity values do not — a
     # sentence tops out near 0.58 whether the graph knows it (a daemon question:
     # `daemon`) or not (a recipe: `seed-cachato`); the name is the signal.
-    head = (f"Around '{topic}' (anchor {anchor[0]}={anchor[1]:.2f}"
+    head = (f"Around '{topic}'" + (f" as '{probe}'" if probe != topic else "")
+            + f" (anchor {anchor[0]}={anchor[1]:.2f}"
             + (" — no node above the band" if anchor[1] < hi else "")
             + f"; mid-band {lo}-{hi}: {len(band)} nodes, now={g.turn_count}):")
     if not band:
@@ -1933,7 +1958,10 @@ async def _tool_around(arguments: dict, ctx: str, g) -> list[TextContent]:
         rows.append((bool(facts or links), sim, nd, facts, links))
     rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
     lines = [head]
+    seen_facts: set[str] = set()   # a turn's fact sits on all its keywords: show it once
     for _has, sim, nd, facts, links in rows[:n]:
+        facts = [f for f in facts if f not in seen_facts]
+        seen_facts.update(facts)
         idle = now - nd.turn
         state = f"dormant {idle}t" if idle >= 5 else "active"
         pen = _search.hub_penalty(hub, nd.keyword)
@@ -2148,6 +2176,7 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
         if tgt:
             tgt.salience += WEIGHT_ORDER.get(lk.weight, 2)
             g.mark_node_dirty(tgt.keyword)
+    g.link_cooccurring(extraction.keywords, turn)
 
     g.last_sentiment = extraction.sentiment
     g.last_topic = extraction.topic
@@ -2239,9 +2268,25 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         # fact_nodes ranked nodes, each attributed: weak convergence from
         # several nodes beats one strong node, and unattributed facts aren't
         # inspectable. Overflow is cut by char_budget_pt below, as before.
-        _facts = [f"{kw}: {f}"
-                  for kw, _ in nodes_pt[:_fact_nodes_pt]
-                  for f in g_pt.recent_episodes(kw, 2)]
+        # A turn's fact sits on every keyword of that turn: each text shows
+        # once, under the best-ranked node holding it. Ranked by relevance to
+        # the query, not recency: a hub keyword (`ngrx`) carries the facts of
+        # every turn it was in, and its newest — about selectors — came first
+        # for a question about HTTP errors. Same cap as before (two per node).
+        _cand: dict[str, str] = {}
+        for kw, _ in nodes_pt[:_fact_nodes_pt]:
+            for f in g_pt.recent_episodes(kw, EPISODES_PER_NODE):
+                _cand.setdefault(f, kw)
+        _ranked = list(_cand)   # newest first per node: the order if no embedder
+        try:
+            from neuron.models import _cos
+            _qv = _get_embedding(" ".join(sorted(search_kws_pt)))
+            _rel = {f: _cos(_qv, _get_embedding(f)) for f in _ranked}
+            _ranked.sort(key=lambda f: -_rel[f])
+            _ranked = [f for f in _ranked if _rel[f] >= _rel[_ranked[0]] - FACT_DELTA]
+        except Exception as _e:  # noqa: BLE001 — relevance is an extra, never fatal
+            log.debug("fact relevance skipped: %s", _e)
+        _facts = [f"{_cand[f]}: {f}" for f in _ranked[:2 * _fact_nodes_pt]]
         if _facts:
             parts_pt.append("facts: " + " | ".join(_facts))
         # G1: surface file refs (project-relative paths) so a returning session

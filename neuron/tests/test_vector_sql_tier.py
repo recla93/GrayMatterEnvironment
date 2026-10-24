@@ -50,11 +50,10 @@ def test_sql_tier_runs_and_does_not_latch_off(tmp_path, monkeypatch):
     if not srv.TURSO_ENGINE:
         pytest.skip("nessun engine Turso/libSQL: il tier SQL non è applicabile")
 
-    store = str(tmp_path / "seed.db")
+    store = str(tmp_path / "graph_default.db")
     _make_store(store, srv.VECTOR_DIM)
 
-    monkeypatch.setattr(srv._g, "_seed_path", store, raising=False)
-    monkeypatch.setattr(srv, "_active_db_path", lambda: None)
+    monkeypatch.setattr(srv, "_active_db_path", lambda: store)
     monkeypatch.setattr(srv, "_vector_sql_ok", True)
     monkeypatch.setattr(srv, "_get_embedding", lambda t: [1.0] + [0.0] * (srv.VECTOR_DIM - 1))
     srv._turn_search_cache.clear()
@@ -74,7 +73,6 @@ def test_missing_function_latches_off_without_dropping_the_seed(tmp_path, monkey
     """
     pytest.importorskip("mcp")
     import neuron.server as srv
-    from neuron.models import Graph
 
     store = str(tmp_path / "seed.db")
     _make_store(store, srv.VECTOR_DIM)
@@ -88,13 +86,12 @@ def test_missing_function_latches_off_without_dropping_the_seed(tmp_path, monkey
     monkeypatch.setattr(srv, "TURSO_ENGINE", True)
     monkeypatch.setattr(srv, "_vector_sql_ok", True)
     monkeypatch.setattr(srv._g, "_seed_path", store, raising=False)
-    monkeypatch.setattr(srv, "_active_db_path", lambda: None)
     monkeypatch.setattr(srv, "_seed_connection", lambda p: NoVectorConn())
     monkeypatch.setattr(srv, "_drop_seed_connection", lambda p: dropped.append(p))
     monkeypatch.setattr(srv, "_get_embedding", lambda t: [0.1] * srv.VECTOR_DIM)
     srv._turn_search_cache.clear()
 
-    srv._search_embeddings(["alpha"], top_n=5, graph=Graph())
+    srv._refine_domain(["alpha"])
 
     assert srv._vector_sql_ok is False, "il tier va spento dopo una funzione mancante"
     assert dropped == [], f"il seed non va chiuso per un errore permanente: {dropped}"
@@ -104,7 +101,6 @@ def test_transient_error_still_drops_the_seed(tmp_path, monkeypatch):
     """Un errore NON permanente mantiene il vecchio comportamento (handle sospetto)."""
     pytest.importorskip("mcp")
     import neuron.server as srv
-    from neuron.models import Graph
 
     store = str(tmp_path / "seed.db")
     _make_store(store, srv.VECTOR_DIM)
@@ -118,13 +114,12 @@ def test_transient_error_still_drops_the_seed(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "TURSO_ENGINE", True)
     monkeypatch.setattr(srv, "_vector_sql_ok", True)
     monkeypatch.setattr(srv._g, "_seed_path", store, raising=False)
-    monkeypatch.setattr(srv, "_active_db_path", lambda: None)
     monkeypatch.setattr(srv, "_seed_connection", lambda p: LockedConn())
     monkeypatch.setattr(srv, "_drop_seed_connection", lambda p: dropped.append(p))
     monkeypatch.setattr(srv, "_get_embedding", lambda t: [0.1] * srv.VECTOR_DIM)
     srv._turn_search_cache.clear()
 
-    srv._search_embeddings(["alpha"], top_n=5, graph=Graph())
+    srv._refine_domain(["alpha"])
 
     assert srv._vector_sql_ok is True, "un lock transitorio non deve spegnere il tier"
     assert dropped == [store], "un errore transitorio deve ancora scartare l'handle"

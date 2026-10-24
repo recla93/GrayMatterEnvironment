@@ -73,8 +73,7 @@ class GraphRegistry:
         # to the legacy repo-relative location (knowledge/base_knowledge.db,
         # one level above graphs/) for source checkouts / dev runs.
         self._seed_path = self._resolve_seed_path(graphs_dir)
-        # track which contexts were loaded from seed (immutable source)
-        self._seed_loaded: set[str] = set()
+        self._seed_topics: dict[str, str] | None = None
 
     @staticmethod
     def _resolve_seed_path(graphs_dir: str) -> str:
@@ -114,6 +113,17 @@ class GraphRegistry:
         except OSError:
             return False
 
+    def _seed_node_topics(self) -> dict[str, str]:
+        """normalized keyword → topic of every seed node, read once per process."""
+        if self._seed_topics is None:
+            conn = _db.connect_read_only(self._seed_path)
+            try:
+                rows = conn.execute("SELECT keyword, topic FROM nodes").fetchall()
+            finally:
+                conn.close()
+            self._seed_topics = {Graph._norm(k): t for k, t in rows}
+        return self._seed_topics
+
     # ------------------------------------------------------------------
     # Path helpers
     # ------------------------------------------------------------------
@@ -145,20 +155,20 @@ class GraphRegistry:
                 except Exception as e:    # noqa: BLE001 — a backup must never block a load
                     log.warning("backup of %s skipped: %s", db, e)
                 g.load_sqlite(db, context=ctx)
-            if len(g.nodes) == 0 and self._seed_is_loadable():
-                # A missing, empty, placeholder, or corrupt seed must not crash
-                # the server — degrade to an empty graph. The seed is only a
-                # warm-start convenience; a fresh checkout ships a placeholder
-                # until base_knowledge.db is regenerated (scripts/import_vault.py).
+            # An empty context stays empty. It used to be warm-started from the
+            # seed — Neuron's own manual — and those 29 nodes then answered
+            # every search in place of the user's concepts. Graphs that got them
+            # back then are cleaned here, once, and saved at once: the vector
+            # SQL tier reads the file, not this object.
+            if g.nodes and self._seed_is_loadable():
                 try:
-                    if ctx == "default":
-                        g.load_sqlite(self._seed_path, context="default", warm_start=True)
-                        self._seed_loaded.add("default")
-                    else:
-                        g.load_sqlite(self._seed_path, domain_filter=ctx, context=ctx, warm_start=True)
-                        self._seed_loaded.add(ctx)
-                except Exception as e:
-                    log.warning("seed load failed for context %r (degrading to empty): %s", ctx, e)
+                    gone = g.drop_seed_nodes(self._seed_node_topics())
+                    if gone:
+                        g.save_sqlite(db, context=ctx)
+                        log.info("context %r: removed %d seed nodes: %s",
+                                 ctx, len(gone), ", ".join(gone))
+                except Exception as e:   # noqa: BLE001 — cleanup must never block a load
+                    log.warning("seed cleanup skipped for context %r: %s", ctx, e)
             # E3.3/E3.4: if this graph was idle long enough, run sleep-mode on load
             # (pre-stage the top stimulus; consolidate only when NS_CONSOLIDATE_AUTO
             # is on). Never let it break graph loading.
@@ -253,19 +263,17 @@ class GraphRegistry:
                 "links":   len(g.links),
                 "turns":   g.turn_count,
                 "active":  ctx == self._active,
-                "seed":    ctx in self._seed_loaded,
             })
         return result
 
     def save_all(self) -> None:
         """Persist every dirty graph to disk.
 
-        This used to skip `ctx in self._seed_loaded`, under the heading "never
-        writes to seed" — but it writes to `self._db_path(ctx)`, the context's
-        own file, and never to `self._seed_path`. The guard protected nothing
-        and excluded exactly the contexts most likely to be lost: `get()` marks
-        EVERY newly created context as seed-loaded, because it warm-starts them
-        from the seed.
+        This used to skip contexts warm-started from the seed, under the heading
+        "never writes to seed" — but it writes to `self._db_path(ctx)`, the
+        context's own file, and never to `self._seed_path`. The guard protected
+        nothing and excluded exactly the contexts most likely to be lost: `get()`
+        then warm-started EVERY newly created context from the seed.
 
         Both durability nets run through here — the worker's periodic checkpoint
         and its shutdown handler (`gray_matter/_worker.py`, the one written so a
@@ -275,8 +283,8 @@ class GraphRegistry:
         graph file, and three turns stored under it that reached no file at all.
 
         Dirtiness is the right gate and `save_sqlite` already applies it, so a
-        context warm-started from the seed and never modified still writes
-        nothing — which is what the old guard was reaching for.
+        context never modified still writes nothing — which is what the old
+        guard was reaching for.
         """
         for ctx, g in self._graphs.items():
             g.save_sqlite(self._db_path(ctx), context=ctx)
@@ -288,7 +296,6 @@ class GraphRegistry:
         g   = self.get(ctx)
         db  = self._db_path(ctx)
         g.save_sqlite(db, context=ctx)
-        self._seed_loaded.discard(ctx)
 
     def context_tree(self) -> dict[str, Any]:
         root: dict[str, Any] = {"name": "default", "children": []}
@@ -452,7 +459,6 @@ class GraphRegistry:
             if os.path.exists(db):
                 self._unlink_db(db)
             self._graphs.pop(ctx, None)
-            self._seed_loaded.discard(ctx)
         else:
             if _db.REMOTE_TURSO:
                 # Full reset: on the cloud tier the store IS the user's memory,
@@ -465,5 +471,4 @@ class GraphRegistry:
             self._graphs.clear()
             self._cross_links.clear()
             self._active = "default"
-            self._seed_loaded.clear()
             self.get("default")

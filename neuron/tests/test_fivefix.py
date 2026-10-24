@@ -2,8 +2,8 @@
 
   * cosine metric consistency (Python fallback returns similarities in [-1, 1],
     not the old raw dot product that ran to ~9 on non-normalized vectors);
-  * _search_embeddings merges seed + active DBs instead of returning on the
-    first non-empty one (the seed used to shadow the user's live graph);
+  * _search_embeddings searches the active graph only — the seed DB, once
+    merged in, shadowed the user's live graph with Neuron's own manual;
   * accent-folding in the heuristic extractor (accented Italian words are no
     longer truncated to garbage stems, and accented connectors are filtered);
   * per-(embedder,text) embedding cache;
@@ -114,41 +114,14 @@ class TestCosineMetric:
         assert best is None or isinstance(best, str)
 
 
-# ── seed + active merge (the #1 bug) ──────────────────────────────────────────
+# ── the seed stays out of search ──────────────────────────────────────────────
 
-class TestSearchMerge:
-    def test_merges_seed_and_active_keeping_max(self, monkeypatch):
-        """Turso path must union seed + active DBs (max sim per keyword), not
-        return on the first non-empty DB."""
-        class _FakeConn:
-            def __init__(self, rows): self._rows = rows
-            def execute(self, *a, **k): return self
-            def fetchall(self): return self._rows
-            def close(self): pass
-
-        dbrows = {
-            "seed":   [("A", 0.90), ("B", 0.50)],
-            "active": [("B", 0.80), ("C", 0.70)],
-        }
-        _install_fake_embedder()
-        _srv._seed_conn_cache.clear()
-        monkeypatch.setattr(_srv, "TURSO_ENGINE", True)
-        monkeypatch.setattr(_srv, "_seed_usable", lambda p: True)
-        monkeypatch.setattr(_srv, "_active_db_path", lambda: "active")
-        monkeypatch.setattr(_srv._g, "_seed_path", "seed", raising=False)
-        monkeypatch.setattr(_srv.os.path, "exists", lambda p: True)
-        monkeypatch.setattr(_srv._db, "connect_local", lambda db: _FakeConn(dbrows[db]))
-        try:
-            res = dict(_srv._search_embeddings(["x"], top_n=8, graph=Graph()))
-        finally:
-            _srv._seed_conn_cache.clear()
-        assert res.get("A") == 0.90            # seed-only survives
-        assert res.get("C") == 0.70            # active-only survives (was shadowed before)
-        assert res.get("B") == 0.80            # max across seed(0.5) & active(0.8)
-
-    def test_seed_connection_reused_active_not_cached(self, monkeypatch):
-        """The immutable seed connection is opened once and reused; the writable
-        active DB is reopened every call."""
+class TestSearchSeedFree:
+    def test_searches_only_the_active_graph(self, monkeypatch):
+        """The seed DB is Neuron's own manual. Merged into the Turso path it put
+        `store_turn`, `dedup`... into every context's results, ahead of the
+        user's concepts. Only the active graph is searched, reopened each call
+        (it is writable)."""
         opens: dict[str, int] = {}
 
         class _FakeConn:
@@ -172,12 +145,13 @@ class TestSearchMerge:
         monkeypatch.setattr(_srv.os.path, "exists", lambda p: True)
         monkeypatch.setattr(_srv._db, "connect_local", _connect)
         try:
+            res = dict(_srv._search_embeddings(["x"], top_n=8, graph=Graph()))
             _srv._search_embeddings(["x"], top_n=8, graph=Graph())
-            _srv._search_embeddings(["x"], top_n=8, graph=Graph())
-            assert opens.get("seed") == 1      # cached across both calls
-            assert opens.get("active") == 2    # reopened each call
         finally:
             _srv._seed_conn_cache.clear()
+        assert res == {"B": 0.8}, f"risultati non solo dal grafo attivo: {res}"
+        assert "seed" not in opens, "il seed non va interrogato"
+        assert opens.get("active") == 2    # reopened each call
 
 
 # ── accent handling in extraction ─────────────────────────────────────────────

@@ -1,6 +1,51 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Il seed esce dalla memoria.** `base_knowledge.db` (29 nodi su Neuron
+  stesso: `store_turn`, `dedup`, `consolidate`...) entrava per due strade: il
+  warm-start di ogni contesto vuoto in `registry.get()`, e la ricerca
+  vettoriale SQL, che lo univa al grafo attivo in ogni contesto. Su
+  un'installazione nuova rispondeva al posto dei concetti dell'utente:
+  "menu a tendina che perde il focus" restituiva solo quei nodi. Ora un
+  contesto nuovo parte vuoto e `_search_embeddings` legge solo il grafo attivo.
+  Il seed resta per classificare il dominio (`_refine_domain`).
+- **Pulizia una tantum dei grafi esistenti.** Al caricamento, `drop_seed_nodes`
+  toglie i nodi del seed rimasti come spediti: stesso topic, nessun episodio,
+  nessun link dopo il turno 0. Un concetto del seed che l'utente ha usato
+  resta. Cancellazioni mirate, non la riconciliazione per differenza. Sul
+  grafo `default` reale (copia): 143 → 117 nodi, 86 → 7 link, tutti i 79
+  rimossi interni al seed.
+- Rimossi `load_sqlite(domain_filter=, warm_start=)` e il campo `seed` di
+  `list_contexts`: li usava solo il warm-start.
+- **Le keyword dello stesso turno si collegano.** `Graph.link_cooccurring`,
+  chiamato da `store_turn` e `auto` dopo i link espliciti: `deepening`,
+  `medium`, rationale "stesso turno", solo fra coppie ancora scollegate. Prima
+  i link venivano solo da quelli scritti dal modello: installazione nuova, 4
+  turni, 14 nodi, 0 link. Medium e non tangential perche' un tangential scade
+  dopo pochi turni inattivi, e store_turn promuove gia' a medium un tangential
+  fra nodi dello stesso dominio. Le coppie che si ripetono salgono col rinforzo
+  hebbiano. La risposta lo dichiara: `Links: 6 (+6 same-turn)`.
+- **L'episodio va su tutte le keyword del turno**, non solo sulla prima: una
+  domanda che cadeva su un'altra keyword non lo vedeva. `pre_turn` e `around`
+  mostrano ogni testo una volta, sotto il nodo meglio classificato; un nodo
+  i cui fatti sono gia' mostrati passa ai successivi. `episode_lost` riporta
+  `dropped_turns` per keyword. Costo: il tetto di 5 episodi per nodo si
+  riempie prima sui nodi molto usati.
+- **`pre_turn`: fatti per pertinenza, nodi deboli fuori.** I fatti dei nodi
+  in cima si ordinano per coseno con la domanda, non per data, e restano solo
+  quelli entro `FACT_DELTA` (0.15) dal migliore: un fatto e' una frase e si
+  separa bene (giusto 0.37-0.64, sbagliato <= 0.20). Nel fallback vettoriale
+  un nodo resta solo entro `VEC_FALLBACK_DELTA` (0.20) dal migliore: `focus`
+  (0.33) entrava in una domanda sul frontend (0.59) portandosi dietro i link
+  del bug di Safari. Tarati su pochi casi reali: sono delta, non soglie
+  assolute, per non dipendere dalla scala del modello.
+- **`around` (brainstorm) cerca con le parole della frase.** I nodi sono
+  parole singole e una frase intera sta lontana da tutte. Le keyword estratte
+  da `SemanticExtractor`, unite, misurano meglio in 3 casi su 5 (firewall 0.74
+  -> 0.82, focus 0.35 -> 0.47, angular 0.43 -> 0.69). Scartato il massimo
+  sulle singole parole: `turso` e `ngrx` arrivano a 0.65-0.80 con qualunque
+  parola. Limite: "le query sono lente" non trova `latenza` con nessuna
+  variante. L'intestazione dice con cosa ha cercato (`as '...'`).
 - **pyturso 0.8.3 e WAL multiprocesso su Windows.** `db.TURSO_OPEN_KW`
   (backend `experimental_win_iocp` + `multiprocess_wal`): un secondo processo
   apre lo stesso grafo su `turso-local` invece di finire `degraded` in sola

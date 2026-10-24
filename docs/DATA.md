@@ -18,6 +18,9 @@ Override with `NS_GRAPHS_DIR`. Each context gets its own file: `graph_<context>.
 The `default` context stores in `graph_default.db`.
 
 A seed database (`base_knowledge.db`) is bundled inside the package and read-only at runtime.
+It documents Neuron itself and is used only to classify a turn's domain: it is never loaded
+into a graph, nor searched. Seed nodes copied into a graph by older versions are removed on
+load, unless the user worked with them (topic rewritten, an episode, a link of theirs).
 
 ### Schema (per graph file)
 

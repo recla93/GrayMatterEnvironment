@@ -222,23 +222,6 @@ class TestGraphPersistence:
         finally:
             os.unlink(db)
 
-    def test_domain_filter_on_load(self):
-        g = Graph()
-        g.add_node(Node(keyword="react",   turn=1, topic="ui",      domain="frontend", sentiment="neutral"))
-        g.add_node(Node(keyword="spring",  turn=2, topic="java",    domain="backend",  sentiment="neutral"))
-        g.add_node(Node(keyword="general", turn=3, topic="general", domain="general",  sentiment="neutral"))
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db = f.name
-        try:
-            g.save_sqlite(db)
-            g2 = Graph()
-            g2.load_sqlite(db, domain_filter="backend")
-            kws = {nd.keyword for nd in g2.nodes}
-            assert "spring" in kws
-            assert "react"   not in kws
-        finally:
-            os.unlink(db)
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Graph — incremental save (T12)
@@ -589,33 +572,6 @@ class TestConcurrentSaves:
             assert self._rows(db, "SELECT salience FROM nodes WHERE keyword='k'")[0][0] == 0
         finally:
             os.unlink(db)
-
-    def test_warm_start_writes_all_rows_additively(self):
-        """A graph warm-started from one store (the seed) then saved to a
-        different, empty target must write ALL its rows there — additively, with
-        no diff-delete."""
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            seed = f.name
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            target = f.name
-        try:
-            s = Graph(); s.turn_count = 2
-            s.add_node(Node(keyword="k1", turn=1, topic="t", domain="d",
-                            sentiment="neutral", salience=2))
-            s.add_node(Node(keyword="k2", turn=1, topic="t", domain="d",
-                            sentiment="neutral", salience=5))
-            s.save_sqlite(seed, context="default")
-
-            g = Graph(); g.load_sqlite(seed, context="default", warm_start=True)
-            assert g._needs_full_write is True and g._needs_diff_delete is False
-            g.add_node(Node(keyword="k3", turn=3, topic="t", domain="d", sentiment="neutral"))
-            g.save_sqlite(target, context="default")
-            kws = {r[0] for r in self._rows(target, "SELECT keyword FROM nodes "
-                                                    "WHERE context='default'")}
-            assert kws == {"k1", "k2", "k3"}, kws
-            assert self._rows(target, "SELECT salience FROM nodes WHERE keyword='k2'")[0][0] == 5
-        finally:
-            os.unlink(seed); os.unlink(target)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

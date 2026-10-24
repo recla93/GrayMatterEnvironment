@@ -113,24 +113,24 @@ def test_the_switch_records_the_concept_it_left_behind(reg, monkeypatch):
     assert (t.target_context, t.target_keyword) == ("ai", "benchmark")
 
 
-def test_a_switch_out_of_seed_only_content_records_nothing(reg, monkeypatch):
-    """A context is never really empty: `get()` warm-starts it from the seed.
+def test_a_switch_out_of_imported_content_records_nothing(reg, monkeypatch):
+    """Imported rows sit at turn 0 — a vault import, or the seed that `get()`
+    once warm-started every context with.
 
-    So the naive "has nodes?" check let through a trail whose source was
-    whatever the seed shipped — the first draft of this wiring recorded "you
-    moved from docs/TOOLS to benchmark" about work nobody had done. A trail out
-    of a context the user has never written to is noise with a timestamp.
+    The naive "has nodes?" check let through a trail whose source was whatever
+    had been imported — the first draft of this wiring recorded "you moved from
+    docs/TOOLS to benchmark" about work nobody had done. A trail out of a
+    context the user has never written to is noise with a timestamp.
     """
     import neuron.server as srv
     monkeypatch.setattr(srv, "_g", reg)
-    reg.get("default")                       # warm-start only, nothing of ours
-    assert reg.get("default").nodes, "premessa: il seed ha popolato il contesto"
-    assert all((n.turn or 0) == 0 for n in reg.get("default").nodes), \
-        "premessa: le righe del seed stanno al turno 0"
+    reg.get("default").add_node(Node(keyword="docs/TOOLS", turn=0, topic="t",
+                                     domain="general", sentiment="neutral",
+                                     salience=5))
 
     srv._switch_leaves_a_trail("default", "ai", ["benchmark"])
     assert reg._cross_links == [], (
-        f"traccia spuria da contenuto solo-seed: {reg._cross_links}")
+        f"traccia spuria da contenuto importato: {reg._cross_links}")
 
 
 def test_the_hysteresis_rule_exists_once():

@@ -270,23 +270,17 @@ def _search_embeddings(
     n_hubs = sum(1 for e in excess.values() if e >= HUB_MIN_EXCESS)
 
     if s.TURSO_ENGINE and s._vector_sql_ok:
-        seed_path = getattr(s._g, '_seed_path', None)
-        db_paths = []
-        if s._seed_usable(seed_path):
-            db_paths.append(seed_path)
+        # Only the active graph. The seed DB was merged in here too, and it is
+        # Neuron's own manual: `store_turn`, `dedup`, `consolidate` came back
+        # for every query in every context, even ones that never held them.
         # On the Turso Cloud tier saves go to the shared store: a local
-        # graph_<ctx>.db is a FROZEN SNAPSHOT, and max-per-keyword merging let
-        # its outdated vectors outrank current cloud ones (ghost concepts).
+        # graph_<ctx>.db is a FROZEN SNAPSHOT whose outdated vectors would
+        # outrank current cloud ones (ghost concepts) — so no file there.
         adp = s._active_db_path()
-        if adp and os.path.exists(adp) and not getattr(s._db, "REMOTE_TURSO", False):
-            db_paths.append(adp)
-        # MERGE across all DBs; keep the max sim per keyword, then rank.
         merged: dict[str, float] = {}
-        for db in db_paths:
-            is_seed = (db == seed_path)
+        if adp and os.path.exists(adp) and not getattr(s._db, "REMOTE_TURSO", False):
             try:
-                # Seed connection is cached (immutable DB); active is per-call.
-                conn = s._seed_connection(db) if is_seed else s._db.connect_local(db)
+                conn = s._db.connect_local(adp)
                 rows = conn.execute(
                     "SELECT keyword, sim FROM ("
                     "  SELECT keyword, 1.0 - vector_distance_cos(embedding, ?) AS sim "
@@ -294,19 +288,12 @@ def _search_embeddings(
                     ") WHERE sim > ? ORDER BY sim DESC LIMIT ?",
                     (query_blob, SIM_THRESHOLD, top_n + n_hubs),
                 ).fetchall()
-                if not is_seed:
-                    conn.close()
-                for kw, sim in rows:
-                    v = round(sim, 4)
-                    if kw not in merged or v > merged[kw]:
-                        merged[kw] = v
+                conn.close()
+                merged = {kw: round(sim, 4) for kw, sim in rows}
             except Exception as e:
-                if _permanent_vector_failure(e, db):
-                    continue
-                if is_seed:
-                    s._drop_seed_connection(db)
                 # Any DB/engine error must fall through to the Python path.
-                log.debug("Turso vector search failed (using Python fallback): %s", e)
+                if not _permanent_vector_failure(e, adp):
+                    log.debug("Turso vector search failed (using Python fallback): %s", e)
         if merged:
             adjusted = [(kw, round(v - hub_penalty(excess, kw), 4)) for kw, v in merged.items()]
             result = sorted(((kw, v) for kw, v in adjusted if v > SIM_THRESHOLD),

@@ -193,7 +193,8 @@ class GraphRegistry:
     def get(self, context: str | None = None) -> Graph:
         """Ottiene (o crea) il grafo per un contesto.
         
-        Se il grafo è vuoto e il seed è disponibile, carica il warm-start.
+        Un contesto vuoto resta vuoto. Rimuove i nodi del seed copiati da
+        vecchie versioni, se l'utente non li ha mai toccati.
         Se il grafo è stato inattivo, esegue sleep_maybe().
         """
         ctx = (context or self._active).lower().strip("/")
@@ -469,7 +470,7 @@ Neuron espone ~22 tool MCP. Ecco i principali raggruppati per funzione:
 
 ## 5. Persistenza e Deployment
 
-**Locale**: SQLite WAL mode, file per contesto (`graph_<context>.db`). Seed in `data/base_knowledge.db` (warm-start).
+**Locale**: SQLite WAL mode, file per contesto (`graph_<context>.db`). Seed in `data/base_knowledge.db`: serve solo a classificare il dominio, non entra mai nei grafi.
 
 **Cloud**: Turso con `libsql-client`. Schema condiviso, contesti filtrati per colonna `context`. Fallback automatico: Turso → pyturso → sqlite3.
 

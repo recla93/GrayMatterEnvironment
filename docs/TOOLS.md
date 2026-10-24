@@ -69,7 +69,7 @@ MEMORY LOOP — STEP 2. Persist what is new into long-term memory. Curate for a 
 | `intent` | string (enum) | yes | — | One of: `question`, `task`, `exploration`, `clarification`, `feedback` |
 | `sentiment` | string (enum) | yes | — | One of: `neutral`, `positive`, `critical`, `urgent` |
 | `context` | string | no | `""` | Context path (e.g. `java/spring`). Defaults to active context |
-| `episode` | string | no | — | ONE compact fact sentence (max ~200 chars) |
+| `episode` | string | no | — | ONE compact fact sentence (max 400 chars), attached to every keyword of the turn |
 | `entities` | string[] | no | `[]` | Explicit entities (max 15) |
 | `tags` | string[] | no | `[]` | Free labels (max 10) |
 | `references` | object[] | no | `[]` | File/URL/commit references (max 20) |

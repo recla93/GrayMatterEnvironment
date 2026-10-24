@@ -70,18 +70,16 @@ def test_save_all_persists_a_brand_new_context(graphs_dir):
 
     `save_all` is what BOTH durability nets call: the worker's periodic
     checkpoint and its shutdown handler — the one written precisely so a dirty
-    kill on Windows still keeps data. It used to skip `ctx in _seed_loaded`
+    kill on Windows still keeps data. It used to skip seed-loaded contexts
     under the heading "never writes to seed", but it only ever writes to the
-    context's own file, and `get()` marks EVERY newly created context as
-    seed-loaded because it warm-starts them. So a fresh context was invisible to
-    both nets and survived only if an explicit per-turn `save(ctx)` happened to
-    fire.
+    context's own file, and `get()` then warm-started EVERY newly created
+    context from the seed. So a fresh context was invisible to both nets and
+    survived only if an explicit per-turn `save(ctx)` happened to fire.
 
     Note what is NOT called here: only `save_all`, never `save(ctx)`.
     """
     reg = GraphRegistry(graphs_dir=graphs_dir)
     reg.switch("ai")
-    assert "ai" in reg._seed_loaded, "premessa: un contesto nuovo e' seed-loaded"
     reg.get("ai").add_node(_node("vault lock"))
     reg.save_all()
 
@@ -94,12 +92,12 @@ def test_save_all_persists_a_brand_new_context(graphs_dir):
 def test_save_all_still_writes_nothing_for_an_untouched_context(graphs_dir):
     """What the old guard was reaching for, kept — by the right gate.
 
-    A context warm-started from the seed and never modified must not
-    materialise a file. `save_sqlite` already returns early when the graph is
-    not dirty, which is provenance-independent and therefore correct.
+    A context never modified must not materialise a file. `save_sqlite`
+    already returns early when the graph is not dirty, which is
+    provenance-independent and therefore correct.
     """
     reg = GraphRegistry(graphs_dir=graphs_dir)
-    reg.get("veicoli")                      # warm-start only, no edits
+    reg.get("veicoli")                      # no edits
     reg.save_all()
     assert not list(pathlib.Path(graphs_dir).glob("graph_*.db")), (
         "un contesto mai modificato non deve creare un file")

@@ -639,6 +639,38 @@ class Graph:
             return "medium"
         return "tangential"
 
+    def link_cooccurring(self, keywords, turn: int) -> int:
+        """Wire together the keywords of one turn that have no link yet.
+
+        Without this a concept was connected only by the links the model
+        remembered to write — measured on a fresh install: 4 turns, 14 nodes,
+        0 links. Then a query landing on `focus` never reached `primeng`, stored
+        in the same turn and carrying the fact.
+
+        Medium, not tangential: tangential links expire after a few idle turns,
+        which would undo exactly the bug-solved-once case; and store_turn
+        already promotes a same-domain tangential link to medium — keywords of
+        one turn share their domain. No salience bonus: being named together is
+        paid by the mention itself. Repeats grow stronger through
+        `reinforce_coactivation`. Returns how many links were added."""
+        kws = []
+        for k in keywords:
+            n = self._norm(k)
+            if self.get_node(n) is not None and n not in kws:
+                kws.append(n)
+        linked = {frozenset((lk.source, lk.target)) for lk in self.links}
+        added = 0
+        for i, a in enumerate(kws):
+            for b in kws[i + 1:]:
+                if frozenset((a, b)) in linked:
+                    continue
+                self.add_link(Link(source=a, target=b, link_type="deepening",
+                                   weight="medium", rationale="stesso turno",
+                                   created_turn=turn, last_active_turn=turn))
+                linked.add(frozenset((a, b)))
+                added += 1
+        return added
+
     def reinforce_coactivation(self, keywords, turn: int | None = None) -> list[Link]:
         """Hebbian reinforcement (E2.1): 'neurons that fire together wire together'.
 
@@ -1211,6 +1243,41 @@ class Graph:
         self.nodes = [nd for nd in self.nodes if nd.keyword not in drop]
         self._rebuild_node_map()
 
+    def drop_seed_nodes(self, seed_topics: dict[str, str]) -> list[str]:
+        """Remove the nodes an old warm start copied from the seed DB, untouched since.
+
+        The seed is Neuron's own manual (`store_turn`, `dedup`, `consolidate`...).
+        Copied into the graph it answered every search in place of the user's
+        concepts. ``seed_topics`` maps normalized keyword → topic as shipped.
+
+        A node goes only if it is still exactly what the seed shipped: same
+        topic (store_turn overwrites it), no episode, no link made after turn 0
+        (every seed link sits at turn 0). A seed concept the user actually
+        worked with stays; the seed links around it go. Returns the dropped
+        keywords; the next save deletes exactly those rows (targeted, never the
+        diff-delete that could take another writer's rows with it)."""
+        norm = self._norm
+        touched = {norm(k) for k, eps in self.episodes.items() if eps}
+        touched |= {norm(e) for lk in self.links if lk.created_turn
+                    for e in (lk.source, lk.target)}
+        drop = {norm(nd.keyword) for nd in self.nodes
+                if seed_topics.get(norm(nd.keyword)) == nd.topic
+                and norm(nd.keyword) not in touched}
+        if not drop:
+            return []
+        for lk in [lk for lk in self.links
+                   if norm(lk.source) in drop or norm(lk.target) in drop]:
+            self.remove_link(lk)
+        for nd in [nd for nd in self.nodes if norm(nd.keyword) in drop]:
+            self.nodes.remove(nd)
+            # Raw spelling, not _record_removed_node: the row is keyed by the
+            # keyword as stored ("Neuron"), and the targeted DELETE is exact.
+            self._removed_nodes.add(nd.keyword)
+            self._session_cache.pop(norm(nd.keyword), None)
+        self._dirty = True
+        self._rebuild_node_map()
+        return sorted(drop)
+
     # ------------------------------------------------------------------
     # L3: Graveyard — long-term memory (reactivation + decay)
     # ------------------------------------------------------------------
@@ -1669,8 +1736,7 @@ class Graph:
                 "DELETE FROM links WHERE context=? AND source=? AND target=? AND link_type=?",
                 [(context, s, t, lt) for (s, t, lt) in stale_links])
 
-    def load_sqlite(self, path: str, domain_filter: str | None = None,
-                    *, context: str = "default", warm_start: bool = False) -> None:
+    def load_sqlite(self, path: str, *, context: str = "default") -> None:
         if not _db.REMOTE_TURSO and not os.path.exists(path):
             return
         conn = _db.connect(path)
@@ -1755,8 +1821,6 @@ class Graph:
             params: list = []
             if has_context:
                 conds.append("context=?"); params.append(context)
-            if domain_filter:
-                conds.append("domain=?"); params.append(domain_filter)
             where = (" WHERE " + " AND ".join(conds)) if conds else ""
             rows = conn.execute(f"{base_sql}{where} ORDER BY id", params).fetchall()
 
@@ -1816,7 +1880,6 @@ class Graph:
 
             # Load links (scoped by context when available)
             self.links.clear()
-            node_kws = {nd.keyword for nd in self.nodes}
             # co_activation_count is absent in legacy/seed stores → select it only
             # when present, else default to 0 (E2.1).
             link_cols = [c[1] for c in conn.execute("PRAGMA table_info(links)").fetchall()]
@@ -1830,8 +1893,6 @@ class Graph:
             else:
                 link_rows = conn.execute(select + " ORDER BY id")
             for row in link_rows:
-                if domain_filter and row[0] not in node_kws and row[1] not in node_kws:
-                    continue
                 _last_active = row[6] or 0
                 # A1 (Piano 05): the persisted inactive_turns can be stale by
                 # design (inactive links are no longer re-upserted every turn).
@@ -1870,10 +1931,7 @@ class Graph:
             conn.close()
         self._rebuild_node_map()
         self._reset_tracking()
-        # Normal load (from our own store): the loaded rows already live there, so
-        # the next save only needs the dirty delta (incremental, atomic — safe
-        # under concurrent writers). A warm start from a DIFFERENT store (the seed
-        # DB) means the save target is missing these rows, so the next save must
-        # write them all — additively, never diff-deleting.
-        self._needs_full_write = warm_start
+        # The loaded rows already live in the store, so the next save only needs
+        # the dirty delta (incremental, atomic — safe under concurrent writers).
+        self._needs_full_write = False
         self._snapshot_salience()   # baseline for atomic relative-salience saves
