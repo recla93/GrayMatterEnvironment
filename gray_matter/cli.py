@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import secrets
 import signal
 import socket
 import struct
@@ -68,47 +67,12 @@ def clear_port_file() -> None:
 
 # --- IPC auth -------------------------------------------------------------
 # The port takes tool calls (`call`, `knowledge_cmd`), so anything that can
-# reach it can read and WRITE the memory. It binds loopback only, but on a
-# multi-user box every local account reaches loopback. A shared secret in a
-# user-readable file is the smallest thing that closes it: whoever can read the
-# token can already read the graph DB next to it, so it grants nothing new.
-# `ping` stays unauthenticated on purpose — the singleton probe has to work
-# before anyone knows the token, and it discloses only "a GM is here".
-def _token_file() -> "Path":
-    from gray_matter import paths as _paths
-    return _paths.gm_home() / "ipc-token"
-
-
-def read_ipc_token() -> str:
-    try:
-        return _token_file().read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
-def ensure_ipc_token() -> str:
-    """Return the shared secret, creating it if absent. Called by whoever binds.
-
-    O_EXCL, not "check then write": two gateways starting together would
-    otherwise each mint one and the loser would hold a token the daemon rejects.
-    The 0o600 is honoured on POSIX; on Windows the bits are ignored and the file
-    inherits the ACL of %LOCALAPPDATA%, which is already user-only.
-    """
-    existing = read_ipc_token()
-    if existing:
-        return existing
-    tok = secrets.token_hex(16)
-    p = _token_file()
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(tok)
-        return tok
-    except FileExistsError:
-        return read_ipc_token()          # someone won the race: use theirs
-    except OSError:
-        return ""                        # unwritable home: degrade, don't block
+# reach it can read and WRITE the memory. Every message but `ping` carries a
+# JWT the daemon issued over this user's own channel (gray_matter.ipcauth,
+# ADR-012 phase 2). It replaced a shared secret kept forever in a file and sent
+# to whoever answered on the port. `ping` stays unauthenticated on purpose —
+# the singleton probe has to work before anyone holds a token, and it discloses
+# only "a GM is here".
 
 
 def port_is_free(host: str, port: int) -> bool:
@@ -171,8 +135,21 @@ IPC_TOOL_TIMEOUT = 60.0
 
 
 def _send_ipc(data: dict, timeout: float = IPC_TIMEOUT) -> dict:
-    """Send a JSON IPC message to the local Gray-Matter process."""
-    data = {**data, "token": data.get("token") or read_ipc_token()}
+    """Send a JSON IPC message to the local Gray-Matter process.
+
+    The only sender: CLI, GUI, stdio gateways and sub-server registration all
+    come through here, so the token is attached in one place."""
+    if "token" in data or data.get("action") == "ping":
+        return _send_raw(data, timeout)
+    from gray_matter import ipcauth
+    resp = _send_raw({**data, "token": ipcauth.client_token()}, timeout)
+    if resp.get("error") == "unauthorized":
+        # A restarted daemon has a new key, so a cached token is dead: renew once.
+        resp = _send_raw({**data, "token": ipcauth.client_token(refresh=True)}, timeout)
+    return resp
+
+
+def _send_raw(data: dict, timeout: float) -> dict:
     payload = json.dumps(data).encode("utf-8")
     length = struct.pack("!I", len(payload))
     try:

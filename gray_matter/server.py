@@ -9,7 +9,6 @@ Runs as a stdio MCP server that:
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import os
 import re
@@ -50,7 +49,8 @@ _cfg = _settings.load()
 from gray_matter.cli import (GRAY_MATTER_HOST, GRAY_MATTER_PORT,  # noqa: E402
                              GRAY_MATTER_PORT_SPAN, resolve_port, write_port_file,
                              clear_port_file, port_is_free, gm_answers,
-                             _send_ipc, IPC_TOOL_TIMEOUT, ensure_ipc_token)
+                             _send_ipc, IPC_TOOL_TIMEOUT)
+from gray_matter import ipcauth as _ipcauth  # noqa: E402
 HEARTBEAT_INTERVAL = _cfg["heartbeat_interval"]  # seconds
 HEARTBEAT_TIMEOUT = 15.0  # seconds — after 3 missed beats, mark dead
 IDLE_SLEEP_TIMEOUT = _cfg["idle_sleep_timeout"]  # sleep after this long idle
@@ -1538,8 +1538,14 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
         if exit_on_busy:
             raise SystemExit(1)
         return
+    # ADR-012 fase 2: chi fa il bind possiede l'identità dell'IPC. Chiave nuova
+    # in RAM e canale per utente PRIMA di pubblicare la porta, così nessun
+    # client trova la porta senza poter avere un token. Il segreto su file del
+    # vecchio schema non autentica più niente: lo si cancella.
+    _ipcauth.drop_legacy_token()
+    _ipcauth.new_key()
+    _ipcauth.serve(chosen)
     write_port_file(chosen)       # i client leggono qui la porta reale
-    ipc_token = ensure_ipc_token()   # segreto condiviso: lo crea chi fa il bind
     if chosen != GRAY_MATTER_PORT:
         print(f"gray-matter: porta preferita {GRAY_MATTER_PORT} occupata → uso {chosen}",
               file=sys.stderr)
@@ -1576,10 +1582,12 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     # Volutamente SENZA token: il probe deve funzionare prima
                     # che chiunque conosca il segreto, e rivela solo "c'è un GM".
                     response = {"status": "ok", "gm": True}
-                elif not hmac.compare_digest(str(msg.get("token", "")), ipc_token):
+                elif not _ipcauth.verify_request(str(msg.get("token", ""))):
                     # Ogni altra azione tocca la memoria (`call` esegue tool
                     # arbitrari, `knowledge_cmd` scrive nel vault). Loopback
-                    # non è una barriera su una macchina multi-utente.
+                    # non è una barriera su una macchina multi-utente: serve un
+                    # JWT rilasciato sul canale di QUESTO utente, firmato con la
+                    # chiave di QUESTO avvio (ADR-012 fase 2).
                     response = {"error": "unauthorized"}
                 elif action == "register":
                     _registry.register(

@@ -1,6 +1,7 @@
 # ADR-012: Sicurezza — modello di minaccia e identità interna
 
-> Status: **Accepted** — 2026-10-24. Fase 1 implementata lo stesso giorno (sezione 7.1).
+> Status: **Accepted** — 2026-10-24. Fase 1 implementata lo stesso giorno (sezione 7.1), fase 2 il
+> 2026-10-25 (sezione 7.2).
 > Relates to: ADR-011 (GM come container: permessi e risorse iniettati), docs/TEAM.md (store condiviso)
 
 > [!abstract] In sintesi
@@ -153,6 +154,25 @@ F6 si affianca alla fase 1: è una modifica di formato, non di architettura.
 | F2 | `_foreign_host()` nella GUI: solo `127.0.0.1:<porta>` e `localhost:<porta>` | `gray_matter/tests/test_webgui_token.py` |
 | F3 | `ai_ingest_refusal()` prima di ogni ingest o index chiesto dall'IA; `scan_directory` salta segreti, cartelle nascoste e link che escono dalla radice | `neurag/tests/test_ingest_guard.py` |
 | F6 | `<recalled-memory>` in Neuron, `<vault-excerpts>` in NeuRAG, tag neutralizzato nel contenuto | `neuron/tests/test_data_marking.py`, `neurag/tests/test_data_marking.py` |
+
+### 7.2 Fase 2: cosa è stato fatto
+
+Tutto in `gray_matter/ipcauth.py`, solo libreria standard (`ctypes` per le API Windows). Due punti di
+innesto: `_send_ipc` in `cli.py`, unico mittente dell'IPC, e `_ipc_listener` in `server.py`, unico
+ricevente.
+
+| Pezzo | Come | Test |
+|---|---|---|
+| Chiave | `new_key()` all'apertura dell'IPC, `bytearray` in RAM, `drop_key()` la sovrascrive all'uscita | `test_the_key_lives_in_ram_and_is_zeroed`, `test_a_restart_kills_every_token_issued_before` |
+| Canale | pipe `gray-matter-<SID>` con DACL `D:P(A;;GA;;;<SID>)`, prima istanza, niente client remoti; socket Unix `0600` in cartella `0700` | `test_the_channel_cannot_be_taken_twice` |
+| Verifica del server | il client confronta il SID del processo server della pipe col proprio, o la proprietà e i permessi della cartella | `test_the_client_sends_nothing_to_a_server_of_another_user`, `test_the_client_refuses_a_folder_others_can_write` |
+| Verifica del client | il server confronta il SID del client (Windows) o l'uid via `SO_PEERCRED` (Linux) | dentro il DACL: secondo lucchetto |
+| Token | JWT HS256, `exp` 15 minuti, header fisso | `test_only_our_exact_header_is_accepted`, `test_tampering_expiry_audience_user_and_key_all_fail` |
+| Ordine | chiave e canale prima di pubblicare la porta | `test_the_key_and_channel_exist_before_the_port_is_published` |
+| Migrazione | `ipc-token` cancellato all'avvio del daemon | `test_the_legacy_secret_file_is_removed` |
+
+Il canale POSIX è provato su Linux in WSL. Su macOS manca `SO_PEERCRED`: lì il lucchetto è solo la
+cartella `0700`.
 
 **Trovato durante il lavoro.** F1 non era solo di GM. Anche i bridge di Neuron e NeuRAG esentavano
 il loopback, ma `--tunnel` lega `127.0.0.1` e cloudflared arriva da lì: un URL pubblico serviva tutti

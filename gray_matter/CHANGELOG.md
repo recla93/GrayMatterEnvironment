@@ -1,6 +1,24 @@
 ﻿# Changelog — Gray Matter
 
 ## Unreleased
+- **Identità interna dell'IPC, fase 2 dell'ADR-012** (`gray_matter/ipcauth.py`,
+  solo libreria standard). Prima: un segreto permanente in `ipc-token`, mandato
+  a chiunque rispondesse sulla porta (un altro utente che la occupava lo
+  raccoglieva). Ora:
+  - *chiave* di firma: 32 byte casuali quando il daemon apre l'IPC, solo in
+    RAM, azzerati all'uscita; ogni riavvio e' una rotazione;
+  - *canale per utente*: Windows `\\.\pipe\gray-matter-<SID>` con DACL solo
+    per il SID dell'utente, `FILE_FLAG_FIRST_PIPE_INSTANCE` (nessuno tiene il
+    nome prima) e `PIPE_REJECT_REMOTE_CLIENTS`; POSIX un socket Unix `0600` in
+    una cartella `0700`, con `SO_PEERCRED` su Linux;
+  - *verifica in entrambi i sensi*: il client controlla che il server del
+    canale giri col suo utente prima di mandare qualsiasi cosa, il server
+    controlla l'utente del client;
+  - *token* JWT HS256 (`sub`, `sid`, `aud`, `iat`, `exp` a 15 minuti), portato da
+    ogni messaggio TCP tranne `ping`; header fisso, `alg: none` e scambi di
+    algoritmo rifiutati. `_send_ipc` rinnova il token una volta se il daemon si
+    e' riavviato. Il file `ipc-token` viene cancellato.
+  Provato su Windows (pipe) e su Linux in WSL (socket Unix).
 - **Sicurezza, fase 1 dell'ADR-012.**
   - *F1, critica:* `gray-matter bridge` usava `mcp-proxy`, senza nessuna
     autenticazione: con `--tunnel` metteva tutti i tool, anche quelli

@@ -1,80 +1,91 @@
 """IPC autenticato + un solo set di worker per macchina.
 
 La porta accetta `call`, cioè l'esecuzione di un tool arbitrario sui worker:
-chi la raggiunge legge e SCRIVE la memoria. Il bind è su loopback, che però su
-una macchina multi-utente non è una barriera. Qui si fissano le due regole che
-lo rendono sicuro e il fallback che lo rende non-bloccante.
+chi la raggiunge legge e SCRIVE la memoria. Ogni messaggio tranne `ping` porta
+un JWT rilasciato sul canale di questo utente (ADR-012 fase 2, test del modulo
+in test_ipcauth.py). Qui si fissano le regole lato client e il fallback.
 """
-import importlib
 import json
-import os
 import socket
 import struct
 import threading
 
 import pytest
 
-from gray_matter import cli
+from gray_matter import cli, ipcauth
 
 
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("GM_HOME", str(tmp_path))
-    from gray_matter import paths
-    importlib.reload(paths)
-    yield tmp_path
-    monkeypatch.delenv("GM_HOME", raising=False)
-    importlib.reload(paths)
-
-
-def test_token_is_created_once_and_reused(home):
-    first = cli.ensure_ipc_token()
-    assert len(first) == 32
-    # Idempotente: un secondo gateway che parte non può coniarne un altro, o
-    # parlerebbe con un segreto che il daemon rifiuta.
-    assert cli.ensure_ipc_token() == first
-    assert cli.read_ipc_token() == first
-
-
-def test_every_request_carries_the_token(home):
-    """`_send_ipc` è l'unico mittente: se lo allega qui, lo allegano CLI e GUI."""
-    cli.ensure_ipc_token()
-    seen = {}
-
+def _fake_daemon(replies: list) -> "tuple[int, list]":
+    """A TCP listener that records each message and answers from `replies`."""
+    seen: list = []
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    port = srv.getsockname()[1]
+    srv.listen(len(replies))
 
     def _run():
-        conn, _ = srv.accept()
-        with conn:
-            hdr = conn.recv(4)
-            (n,) = struct.unpack("!I", hdr)
-            seen.update(json.loads(conn.recv(n).decode("utf-8")))
-            body = json.dumps({"status": "ok"}).encode("utf-8")
-            conn.sendall(struct.pack("!I", len(body)) + body)
+        for reply in replies:
+            conn, _ = srv.accept()
+            with conn:
+                (n,) = struct.unpack("!I", cli._recv_exact(conn, 4))
+                seen.append(json.loads(cli._recv_exact(conn, n).decode("utf-8")))
+                body = json.dumps(reply).encode("utf-8")
+                conn.sendall(struct.pack("!I", len(body)) + body)
         srv.close()
 
     threading.Thread(target=_run, daemon=True).start()
-    original = cli.resolve_port
-    cli.resolve_port = lambda: port
-    try:
-        cli._send_ipc({"action": "status"})
-    finally:
-        cli.resolve_port = original
-    assert seen.get("token") == cli.read_ipc_token()
+    return srv.getsockname()[1], seen
 
 
-def test_ping_stays_unauthenticated():
+@pytest.fixture
+def tokens(monkeypatch):
+    calls: list = []
+
+    def fake(*, refresh=False):
+        calls.append(refresh)
+        return "jwt-fresh" if refresh else "jwt-cached"
+    monkeypatch.setattr(ipcauth, "client_token", fake)
+    return calls
+
+
+def test_every_request_carries_the_channel_token(tokens, monkeypatch):
+    """`_send_ipc` è l'unico mittente: se lo allega qui, lo allegano CLI, GUI,
+    gateway e registrazioni."""
+    port, seen = _fake_daemon([{"status": "ok"}])
+    monkeypatch.setattr(cli, "resolve_port", lambda: port)
+    cli._send_ipc({"action": "status"})
+    assert seen[0]["token"] == "jwt-cached"
+
+
+def test_a_rejected_token_is_renewed_once(tokens, monkeypatch):
+    """Un daemon riavviato ha una chiave nuova: il token in cache è morto."""
+    port, seen = _fake_daemon([{"error": "unauthorized"}, {"status": "ok"}])
+    monkeypatch.setattr(cli, "resolve_port", lambda: port)
+    assert cli._send_ipc({"action": "status"}) == {"status": "ok"}
+    assert [m["token"] for m in seen] == ["jwt-cached", "jwt-fresh"]
+    assert tokens == [False, True], "un solo rinnovo, poi basta"
+
+
+def test_ping_carries_no_token(tokens, monkeypatch):
+    port, seen = _fake_daemon([{"gm": True}])
+    monkeypatch.setattr(cli, "resolve_port", lambda: port)
+    cli._send_ipc({"action": "ping"})
+    assert "token" not in seen[0] and tokens == []
+
+
+def test_ping_stays_unauthenticated_and_everything_else_is_checked():
     """Il probe del singleton deve funzionare PRIMA che qualcuno abbia il
     token — se lo richiedesse, due daemon si accamperebbero sulla stessa porta
     senza mai riconoscersi. Rivela solo 'qui c'è un GM'."""
     server = pytest.importorskip("gray_matter.server")
     src = __import__("inspect").getsource(server._ipc_listener)
-    ping = src.index('action == "ping"')
-    guard = src.index("compare_digest")
-    assert ping < guard, "il ramo ping deve precedere il controllo del token"
+    assert src.index('action == "ping"') < src.index("_ipcauth.verify_request")
+    assert "compare_digest" not in src, "il vecchio segreto su file è tornato"
+
+
+def test_the_key_and_channel_exist_before_the_port_is_published():
+    server = pytest.importorskip("gray_matter.server")
+    src = __import__("inspect").getsource(server._ipc_listener)
+    assert src.index("_ipcauth.serve(") < src.index("write_port_file(")
 
 
 def test_shared_workers_can_be_switched_off(monkeypatch):
