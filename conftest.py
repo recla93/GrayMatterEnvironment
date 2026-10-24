@@ -54,6 +54,30 @@ def _tool_of(arg: str) -> "str | None":
     return head if head in _TOOLS else None
 
 
+def pytest_report_header(config):
+    """Say it when the interpreter's pyturso is not the one the tools pin.
+
+    On 2026-10-24 three tests failed for weeks (test_second_opener, two in
+    test_neurag_lock) with a PermissionError and a "CORRUPT True" that read
+    like product bugs: the system Python still had pyturso 0.6.1, which keeps
+    the WAL locked, while the tools pin 0.8.3 and its multiprocess WAL. One
+    line here turns that hour into a glance."""
+    import re
+    from importlib.metadata import PackageNotFoundError, version
+    with open(os.path.join(_ROOT, "neuron", "pyproject.toml"), encoding="utf-8") as f:
+        pin = re.search(r'"pyturso==([\d.]+)"', f.read())
+    try:
+        have = version("pyturso")
+    except PackageNotFoundError:
+        have = "missing"
+    if pin and have != pin.group(1):
+        return (f"WARNING: pyturso {have} in this interpreter, the tools pin "
+                f"{pin.group(1)} - storage tests will fail for that reason alone. "
+                f"pip install --no-index --find-links neuron/vendor "
+                f"pyturso=={pin.group(1)}")
+    return None
+
+
 def pytest_configure(config):
     """Stop a cross-suite run before collection, and say what to type instead."""
     targeted = {t for a in config.args if (t := _tool_of(a))}
