@@ -540,12 +540,18 @@ def test_pre_turn_declares_the_route_it_answered_through():
         srv._g = old_g
 
 
-def test_pre_turn_facts_span_several_nodes():
+def test_pre_turn_facts_span_several_nodes(monkeypatch):
     """facts: comes from the top FACT_NODES nodes, not only rank 1 — and
-    fact_nodes=1 restores the old single-node window."""
+    fact_nodes=1 restores the old single-node window.
+
+    The relevance cut is off here: this is about the rank window. With a live
+    embedder FACT_DELTA dropped the rank-2 fact, so the file passed only in
+    the full suite, where `_mockdeps` breaks the embedder and the cut is skipped.
+    """
     pytest.importorskip("mcp")
     import asyncio
     import neuron.server as srv
+    monkeypatch.setattr(srv, "FACT_DELTA", 1.0)
 
     g = _make_graph_with_data()
     g.add_episode("kotlin flow", "chose flow over channel", turn=4)
