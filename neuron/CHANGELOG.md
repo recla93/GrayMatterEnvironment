@@ -1,6 +1,6 @@
 # Changelog — Neuron
 
-## Unreleased
+## 6.6.0 (2026-10-25)
 - **Sicurezza, fase 1 dell'ADR-012.**
   - *F1:* il bridge HTTP chiede il Bearer su **qualunque** host. Il loopback
     era esente, ma `--tunnel` lega `127.0.0.1` e cloudflared arriva da lì: un

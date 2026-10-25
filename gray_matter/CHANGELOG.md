@@ -1,6 +1,6 @@
-﻿# Changelog — Gray Matter
+# Changelog — Gray Matter
 
-## Unreleased
+## 1.6.0 (2026-10-25)
 - **Identità interna dell'IPC, fase 2 dell'ADR-012** (`gray_matter/ipcauth.py`,
   solo libreria standard). Prima: un segreto permanente in `ipc-token`, mandato
   a chiunque rispondesse sulla porta (un altro utente che la occupava lo

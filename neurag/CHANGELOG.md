@@ -1,6 +1,6 @@
 # Changelog — NeuRAG
 
-## Unreleased
+## 1.5.0 (2026-10-25)
 - **Sicurezza, fase 1 dell'ADR-012.**
   - *F3, alta:* `knowledge_ingest` e `knowledge_index` accettavano qualunque
     percorso, e index restituisce il testo. Ora l'IA indicizza solo dentro
