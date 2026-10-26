@@ -219,11 +219,11 @@ prima che il pattern trovi qualcosa che sai esserci.
 
 ## 2. Packaging per-OS
 
-- [ ] **Windows**: `NeuronInstaller.exe` nel repo è STALE (build pre-unificazione,
-      segnalato da Claudio) — RIMUOVERLO dal repo git (mai versionare il compilato),
+- [ ] **Windows**: `NeuronInstaller.exe` nel repo è STALE (build pre-unificazione)
+      — RIMUOVERLO dal repo git (mai versionare il compilato),
       ricompilarlo al build di release dalla catena nuova (exe → install.ps1 →
       canonico GM) e allegarlo SOLO all'artifact
-- [ ] **Flusso install SSOT** (fissato da Claudio 2026-07-20): scarichi Neuron
+- [ ] **Flusso install SSOT** (fissato il 2026-07-20): scarichi Neuron
       o NeuRAG → 2 script (win / mac-linux) installano tool + Gray Matter →
       si apre la GUI → card Setup: wizard componenti, Install/Repair
       (idempotente), Test, Prefs, Turso, **Folders** (install dir, grafi
@@ -249,7 +249,7 @@ prima che il pattern trovi qualcosa che sai esserci.
       bootstrap standalone offline installa una GM vecchia (o cade su rete/GitHub).
 - [ ] `pip download pytest -d Neuron/vendor/dev` (pytest offline per sandbox/CI)
 - [ ] **macOS/Linux**: `install.sh` eseguibile nel tarball (`chmod +x` preservato)
-- [ ] **Modello di distribuzione (SSOT, fissato da Claudio 2026-07-20 sera):**
+- [ ] **Modello di distribuzione (SSOT, fissato il 2026-07-20 sera):**
       la cartella "Gray Matter Enviroment" è SOLO workspace dev, mai
       distribuita — installer di radice RIMOSSI. L'unità di distribuzione è il
       singolo zip GitHub, autosufficiente:
@@ -260,21 +260,21 @@ prima che il pattern trovi qualcosa che sai esserci.
       ($HERE/Neuron, $HERE/neurag), poi come sibling. Al build: copiare le dir
       bundled negli zip (git subtree o copia; MAI duplicare nei repo git).
 - [ ] Artifact per repo: zip con il bundling di cui sopra + wheels per NeuRAG-only
-- [ ] **Wheels pyturso negli artifact standalone** (nota Claudio 2026-07-20):
+- [ ] **Wheels pyturso negli artifact standalone** (nota del 2026-07-20):
       `pyturso==0.6.1` è dipendenza HARD anche di NeuRAG → l'artifact
       NeuRAG-only per Windows DEVE includere una copia di `vendor/` (presa da
       `Neuron/vendor` al build, NON duplicata nel repo git — fonte unica).
       L'installer canonico cerca già `$GM_PEER_DIR/vendor`: zero code change.
       macOS/Linux non servono (wheel su PyPI). Idem per un eventuale artifact
       GM-only: GM non dipende da pyturso, nessuna wheel necessaria.
-- [x] **Checkout NeuRAG+GM senza Neuron** (follow-up Claudio): risolto alla
+- [x] **Checkout NeuRAG+GM senza Neuron** (follow-up): risolto alla
       radice — pyturso NON è più dipendenza hard di neurag ma extra `[turso]`
       (il pyproject ora rispecchia il design a 3 tier di db.py). L'install
       base funziona ovunque sul tier sqlite3; l'installer canonico tenta il
       tier turso best-effort (`pip install pyturso==0.6.1` con `--find-links`
       dal vendor disponibile, poi PyPI) e se fallisce lo dice senza bloccare.
       Il pin resta uno solo, nell'extra, da bumpare col pin di Neuron.
-- [x] **Degradato mai silenzioso** (nota Claudio): il tier sqlite3 è solo
+- [x] **Degradato mai silenzioso**: il tier sqlite3 è solo
       l'ultima rete (checkout parziale Windows senza wheel) — tutti i percorsi
       di release hanno il tier Turso pieno. FATTO: `_build_doctor` (async)
       interroga `knowledge_status` e il doctor stampa
@@ -284,7 +284,7 @@ prima che il pattern trovi qualcosa che sai esserci.
 
 ## 3. Versioni e metadata
 
-- [ ] Bump coerente: **Neuron 6.0.0** (major approvato da Claudio 2026-07-20:
+- [ ] Bump coerente: **Neuron 6.0.0** (major approvato il 2026-07-20:
       schema DB nuovo trust+refs con migrazioni, confirm±/refute, introspect,
       ranking a 4 pesi, paradigma install gateway) · NeuRAG 0.3.0 · GM 0.2.0
 - [ ] Badge versione nei 3 README allineati ai pyproject
@@ -302,7 +302,7 @@ prima che il pattern trovi qualcosa che sai esserci.
 - [ ] Linux/mac: `sh install.sh` → idem
 - [ ] Standalone: repo singolo Neuron-only e NeuRAG-only (GM_PEER_DIR path)
 
-### Tier semantico di default (decisione Claudio 2026-07-20)
+### Tier semantico di default (decisione del 2026-07-20)
 
 Il vault è multi-disciplinare e deve essere preciso: fastembed diventa parte
 dell'install standard — l'installer canonico lo tenta best-effort (come
@@ -313,7 +313,7 @@ Nota: fastembed scarica il modello ONNX (~80MB) al primo uso → il primo
 `knowledge_query`/pulse dopo l'install è lento una tantum; il pre-warm D2 lo
 assorbe all'avvio del daemon. Doctor: valutare di esporre anche il tier
 embedding accanto a `neurag_engine` (post-1.0).
-**Modello allineato 2026-07-20** (domanda Claudio su multilingua): NeuRAG
+**Modello allineato 2026-07-20** (domanda sul multilingua): NeuRAG
 defaultava ad `all-MiniLM-L6-v2` (solo EN) mentre Neuron è già su
 `paraphrase-multilingual-MiniLM-L12-v2` (IT/EN, 384-dim) — spazi vettoriali
 diversi, bridge e appunti italiani penalizzati. Fix: NeuRAG ora segue

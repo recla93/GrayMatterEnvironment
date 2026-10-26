@@ -239,16 +239,15 @@ it manages Neuron and NeuRAG as internal workers.
 ### Suite-level
 | Doc | What's in it |
 |---|---|
-| **[ARCHITETTURA.md](ARCHITETTURA.md)** | Architecture deep dive (NeuRAG + Gray Matter) |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | How the three projects fit together |
 | **[INSTALLER-UX.md](INSTALLER-UX.md)** | Full installer/uninstaller spec (SSOT) |
-| **[GRAY-MATTER-COMPENDIUM.md](GRAY-MATTER-COMPENDIUM.md)** | Bugs, fixes, roadmap, status |
 | **[ENVIRONMENT.md](ENVIRONMENT.md)** | Dev environment rules |
 
 ### User docs
 | Where | What's in it |
 |---|---|
 | **[GuidedUse.md](GuidedUse.md)** | **Start here after installing.** "Wow, I've got a brain: now what?" — the first half hour: what you have, memory vs knowledge, feeding it, teaching it, and what it deliberately will not do |
-| **[docs/](docs/)** | Getting started, CLI, tools, configuration, data, troubleshooting — every page in English and Italian (`*.it.md`) |
+| **[docs/](docs/)** | Getting started, CLI, tools, configuration, data, troubleshooting |
 
 ### Working material
 Audits, plans, design records and past handoffs live in **[work/](work/)** —
@@ -259,9 +258,9 @@ state. Newest first in [work/history/](work/history/). See
 ### Per-project
 | Project | Docs |
 |---|---|
-| **Neuron** | [README](neuron/README.md) • [INSTALL-AI.md](neuron/INSTALL-AI.md) • [DOCTOOLUPDATE.md](neuron/DOCTOOLUPDATE.md) • [INSTALL.md](neuron/INSTALL.md) |
+| **Neuron** | [README](neuron/README.md) • [INSTALL-AI.md](neuron/INSTALL-AI.md) • [INSTALL.md](neuron/INSTALL.md) |
 | **NeuRAG** | [README](neurag/README.md) • [INSTALL-AI.md](neurag/INSTALL-AI.md) • [DOCTOOLUPDATE.md](neurag/DOCTOOLUPDATE.md) • [DESIGN-CROSSLINKS.md](neurag/DESIGN-CROSSLINKS.md) |
-| **Gray Matter** | [README](gray_matter/README.md) • [INSTALL-AI.md](gray_matter/INSTALL-AI.md) • [DOCTOOLUPDATE.md](gray_matter/DOCTOOLUPDATE.md) |
+| **Gray Matter** | [README](gray_matter/README.md) • [INSTALL-AI.md](gray_matter/INSTALL-AI.md) |
 
 ---
 

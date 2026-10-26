@@ -391,7 +391,7 @@ These are not yet exposed via config. Change them in `server.py` / `bridges.py` 
 | Doc | What's in it |
 |---|---|
 | **[INSTALL-AI.md](INSTALL-AI.md)** | Automated install + register instructions for AI agents |
-| **[DOCTOOLUPDATE.md](DOCTOOLUPDATE.md)** | Complete tool documentation with real code examples |
+| **[docs/TOOLS.md](docs/TOOLS.md)** | Every gateway tool, with its arguments |
 | **[../neuron/README.md](../neuron/README.md)** | Neuron: semantic memory MCP server |
 | **[../neurag/README.md](../neurag/README.md)** | NeuRAG: hierarchical knowledge base MCP server |
 

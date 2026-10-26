@@ -2,7 +2,7 @@
 
 > Per opencode (o qualsiasi agente) che scriverà la documentazione completa
 > dell'ecosistema Gray Matter. Queste sono le regole del progetto: seguile
-> prima delle tue abitudini. Claudio è l'owner e decide le eccezioni.
+> prima delle tue abitudini. Le eccezioni si chiedono, non si decidono da soli.
 
 ## Principi (non negoziabili)
 
@@ -95,7 +95,7 @@ lettura, ogni passo con l'output atteso.
 
 Oltre al reference, tre documenti raccontano il progetto. Vivono in
 `Neuron/docs/` (o suite-level in gray_matter/docs se cross-tool). I FILE
-SORGENTE li indica Claudio — qui c'è solo il COME scriverli.
+SORGENTE vengono indicati nella richiesta — qui c'è solo il COME scriverli.
 
 ### TECHNOLOGY.md — gli studi sulle tecnologie
 
@@ -115,8 +115,8 @@ Non un changelog (quello esiste già): una NARRAZIONE per ere, dove ogni era
 risponde a: *qual era il limite della versione precedente che ha forzato il
 salto?* Formato per era: nome+versione → il muro incontrato → l'idea che lo
 supera → cosa si è rotto nel passaggio (migrazioni, compat) → cosa resta di
-quell'era nel codice di oggi. Le ere le definisce Claudio coi file che
-passerà; indicativamente: V1-V3 (le origini), V4 (slug `neuron`, installer
+quell'era nel codice di oggi. Le ere sono definite dai file forniti con la
+richiesta; indicativamente: V1-V3 (le origini), V4 (slug `neuron`, installer
 monolitico), V5 "Synapse" (grafo semantico maturo, cloud Turso, curation),
 V6 "gateway era" (trust, refs, GM-only, click-and-go).
 Regole: mai riscrivere la storia col senno di poi — se una scelta era
@@ -126,8 +126,8 @@ sbagliata si dice cosa si sapeva ALLORA; citare i numeri quando esistono
 ### PROCESS.md — il processo di studio e sviluppo di Neuron
 
 Questo è il documento più difficile: racconta il METODO, non il prodotto.
-Indicazioni da chi ci ha lavorato dentro (integrale ciò che manca con
-Claudio, che è la memoria storica):
+Indicazioni da chi ci ha lavorato dentro (ciò che manca va chiesto, non
+ricostruito):
 
 1. **Il compendium come cervello condiviso.** Un unico file
    (GRAY-MATTER-COMPENDIUM.md) fa da SSOT di bug, decisioni e roadmap; ogni
@@ -156,8 +156,8 @@ Claudio, che è la memoria storica):
    store_turn sono emersi salvando le decisioni su store_turn. È l'angolo
    narrativo più forte del documento: usarlo.
 
-Se su un punto mancano dettagli, chiedere a Claudio invece di inventare:
-è lui la fonte primaria del processo.
+Se su un punto mancano dettagli, chiedere invece di inventare: la fonte
+primaria del processo è la conversazione, non la deduzione.
 
 ## Definition of done (per ogni file)
 

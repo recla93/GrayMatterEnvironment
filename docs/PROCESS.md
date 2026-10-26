@@ -1,33 +1,31 @@
 # Process
 
-> How the Gray Matter Environment is built, by whom, and the lessons learned.
+> How the Gray Matter Environment is built, and the lessons learned.
 > A compendium of the working process — not a project management doc.
 
 ---
 
-## The team: Claudio + Fable (multi-AI)
+## Truth from code
 
-The project is built by one human (Claudio) working with multiple AI sessions (Fable, and others). This is not a metaphor — it is the actual development process.
-
-**Roles:**
-- **Claudio:** Product decisions, architecture review, testing, bug reports, domain knowledge. "The human in the loop."
-- **Fable (and other AIs):** Code implementation, debugging, documentation, refactoring. "The hands."
-
-**How it works:** Claudio describes a problem or a feature. Fable implements it. Claudio reviews, tests locally, reports what broke. Fable fixes. The cycle repeats. Decisions are made in conversation, not in tickets.
-
-**Why this matters for the docs:** Every document in this suite was verified against source code, not copied from old docs. The DOCS-GUIDELINES.md rule "truth from code" exists because AI sessions can hallucinate — checking the code is the only way to stay honest.
+Every document in this suite is verified against the source, not copied from
+older docs. A claim that can be checked in the code is checked there; a doc that
+disagrees with the code is the doc's bug.
 
 ---
 
-## The compendium as shared brain
+## Where the project's state lives
 
-`GRAY-MATTER-COMPENDIUM.md` is the single source of truth for the project's state. It merges and deduplicates what used to be scattered across `GMFixAndIdeas`, `HANDOFF-07-16/17/18`, `STATO-E-PIANO`, and `PIANO-EVOLUZIONE`.
+| Question | Where the answer is |
+|---|---|
+| What shipped, and why | `CHANGELOG.md` of each project |
+| What was decided, and what was rejected | the ADRs in `work/design/` |
+| What is set aside for later | `work/design/IDEAS.md` |
+| Everything else | `git log` |
 
-**Why it exists:** Multiple AI sessions need to know the same things. Without a compendium, each session starts cold and repeats investigations. The compendium is the "shared brain" — it persists between sessions.
-
-**How it's maintained:** After each working session, the compendium is updated with what was done, what broke, what was fixed, and what's next. It's append-heavy (new sections for new work) and dedup-heavy (merging overlapping entries).
-
-**Rule:** The compendium is never stale by more than one session. If it is, someone didn't update it.
+A single hand-maintained compendium used to hold all of this. It went stale
+within a month, because nothing forced an update: retired on 2026-10-26. The
+sources above are written in the same commit as the change they describe, so
+they cannot fall behind it.
 
 ---
 
@@ -42,7 +40,7 @@ At some point, the project underwent an external audit (Laguna). The result was 
 
 **What changed:** The team adopted a "verify everything against the code" discipline. The DOCS-GUIDELINES.md rules are a direct consequence: "Never trust a doc that isn't verified against the current source."
 
-**Lesson:** External audits are not adversarial. They are the system checking itself. The compendium now includes an audit trail.
+**Lesson:** External audits are not adversarial. They are the system checking itself. Audits are kept in `work/audit/` and `work/history/`.
 
 ---
 
@@ -64,16 +62,17 @@ The most instructive bug in the project was L2: `store_turn → open: NotFound`.
 
 ---
 
-## The sandbox → locale rite
+## Local and CI, then the real server
 
-Before any change is committed, it must pass through two environments:
+A change is done when three things hold:
 
-1. **Sandbox (cloud):** AI writes code, runs `pytest` in the cloud sandbox. Tests pass → code is plausible.
-2. **Locale (Claude Desktop):** Claudio runs the same tests locally. Tests pass → code is real.
+1. **The suites are green locally**, run as `ENVIRONMENT.md` §1 says.
+2. **CI is green** on the pushed commit: `ci.yml` and `standalone.yml`.
+3. **It works in the installed server.** Many bugs (L2, F19, F20) appeared only
+   against the real daemon, the real DB and the real IPC, because they depend
+   on runtime state that tests do not replicate.
 
-**Why both:** Sandbox tests are isolated. Local tests run against the real daemon, real DB, real IPC. Many bugs (L2, F19, F20) only appeared locally because they depend on runtime state that sandbox doesn't replicate.
-
-**Rule:** Sandbox green ≠ done. Locale green = done. Both red = investigate locally.
+**Rule:** green tests are necessary, not sufficient.
 
 ---
 
@@ -89,7 +88,7 @@ The project follows ponytail: "the shortest path to done is the right path."
 - One line before fifty
 - Deletion over addition
 
-**When it's violated:** Hardware calibration (the PCA9685 example from the ponytail skill), input validation at trust boundaries, security measures, anything explicitly requested by Claudio.
+**When it's violated:** Hardware calibration (the PCA9685 example from the ponytail skill), input validation at trust boundaries, security measures, anything explicitly requested.
 
 **The comment convention:** `ponytail: this exists` marks deliberate simplifications. Example: `# ponytail: global lock, per-account locks if throughput matters`.
 
@@ -113,8 +112,8 @@ Every major feature starts with the database schema, not the code. The schema is
 
 ## Neuron dogfooding itself
 
-Neuron uses its own concept graph to track the project's knowledge. The compendium references Neuron nodes. The docs reference Neuron tools. The project IS the thing it builds.
+Neuron uses its own concept graph to track the project's knowledge. The docs reference Neuron tools. The project IS the thing it builds.
 
 **Why this matters:** If Neuron can't track its own development, it can't track anyone else's. Every bug in Neuron is found first by the team using it.
 
-**The feedback loop:** Claudio uses Neuron (via GM) during development →发现问题 → fixes Neuron → commits → uses it again. The tool improves by being used.
+**The feedback loop:** Neuron is used (via GM) while developing the suite → a problem shows up → Neuron gets fixed → the fix is committed → it is used again. The tool improves by being used.

@@ -26,7 +26,7 @@ Girato il test plan (`docs/archive/TEST-OPENCODE-2026-07-21.md`) su Windows/Py3.
 - **search_with_links:** il mio `assert == 2` era tier-fragile (valido solo sul
   lessicale; il vettoriale fastembed ritorna 3). Reso **tier-agnostico** (`>=2` +
   enrichment). Ora verde su entrambi i tier.
-- **Architettura chiarita da Claudio:** Neuron e NeuRAG hanno **DB separati**
+- **Architettura chiarita:** Neuron e NeuRAG hanno **DB separati**
   (`graph_*.db` vs `knowledge.db`); è GM a connetterli via bridge — anche su cloud
   sono due DB distinti. **Fix conseguente:** il port cloud leggeva `TURSO_DATABASE_URL`
   (la env di Neuron) → collisione sulla tabella `nodes`. Ora NeuRAG legge

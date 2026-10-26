@@ -328,7 +328,7 @@ def _demote_if_ours(key: str) -> None:
 def register_installed(source: str = "") -> list[str]:
     """Register every trio tool importable from THIS interpreter. Returns the keys.
 
-    ``ARCHITETTURA.md`` says "ogni tool scrive un file JSON dopo install", but the
+    The old architecture doc said "every tool writes a JSON file after install", but the
     write only ever existed inside the shell installers — six copies in two
     languages — and on the path nobody takes:
 

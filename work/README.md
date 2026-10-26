@@ -22,14 +22,13 @@ si aggiornano insieme al codice:
 | Documento | Cosa fissa |
 |---|---|
 | [`../README.md`](../README.md) | Punto d'ingresso: cos'è, come si installa |
-| [`../ARCHITETTURA.md`](../ARCHITETTURA.md) | Architettura dei tre componenti, tool MCP, storage |
+| [`../docs/`](../docs/) | Documentazione per chi usa la suite, architettura compresa |
 | [`../INSTALLER-UX.md`](../INSTALLER-UX.md) | Spec di deploy: registrazione, path per-OS, manifest |
 | [`../ENVIRONMENT.md`](../ENVIRONMENT.md) | Regole d'ambiente per lavorarci sopra |
-| [`../GRAY-MATTER-COMPENDIUM.md`](../GRAY-MATTER-COMPENDIUM.md) | Bug, fix, stato — l'SSOT fra sessioni |
 
-> Il compendio stava in `work/history/` pur essendo citato ovunque come fonte di
-> verità corrente: è il motivo per cui il link nel README era rotto. Ora sta
-> alla radice, con gli altri documenti vivi.
+Lo stato del progetto non sta in un documento a mano: sta nei `CHANGELOG.md`,
+negli ADR di [`design/`](design/) e in `git log` (vedi `docs/PROCESS.md`). Il
+vecchio compendio e `ARCHITETTURA.md` sono stati ritirati il 2026-10-26.
 
 ## Regola pratica
 

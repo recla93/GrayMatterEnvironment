@@ -1,116 +1,115 @@
-# INSTALLER & UX — Architettura di deploy del trio
+# INSTALLER & UX — how the trio is deployed
 
-> SSOT del deploy: modello di registrazione, path per-OS, install manifest,
-> flussi install/uninstall/scan, superficie comandi/tuning.
-> Sibling di `GRAY-MATTER-COMPENDIUM.md` / `ARCHITETTURA.md` / `ENVIRONMENT.md`.
-> Creato: 2026-07-18.
-
----
-
-## 1. Modello: Gray Matter come gateway (proxy) — un solo connettore
-
-In MCP l'LLM vede **solo i tool che il server connesso gli dichiara**; non parla
-mai coi processi direttamente. Quindi:
-
-- Il client MCP connette **un solo** server: **Gray Matter**.
-- GM dichiara i propri tool (`pulse`, `status`, `bridge`) **e ri-pubblica** quelli
-  di Neuron e NeuRAG (pass-through). Per l'LLM sono tutti "tool di GM".
-- Quando l'LLM chiama `store_turn`/`knowledge_query`/…, **GM inoltra** la chiamata
-  al **worker** del sotto-server (canale stdin/stdout già esistente, `_worker.py`),
-  ne prende il risultato e lo ritorna.
-- Neuron e NeuRAG girano come **processi SUB gestiti da GM**, NON come connettori
-  del client. GM è insieme *server MCP* verso il client e *gestore* dei worker.
-
-Immagine: GM è una ciabatta — l'LLM attacca una spina sola (GM), gli altri tool
-sono dietro a GM. Li usa tutti, ma *attraverso* GM.
-
-**Chiave di volta — F12 (bloccante).** Un tool proxato è usabile solo se l'LLM ha
-nome + descrizione (GM già li passa) **e lo schema argomenti**. Oggi GM passa lo
-schema **vuoto** → il modello non sa cosa passare. F12 = GM interroga ogni worker
-via `list_tools`, ottiene gli schemi reali e li ripubblica. Finché F12 non è fatto,
-il modello "solo GM" NON è utilizzabile → transitoriamente si tengono i tre
-registrati.
-
-**Trade-off.** GM diventa single point of failure (muore GM → spariscono i tool).
-Mitigazioni: GM respawna i worker; il client rilancia GM all'avvio; `doctor` di
-autoriparazione. In cambio: connettore unico, orchestrazione (`pulse`, cache,
-flash, bridge), "GM deployabile a prescindere".
-
-**Cosa registrare nei client MCP:** → **solo Gray Matter** (target, dopo F12).
-
-**Self-bootstrap (implementato 2026-07-18).** Poiché col gateway il client lancia
-solo GM, i sotto-server non si auto-registrano più via IPC. GM li **auto-scopre**
-(`detect_subservers`), li registra come **managed** (`register_managed`, vivi senza
-heartbeat) e ne carica i tool dal worker (F12). Cablato in `main()` (`_bootstrap_subservers`);
-l'`heartbeat_monitor` ignora i managed. Verificato (registry) — 6 check verdi.
-**Resta (locale):** flip della registrazione client = CLI `gray-matter register --gateway`
-(registra SOLO gray_matter + deregistra neuron/neurag) poi restart dei client.
+> Single source of truth for deployment: registration model, per-OS paths,
+> install manifest, install/uninstall/scan flows, command and tuning surface.
+> Decisions fixed on 2026-07-18; translated and brought up to date with the code
+> on 2026-10-26. The code cites this file by section (`INSTALLER-UX §5`): keep
+> the numbers stable.
 
 ---
 
-## 2. Deploy: GM è il centro, bundle-ato da ogni tool
+## 1. Model: Gray Matter as the gateway — one connector
 
-- Scarichi **Neuron** → il suo installer installa **Neuron + Gray Matter**.
-- Scarichi **NeuRAG** → il suo installer installa **NeuRAG + Gray Matter**.
-- GM è **condiviso e idempotente**: se già presente, non lo si reinstalla — lo si
-  riusa/aggiorna. Un solo GM per macchina.
-- Output: nella cartella d'install, l'**eseguibile GM per l'OS in uso** (il command
-  center). GM funziona anche con **un solo** sotto-tool installato (`pulse` gestisce
-  già i server assenti).
+In MCP the LLM sees **only the tools the connected server declares**; it never
+talks to processes directly. So:
+
+- The MCP client connects **one** server: **Gray Matter**.
+- GM declares its own tools (`pulse`, `status`, `bridge`) **and re-publishes**
+  Neuron's and NeuRAG's (pass-through). To the LLM they are all "GM tools".
+- When the LLM calls `store_turn`, `knowledge_query` and so on, **GM forwards**
+  the call to the sub-server's **worker** (stdin/stdout channel, `_worker.py`),
+  takes the result and returns it.
+- Neuron and NeuRAG run as **sub-processes managed by GM**, NOT as client
+  connectors. GM is both the *MCP server* towards the client and the *manager*
+  of the workers.
+
+**Keystone — F12, implemented.** A proxied tool is usable only if the LLM has
+its name, description **and argument schema**. GM asks each worker for its real
+tool list (`list_tools`) and re-publishes the schemas
+(`gray_matter/_worker.py`, `gray_matter/server.py`).
+
+**Trade-off.** GM is a single point of failure: if GM dies, the tools vanish.
+Mitigations: GM respawns the workers; the client relaunches GM at startup;
+`doctor` repairs. In exchange: one connector, orchestration (`pulse`, cache,
+flash, bridges), and a GM that can be deployed on its own.
+
+**What to register in MCP clients:** **Gray Matter only.**
+
+**Self-bootstrap.** Since the client launches only GM, the sub-servers no
+longer register themselves over IPC. GM **discovers** them
+(`detect_subservers`), registers them as **managed** (`register_managed`: alive
+without heartbeat) and loads their tools from the worker (F12). Wired in
+`main()` (`_bootstrap_subservers`); `heartbeat_monitor` ignores managed servers.
 
 ---
 
-## 3. Path SSOT per-OS
+## 2. Deploy: GM is the centre, bundled by every tool
 
-**UNA regola per-OS**, ripetuta identica in ogni modulo che risolve path
+- Download **Neuron** → its installer installs **Neuron + Gray Matter**.
+- Download **NeuRAG** → its installer installs **NeuRAG + Gray Matter**.
+- GM is **shared and idempotent**: if present, it is reused or upgraded, never
+  installed twice. One GM per machine.
+- GM works with **a single** sub-tool installed: `pulse` handles absent servers.
+
+---
+
+## 3. Per-OS paths
+
+**ONE base per OS**, identical in every module that resolves paths
 (`neuron/config.py`, `neuron/paths.py`, `neuron/project.py`, `neuron/tunnel.py`,
 `neurag/paths.py`, `gray_matter/paths.py`, `gray_matter/gme.py:user_base()`):
 
 ```
 Windows        %LOCALAPPDATA%
-macOS / Linux  $XDG_DATA_HOME, altrimenti ~/.local/share
+macOS / Linux  $XDG_DATA_HOME, else ~/.local/share
 ```
 
-> **macOS non usa `~/Library/Application Support`** — scelta consapevole
-> (2026-07-29). Era la convenzione Apple e `gme.py` la seguiva, ma era l'UNICO
-> posto: gli altri sei risolvevano `~/.local/share`. Risultato su Mac: registro
-> dei tool in `Library`, tutti i DATI in `.local/share`, e `tunnel.json` scritto
-> nella cartella `GrayMatterEnvironment` sbagliata. Una radice sola vale più
-> della radice più idiomatica. `gme_root()` continua a leggere un registro
-> `Library` preesistente (l'installato vince), quindi nessun Mac perde nulla.
+Under it, **one suite root**: `<base>/GrayMatterEnvironment/`.
 
-| Cosa | Windows | macOS / Linux |
+> **macOS does not use `~/Library/Application Support`** — a deliberate choice
+> (2026-07-29). It is the Apple convention and `gme.py` followed it, but it was
+> the ONLY place that did: the other six resolved `~/.local/share`. On a Mac the
+> tool registry ended up in `Library` and all the DATA in `.local/share`. One
+> root beats the most idiomatic root. An existing `Library` registry is still
+> read (what is installed wins), so no Mac loses anything.
+
+| What | Path (`<root>` = `<base>/GrayMatterEnvironment`) | Override |
 |---|---|---|
-| Registro tool (GME) | `%LOCALAPPDATA%\GrayMatterEnvironment\<tool>.json` | `<base>/GrayMatterEnvironment/<tool>.json` |
-| Venv condiviso | `%LOCALAPPDATA%\gray-matter\.venv` | `<base>/gray-matter/.venv` |
-| Data: grafo Neuron | `%LOCALAPPDATA%\neuron\graphs` | `<base>/neuron/graphs` |
-| Data: DB NeuRAG | `%LOCALAPPDATA%\neurag\knowledge.db` | `<base>/neurag/knowledge.db` |
-| Settings NeuRAG | `…\neurag\config.json` | idem |
-| Data: bridge GM | `…\graymatter\bridges.db` | idem |
-| Config/knob GM | `…\graymatter\config.json` | idem |
-| Log | `…\graymatter\logs\` | idem |
-| Install manifest | `…\graymatter\manifest.json` | idem |
-| Config tunnel | `…\GrayMatterEnvironment\tunnel.json` | idem |
-| Marker progetto | `<project>/.neuron/project.json` | idem |
-| Config client MCP | vedi `clients.py` (6 client) | idem |
+| Neuron graphs | `<root>/neuron/graphs` | `NS_GRAPHS_DIR` |
+| NeuRAG vault | `<root>/neurag/knowledge.db` | `NEURAG_HOME` |
+| NeuRAG settings | `<root>/neurag/config.json` | `NEURAG_HOME` |
+| GM config (tuning knobs) | `<root>/graymatter/config.json` | `GM_HOME` |
+| GM bridges | `<root>/graymatter/bridges.db` | `GM_HOME` |
+| GM blackboard | `<root>/graymatter/state.db` | `GM_HOME` |
+| Install manifest | `<root>/graymatter/manifest.json` | `GM_HOME` |
+| PID registry | `<root>/graymatter/pids.json` | `GM_HOME` |
+| Logs | `<root>/graymatter/logs/` | `GM_HOME` |
+| Daily backups | `<root>/backups/` | `GM_HOME` |
+| Tool registry (GME) | `<root>/registry/<tool>.json` | — |
+| Tunnel config | `<root>/registry/tunnel.json` | — |
+| Shared venv | `<base>/graymatter/.venv` (before 1.4.1: `<base>/gray-matter/.venv`) | the manifest records it |
+| Project marker | `<project>/.neuron/project.json` | — |
+| MCP client configs | see `clients.py` (6 clients) | — |
 
-> Lo slug è **`neuron`**, non `neuron5`: `neuron5` è ritirato e sopravvive solo
-> nei path che lo riconoscono come legacy (`test_installer_parity.py` fallisce
-> se ricompare in un installer).
->
-> NeuRAG scriveva `~/.local/share/neurag` su OGNI OS, Windows compreso — fuori
-> da `%LOCALAPPDATA%`. Allineato il 2026-07-29 con la stessa regola
-> "l'esistente vince": un vault già presente nella vecchia posizione continua a
-> essere usato lì, nessuno spostamento automatico di un DB potenzialmente aperto.
+**An existing store always wins.** Each tool used to write in its own root
+(`<base>/neuron`, `<base>/neurag`, and NeuRAG in `~/.local/share/neurag` on
+every OS, Windows included). A store already in an old location keeps being
+used there: changing the rule must not make a memory disappear. The move is
+explicit (`gray_matter.paths.migrate_to_suite_root`), never a side effect of an
+upgrade.
 
-Regola: **dati** (grafo/DB/bridge) separati da **codice** (binari/venv). L'uninstall
-li tratta diversamente (§6).
+> The slug is **`neuron`**, not `neuron5`: `neuron5` is retired and survives
+> only where it is recognised as legacy (`test_installer_parity.py` fails if it
+> reappears in an installer).
+
+Rule: **data** (graphs, DBs, bridges) is kept apart from **code** (venv,
+binaries). Uninstall treats them differently (§6).
 
 ---
 
-## 4. Install manifest — il registro di cosa/dove
+## 4. Install manifest — the record of what went where
 
-Senza manifest, l'uninstall è a indovinare. Un JSON scritto dall'installer:
+Without a manifest, uninstall is guesswork. The installer writes:
 
 ```json
 {
@@ -118,7 +117,7 @@ Senza manifest, l'uninstall è a indovinare. Un JSON scritto dall'installer:
   "installed_at": "2026-07-18T..",
   "components": {
     "gray_matter": {"version": "…", "app_dir": "…", "exe": "…"},
-    "neuron":      {"version": "…", "data_dir": "…", "slug": "neuron5"},
+    "neuron":      {"version": "…", "data_dir": "…", "slug": "neuron"},
     "neurag":      {"version": "…", "db": "…"}
   },
   "clients_registered": ["claude-desktop", "claude-code", "cursor", "vscode", "opencode", "codex"],
@@ -127,118 +126,98 @@ Senza manifest, l'uninstall è a indovinare. Un JSON scritto dall'installer:
 }
 ```
 
-L'uninstall legge il manifest e rimuove **esattamente** ciò che è stato scritto.
+Uninstall reads the manifest and removes **exactly** what was written.
 
 ---
 
-## 5. Flusso install (idempotente, GM-centric)
+## 5. Install flow (idempotent, GM-centric)
 
-1. **Mode selector** (solo interattivo, non `--no-gm` / `-Force`):
-   - **Full suite** (default, Invio) — GM + Neuron + NeuRAG
-   - **Solo Neuron/NeuRAG** — standalone, si registra direttamente nei client
-   - **Dettagli** — mostra cosa si perde senza GM, poi chiede di nuovo
-2. **Rileva** install esistenti (manifest, data dir, entry nei client, processi).
-3. **Termina** eventuali processi orfani prima di scrivere (evita lock Windows +
-   più writer sullo stesso store).
-4. Installa il tool richiesto (Neuron o NeuRAG) nel proprio data dir.
-5. **Assicura GM**: se assente installa, se presente aggiorna (mai duplicare).
-6. **Registra SOLO GM** nei client MCP (`clients.py`); GM terrà i worker.
-7. Scrive/aggiorna **manifest** + **pids**.
-8. `doctor` finale: verifica registrazione e avvio.
-
----
-
-## 6. Flusso uninstall (INTERATTIVO sui dati) + legacy scan
-
-Decisione: **chiedi sempre** prima di toccare la memoria utente.
-
-1. **Termina** i processi del trio (dal pids/manifest; fallback: scan per nome).
-2. **Deregistra** dai client MCP (`deregister_all`, già in `clients.py`).
-3. **Rimuovi codice/binari/venv** (dal manifest).
-4. **Dati (grafo/DB/bridge): CHIEDI** — "Conservare la memoria? [conserva/elimina]".
-   Default nessuna cancellazione senza risposta esplicita.
-5. **Legacy scan** (`--deep`): cerca e segnala artefatti di vecchie install —
-   - slug vecchio `neuron` (vs `neuron5`) e relative data dir;
-   - vecchio nome **Neural-Stimulus** (assente nel repo attuale → solo residui su
-     disco/PC ospite);
-   - script su PATH, entry di config stantie nei 6 client, processi orfani;
-   - li elenca; `--purge` per rimuoverli previa conferma.
-6. Rimuove manifest per ultimo.
+1. **Mode selector** (interactive only, not with `--no-gm` / `-Force`):
+   - **Full suite** (default, Enter) — GM + Neuron + NeuRAG
+   - **Neuron/NeuRAG only** — standalone, registers directly in the clients
+   - **Details** — shows what is lost without GM, then asks again
+2. **Detect** existing installs (manifest, data dirs, client entries, processes).
+3. **Stop** orphan processes BEFORE writing (avoids Windows file locks and
+   several writers on the same store).
+4. Install the requested tool (Neuron or NeuRAG).
+5. **Ensure GM**: install if absent, upgrade if present (never duplicate).
+6. **Register ONLY GM** in the MCP clients (`clients.py`); GM runs the workers.
+7. Write or update **manifest** and **pids**.
+8. Final `doctor`: checks registration and startup.
 
 ---
 
-## 7. Processi — singleton e reap
+## 6. Uninstall flow (INTERACTIVE on data) + legacy scan
 
-- Un **pids.json** traccia i PID di GM + worker.
-- All'avvio GM: se esiste già un GM sano sulla porta IPC, non ne parte un secondo.
-- `gray-matter doctor` rileva processi orfani (come i **4 Neuron** visti il 2026-07-18)
-  e offre di terminarli. Funzionale, non solo igiene: più server sullo stesso store
-  = rischio clobber (lega a L1).
+Decision: **always ask** before touching the user's memory.
 
----
-
-## 8. Superficie comandi / tuning ("sensibilità")
-
-Le CLI ci sono già — Neuron (`setup/manage/doctor/register/consolidate/console/
-connect/bridge/tunnel/gui`), GM (`status/stats/doctor/start/stop/isolate/
-collaborate/mode/register/bridges/gui`). Il centro di comando **unifica** il
-controllo dei tre sotto GM, più:
-
-- **Config unico** (`…/graymatter/config.json`) per i knob oggi sparsi come
-  costanti/env: flash rate (`FLASH_MIN_GAP`), cache TTL/size, cadenza `consolidate`,
-  soglie salience; poi pesi trust/decay quando arriva B.
-- Comandi: `gray-matter config get|set <chiave> [valore]`, `gray-matter install|
-  uninstall|scan`, editabili anche da GUI. Niente edit del codice per il tuning.
+1. **Stop** the trio's processes (from pids/manifest; fallback: scan by name).
+2. **Deregister** from the MCP clients (`deregister_all` in `clients.py`).
+3. **Remove code, binaries, venv** (from the manifest).
+4. **Data (graphs, DBs, bridges): ASK** — "Keep the memory? [keep/delete]".
+   Nothing is deleted without an explicit answer.
+5. **Legacy scan** (`--deep`): finds and reports artefacts of old installs —
+   - the retired `neuron5` slug and its data dirs;
+   - the old name **Neural-Stimulus** (absent from the repo, so only leftovers on
+     disk);
+   - scripts on PATH, stale config entries in the 6 clients, orphan processes;
+   - lists them; `--purge` removes them after confirmation.
+6. Removes the manifest last.
 
 ---
 
-## 8b. Hook & plugin — il layer handshake (per-client, NON lo fa GM)
+## 7. Processes — singleton and reaping
 
-Distinzione fondamentale, due lavori separati:
+- **pids.json** tracks the PIDs of GM and its workers.
+- At GM startup: if a healthy GM already holds the IPC port, a second one does
+  not start.
+- `gray-matter doctor` detects orphan processes (four Neuron servers were seen
+  on 2026-07-18) and offers to stop them. This is functional, not hygiene:
+  several servers on the same store risk overwriting each other.
 
-- **Routing + schemi dei tool → GM** (il proxy, F12). Questo lo fa tutto GM.
-- **Handshake di sessione → hook/plugin, per-client.** Iniettano la loop-guidance
-  ("chiama `pre_turn` prima, `store_turn` dopo") all'avvio della sessione. GM **non
-  può** farlo: gli hook scattano nel client attorno al prompt, non dentro il canale
-  MCP. Un server MCP può solo offrire `instructions` all'handshake — che alcuni
-  client mostrano e altri ignorano: è *per questo* che esistono gli hook.
+---
 
-Cosa c'è già (in `Neuron/clients/`), da riusare:
+## 8. Command and tuning surface
 
-| Client | Meccanismo handshake |
+The CLIs exist per tool — Neuron (`setup/manage/doctor/register/consolidate/
+console/connect/bridge/tunnel/gui`), GM (`status/stats/doctor/start/stop/
+isolate/collaborate/mode/register/bridges/gui`). The command centre **unifies**
+control of the three under GM, plus:
+
+- **One config file** (`<root>/graymatter/config.json`) for the knobs that used
+  to be scattered as constants and env vars: flash rate (`FLASH_MIN_GAP`), cache
+  TTL and size, `consolidate` cadence, salience thresholds.
+- Commands: `gray-matter config get|set|list <key> [value]`, `gray-matter
+  install|uninstall|scan`, editable from the GUI too. Tuning never needs a code
+  edit (`settings.py`).
+
+---
+
+## 8b. Hooks & plugins — the handshake layer (per client, NOT GM's job)
+
+Two separate jobs:
+
+- **Tool routing and schemas → GM** (the proxy, F12).
+- **Session handshake → hooks/plugins, per client.** They inject the loop
+  guidance ("call `pre_turn` first, `store_turn` after") at session start. GM
+  **cannot** do it: hooks fire inside the client around the prompt, not inside
+  the MCP channel. An MCP server can only offer `instructions` at the handshake,
+  which some clients show and others ignore: that is *why* hooks exist.
+
+The assets live in `neuron/src/neuron/clients/` and travel in the wheel:
+
+| Client | Handshake mechanism |
 |---|---|
-| Claude Code / Cowork | SessionStart hook + plugin `neuron-guard` (`hooks/hooks.json`) |
-| OpenCode | plugin `neuron-handshake.mjs` (`experimental.chat.system.transform`) |
-| Cursor / VS Code / Codex | `instructions` MCP servite dal server (nessun hook separato) |
+| Claude Code / Cowork | SessionStart hook + `neuron-guard` plugin (`hooks/hooks.json`) |
+| OpenCode | `neuron-handshake.mjs` plugin (`experimental.chat.system.transform`) |
+| Cursor / VS Code / Codex | MCP `instructions` served by the server (no separate hook) |
 
-**Implicazioni del passaggio a "solo GM":**
+Consequences of the "GM only" model:
 
-1. Gli hook/plugin **restano** (layer per-client) — non spariscono in GM.
-2. Il loro **deploy passa all'installer unificato** di GM (oggi lo fa quello di
-   Neuron); l'**uninstall** li rimuove per-client (`scripts/uninstall.ps1` ha già
-   il wipe granulare plugin/hook — base buona).
-3. **GM serve le `instructions`** all'handshake MCP: così i client che le onorano
-   non hanno bisogno di hook; l'hook resta solo per quelli che le ignorano.
-4. **Contenuto**: minima revisione del testo per riflettere il modello GM-gateway
-   (i nomi dei tool del loop restano `pre_turn`/`store_turn`, quindi cambio minimo).
-5. Il **manifest** (§4) registra hook/plugin deployati per client → l'uninstall sa
-   esattamente cosa togliere.
-
-Riassunto per la domanda "lo fa tutto Gray?": **no.** GM fa routing e schemi; gli
-hook/plugin restano un layer per-client, ma li **consolidiamo sotto l'installer di
-GM** e li tracciamo nel manifest.
-
-## 9. Priorità (ordine per dipendenze)
-
-| # | Passo | Perché in quest'ordine | Dove |
-|---|---|---|---|
-| 1 | **Questa spec** (SSOT) | Allinea il modello prima di scrivere codice | ✅ questo file |
-| 2 | **F12** — schemi reali pass-through | Chiave di volta del "solo GM": senza, il modello target è inusabile | Neuron/NeuRAG + GM, **locale** |
-| 3 | **paths.py + manifest** | Struttura dati su cui poggiano install E uninstall | GM · ◐ `paths.py` + `Manifest` (path per-OS, componenti, client, hook) + 8 test verdi (2026-07-18); resta `pids`/wiring |
-| 4 | **Installer** GM-centric idempotente | Registra solo GM, scrive manifest, singleton processi | ◐ `installer.py`: `plan()` puro (reap→ensure_data→install→register-solo-gateway→manifest) + `record_install`, 6 test verdi (2026-07-18). Resta parte effettful (reap/spawn/register) **locale** |
-| 5 | **Uninstaller + legacy scan** | Interattivo sui dati; usa manifest + `deregister_all` + reap | ◐ `uninstaller.py`: `plan()` puro (reap→deregister→remove_hook→remove_code→**ask_data**; `purge_data` per wipe) + `legacy_scan_plan` (old_slug/old_name/PATH/stale_client/orphan_procs), 7 test verdi (2026-07-18). Resta parte effettful **locale** |
-| 6 | **Config unico + command center** | Tuning/sensibilità senza toccare codice; unifica le CLI | ✅ `settings.py` + `gray-matter config get\|set\|list` (5 test) + **`server.py` legge i 5 knob** (flash_min_gap, cache ttl/size, prewarm, heartbeat, idle) da config al restart (2026-07-18). Resta solo: deploy hook/plugin nell'installer |
-
-> Nota ambiente: F12/installer/uninstaller vanno **verificati in locale** (server
-> reali, 6 client, processi) — nel sandbox si scrive e si fa check statico, non si
-> garantisce (regola `ENVIRONMENT.md`).
+1. Hooks and plugins **stay**: they are a per-client layer, not part of GM.
+2. **GM's unified installer deploys them**; uninstall removes them per client
+   (`neuron/scripts/uninstall.ps1` has the granular plugin/hook wipe).
+3. **GM serves the `instructions`** at the MCP handshake: clients that honour
+   them need no hook; the hook remains for the ones that ignore them.
+4. The **manifest** (§4) records the hooks and plugins deployed per client, so
+   uninstall knows exactly what to remove (`installer.py`).

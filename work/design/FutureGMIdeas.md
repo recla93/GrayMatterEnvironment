@@ -10,7 +10,7 @@ lists what "better" would need to mean before it's worth building.
 ## 1. Selectable embedding model (multilingual / English-only / Italian-only)
 
 **The idea:** let the user pick their embedding model at install time (GUI
-question, per Claudio's call — not the CLI installers) and change it later
+question, a product decision — not the CLI installers) and change it later
 from GM's GUI. Three options, all measured for real resident memory on this
 machine (2026-07-28, worker process, `threads=2, enable_cpu_mem_arena=False`):
 
@@ -93,7 +93,7 @@ apps ≈ 4+ GB just from this duplication.
 falls back to a local worker only if the daemon is unreachable — same
 degrade-gracefully pattern already used in `bridge.py`/`tunnel.py`/`db.py`).
 
-**Why it's parked:** Claudio's call — running the full suite (GM + Neuron +
+**Why it's parked:** a product decision — running the full suite (GM + Neuron +
 NeuRAG together, one worker pair per client) is an accepted trade-off, not a
 bug to be fixed reflexively. Revisit only if:
 - Memory pressure becomes an actual, felt problem (not just a big number in a

@@ -3,7 +3,7 @@
 Il sistema (Gray Matter + Neuron + NeuRAG) letto come un cervello. È una
 **bussola di progetto, non un'architettura**: serve a decidere dove va una
 capacità nuova, non a descrivere il codice. Per *cosa* è stato costruito e
-quando, vedi l'Era 6 in `docs/EVOLUTION.it.md`; per i tool, `docs/TOOLS.md`.
+quando, vedi l'Era 6 in `docs/EVOLUTION.md`; per i tool, `docs/TOOLS.md`.
 
 I nomi anatomici sono documentazione. Nel codice non compaiono mai.
 

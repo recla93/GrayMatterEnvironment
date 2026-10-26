@@ -2,10 +2,9 @@
 
 **Status:** Proposed (design-only, nessun codice ancora)
 **Date:** 2026-07-21
-**Deciders:** Claudio
 **Scope:** Gray Matter + Neuron + NeuRAG (suite-level)
 
-## Decisioni bloccate (2026-07-21, Claudio)
+## Decisioni bloccate (2026-07-21)
 1. **Storage bridge = A** — tabella SQLite/Turso a 3 tier.
 2. **Token UNICI** — un solo group token (sicurezza/prevenzione prima di tutto).
 3. **Piggyback ON** di default + **GM come rete di sicurezza degli stimoli**: se l'LLM
@@ -191,7 +190,7 @@ A costa una migrazione una-tantum ma dà coerenza e sync; B risparmia lavoro ogg
 9. [ ] Test: migrazione, upsert concorrente sui bridge, tier detection, fallback senza GM (stimoli presenti), e cloud reale (3 DB) via OpenCode.
 10. [ ] Docs: ARCHITECTURE/DATA aggiornati (3 store, 3 DB, gruppo), TROUBLESHOOTING (tier misti).
 
-## Domande aperte per Claudio
+## Domande aperte
 - **A vs B** sullo storage bridge (propendo A).
 - Group token unico va bene per la tua sicurezza, o vuoi token per-DB?
 - Il piggyback stimulus deve restare sempre ON, o esporre un toggle per-tool anche standalone?

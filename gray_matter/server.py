@@ -1354,7 +1354,7 @@ async def _build_doctor() -> dict:
         "cache_size": _ctx_cache.size(),
         "bridges_total": len(all_bridges()),
     }
-    # Degradato mai silenzioso (nota Claudio 2026-07-20): se NeuRAG gira sul
+    # Degradato mai silenzioso (nota del 2026-07-20): se NeuRAG gira sul
     # tier sqlite3 (niente pyturso → coseno in Python), il doctor deve dirlo.
     neurag = _registry.get_server("neurag")
     if neurag and neurag.is_alive():

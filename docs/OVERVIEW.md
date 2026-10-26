@@ -97,7 +97,7 @@ python -m neurag.server
 ### Suite-level
 | Document | What it covers |
 |---|---|
-| [ARCHITETTURA.md](../ARCHITETTURA.md) | Architecture deep dive (all three projects) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the three projects fit together |
 | [INSTALL.md](INSTALL.md) | Installation for humans and AI agents |
 | [GETTING-STARTED.md](GETTING-STARTED.md) | End-to-end tutorial (10 min) |
 | [TOOLS.md](TOOLS.md) | Complete MCP tool reference |
@@ -113,9 +113,9 @@ python -m neurag.server
 ### Per-project
 | Project | Docs |
 |---|---|
-| Neuron | [README](../neuron/README.md) • [INSTALL-AI](../neuron/INSTALL-AI.md) • [DOCTOOLUPDATE](../neuron/DOCTOOLUPDATE.md) |
+| Neuron | [README](../neuron/README.md) • [INSTALL-AI](../neuron/INSTALL-AI.md) |
 | NeuRAG | [README](../neurag/README.md) • [INSTALL-AI](../neurag/INSTALL-AI.md) • [DOCTOOLUPDATE](../neurag/DOCTOOLUPDATE.md) |
-| Gray Matter | [README](../gray_matter/README.md) • [INSTALL-AI](../gray_matter/INSTALL-AI.md) • [DOCTOOLUPDATE](../gray_matter/DOCTOOLUPDATE.md) |
+| Gray Matter | [README](../gray_matter/README.md) • [INSTALL-AI](../gray_matter/INSTALL-AI.md) |
 
 ---
 
@@ -123,5 +123,5 @@ python -m neurag.server
 
 - [Installation](INSTALL.md) — get it running
 - [Getting started](GETTING-STARTED.md) — end-to-end tutorial (10 min)
-- [Architecture](../ARCHITETTURA.md) — understand the internals
+- [Architecture](ARCHITECTURE.md) — understand the internals
 - [Technology choices](TECHNOLOGY.md) — why each tool was picked
