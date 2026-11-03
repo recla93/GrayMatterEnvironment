@@ -1,6 +1,6 @@
 # Changelog — NeuRAG
 
-## Unreleased
+## 1.6.0 (2026-11-04)
 - **Ogni nodo dice a quale spazio appartiene (ADR-013, fase 4a).** Colonna
   `space` su `nodes`; i chunk lo ereditano dal nodo. Vale `NEURAG_SPACE`,
   altrimenti `team:shared` su un vault remoto condiviso e `personale:<utente>`
