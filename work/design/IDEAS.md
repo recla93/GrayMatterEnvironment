@@ -13,6 +13,7 @@ measured on real use.
 | [ADR-010-MODULI-E-SERVER-ESTERNI.md](ADR-010-MODULI-E-SERVER-ESTERNI.md) | GM modules and external MCP servers | Proposed |
 | [ADR-011-GM-CONTAINER.md](ADR-011-GM-CONTAINER.md) | GM as a service container | Proposed |
 | [SUBCONSCIO-SPEC-2026-10-20.md](SUBCONSCIO-SPEC-2026-10-20.md) | Idle-time work ("subconscious") | Spec |
+| [CINQUE-STRATI-2026-11-03.md](CINQUE-STRATI-2026-11-03.md) | The five memory layers mapped onto GM | Ideas |
 | [MEMORIA-AGENTI-SPEC-2026-08-02.md](MEMORIA-AGENTI-SPEC-2026-08-02.md) | Memory for agents | Spec |
 | [enterprise/ADR-E001-FEDERAZIONE-E-RISOLUTORE.md](enterprise/ADR-E001-FEDERAZIONE-E-RISOLUTORE.md) | Federation of brains, ticket resolver | Proposed |
 | [../../neuron/docs/design/BACKLOG.md](../../neuron/docs/design/BACKLOG.md) | Neuron design backlog | Ideas |
