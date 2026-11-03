@@ -1,5 +1,15 @@
 # Changelog — NeuRAG
 
+## Unreleased
+- **Ogni nodo dice a quale spazio appartiene (ADR-013, fase 4a).** Colonna
+  `space` su `nodes`; i chunk lo ereditano dal nodo. Vale `NEURAG_SPACE`,
+  altrimenti `team:shared` su un vault remoto condiviso e `personale:<utente>`
+  su uno locale. L'utente è `NEURAG_USER`, poi `NEURON_USER`, poi l'account
+  del sistema: un nome solo per tutta la suite.
+- **Migrazione.** Su un vault locale i nodi esistenti prendono lo spazio
+  dell'utente; su uno condiviso restano `''`. Gira all'apertura. Provata su
+  una copia del vault (77 nodi, 6715 chunk: conteggi identici).
+
 ## 1.5.0 (2026-10-25)
 - **Sicurezza, fase 1 dell'ADR-012.**
   - *F3, alta:* `knowledge_ingest` e `knowledge_index` accettavano qualunque

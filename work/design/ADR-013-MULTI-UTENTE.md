@@ -206,6 +206,28 @@ calcola. Così il vault aziendale si indicizza **una volta**, con un modello, pe
 La **4b** è la più presentabile: i documenti aziendali indicizzati una volta, interrogabili da ogni IA
 del team, con permessi e audit.
 
+### 5.1 Fase 4a: cosa è stato fatto
+
+| Store | Come | Test |
+|---|---|---|
+| Neuron | colonne `owner` e `space` su `nodes`, `links`, `episodes`; scritte solo all'INSERT, nessun `ON CONFLICT` le nomina | `neuron/tests/test_owner_space.py` |
+| Neuron, migrazione | in `_ensure_schema`, una colonna alla volta; su file locale le righe esistenti prendono l'utente, su store condiviso restano `''` | `test_a_local_legacy_file_becomes_its_users`, `test_a_shared_store_keeps_old_rows_unattributed` |
+| NeuRAG | `space` su `nodes` via `ADDED_COLUMNS`; i chunk lo ereditano | `neurag/tests/test_owner_space.py` |
+| NeuRAG, migrazione | in `_ensure_columns`, stessa regola di Neuron | `test_a_local_legacy_vault_becomes_its_users`, `test_a_shared_vault_keeps_old_nodes_unattributed` |
+
+Provata su copie di dati reali: il grafo `ai` (495 nodi, 391 link, 196 episodi) e il vault del
+26/10 (77 nodi, 6715 chunk). Conteggi identici prima e dopo, ogni riga in `personale:<utente>`.
+
+**Diverso dal §4, e perché.**
+- `owner` è un **nome leggibile** (`NEURON_USER`, poi l'account del sistema), non
+  `ipcauth.own_identity()`. Quello è un SID, illeggibile in un audit, e vive in GM: Neuron e NeuRAG
+  funzionano anche da soli e non lo importano. `NEURON_USER` è già il nome che un team usa per il
+  `by` dei refs. Il legame fra nome e identità verificata è dell'hub (4b).
+- `owner` **non è nella chiave degli episodi**. Serve solo quando due persone scrivono lo stesso
+  turno sulla stessa keyword di uno store condiviso: è lavoro della 4c, insieme ai lease.
+- `refs` e `node_vectors` **non hanno le colonne**. I refs hanno già `by`; i vettori derivano dal
+  nodo.
+
 ## 6. Cosa non copre
 
 - **Il portatile compromesso**: un malware che gira come l'utente legge la memoria personale e usa la

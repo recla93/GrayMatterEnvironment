@@ -7,6 +7,7 @@ single-machine, remote Turso (libSQL cloud) for multi-machine.
 
 from __future__ import annotations
 
+import getpass
 import json
 import math
 import os
@@ -633,7 +634,31 @@ ADDED_COLUMNS = (
     ("node_links", "origin", "TEXT DEFAULT 'auto'"),
     ("node_links", "co_activation_count", "INTEGER DEFAULT 0"),
     ("node_links", "last_coactivation", "INTEGER DEFAULT 0"),
+    # ADR-013 4a. '' = unknown; a LOCAL vault's existing nodes are then
+    # stamped with its user by _ensure_columns (a default cannot be a name).
+    ("nodes", "space", "TEXT DEFAULT ''"),
 )
+
+
+def vault_owner() -> str:
+    """Who is writing: NEURAG_USER, else NEURON_USER (one name for the suite),
+    else the OS account. keep-in-sync with neuron.models.owner_identity."""
+    name = (os.environ.get("NEURAG_USER") or os.environ.get("NEURON_USER") or "").strip()
+    if name:
+        return name
+    try:
+        return getpass.getuser()
+    except Exception:   # noqa: BLE001
+        return "unknown"
+
+
+def vault_space() -> str:
+    """NEURAG_SPACE when set; a shared remote vault belongs to a team, a local
+    one to its user (ADR-013 §3.2). Chunks inherit their node's space."""
+    space = os.environ.get("NEURAG_SPACE", "").strip()
+    if space:
+        return space
+    return "team:shared" if REMOTE_TURSO else f"personale:{vault_owner()}"
 
 # Indexes run LAST, after ADDED_COLUMNS. An index over a column added by that
 # step cannot live in SCHEMA_SQL: on an existing vault the CREATE INDEX would
@@ -1068,10 +1093,10 @@ class KnowledgeGraph:
         path = f"{parent_path}{name}"
 
         cur = self._conn.execute(
-            """INSERT INTO nodes (name, node_type, parent_id, path, tags, triggers)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO nodes (name, node_type, parent_id, path, tags, triggers, space)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (name, node_type, parent_id, path,
-             json.dumps(tags or []), json.dumps(triggers or [])),
+             json.dumps(tags or []), json.dumps(triggers or []), vault_space()),
         )
         self._conn.commit()
         node_id = cur.lastrowid
@@ -1146,15 +1171,21 @@ class KnowledgeGraph:
             self._conn.commit()
 
     def _ensure_columns(self) -> None:
-        """Add columns a released vault predates. Idempotent, and never
-        rewrites a row: SQLite backfills the DEFAULT for existing rows, which
-        is why every added column must have one that means "as before"."""
+        """Add columns a released vault predates. Idempotent. SQLite backfills
+        the DEFAULT for existing rows, which is why every added column must
+        have one that means "as before" — the one rewrite is `space` on a
+        local vault, below."""
         for table, column, decl in ADDED_COLUMNS:
             have = {r[1] for r in self._conn.execute(
                 f"PRAGMA table_info({table})").fetchall()}
             if column not in have:
                 self._conn.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                if (table, column) == ("nodes", "space") and not REMOTE_TURSO:
+                    # A local vault is one user's by construction. A shared one
+                    # is not: its older nodes stay '' rather than get an
+                    # invented author (ADR-013 4a).
+                    self._conn.execute("UPDATE nodes SET space = ?", (vault_space(),))
         self._conn.commit()
 
     def node_tag_names(self, node_id: int) -> list[str]:
