@@ -491,6 +491,12 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Deletes a node and its whole subtree, chunks included.",
         "Destructive and cannot be undone: check with 'tree' first.",
     ),
+    ("neuron", "config"): (
+        "Configurazione Neuron: quanti concetti tiene ogni grafo prima di archiviarne.",
+        "Alzalo se la memoria dimentica concetti che ti servono; vale dal prossimo avvio. Parti da action=list.",
+        "Neuron configuration: how many concepts each graph keeps before archiving.",
+        "Raise it if the memory forgets concepts you need; applies from the next start. Start with action=list.",
+    ),
     ("neurag", "config"): (
         "Configurazione NeuRAG: modello di embedding e dimensione dei chunk.",
         "Cambiare il modello di embedding richiede un re-index del vault. Parti da action=list.",

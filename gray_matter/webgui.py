@@ -483,7 +483,7 @@ class Api:
 
         Via CLI: ``<tool> config list --json`` — i metadati dei knob vivono nel
         tool che li possiede (SSOT), la GUI non importa più `settings`. Un tool
-        senza config (es. Neuron) non ha il comando → il pannello non compare.
+        senza il comando config → il pannello non compare.
         """
         req = _req(args)
         tool = req.get("tool", "")

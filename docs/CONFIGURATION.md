@@ -29,7 +29,7 @@
 | `NEURON_STAGE_FRESH_SECONDS` | `21600` (6h) | `models.py:68` | Staged stimulus validity duration |
 | `NEURON_EPISODES_PER_NODE` | `5` | `models.py:71` | Max episodes (facts) per node |
 | `NEURON_EPISODE_MAX_CHARS` | `200` | `models.py:72` | Max characters per episode (~40 tokens) |
-| `NEURON_MAX_NODES` | `500` | `models.py:80` | Evict lowest-salience nodes beyond this cap |
+| `NEURON_MAX_NODES` | `1000` | `config.py` (`KNOBS`) | Evict lowest-salience nodes beyond this cap (100-5000; `neuron config set max_nodes N` or the control center) |
 | `NEURON_USER` | `""` | `server.py:1066` | Provenance tag for refs (`by` field in shared DB) |
 | `TURSO_DATABASE_URL` | `""` | `db.py:41` | Remote Turso Cloud database URL |
 | `TURSO_AUTH_TOKEN` | `""` | `db.py:42` | Remote Turso Cloud auth token |
