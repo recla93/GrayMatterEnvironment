@@ -1,5 +1,14 @@
 # Changelog — Gray Matter
 
+## Unreleased
+- **Il doctor riconosce il codice preso dalla cartella corrente.** `python -m`
+  mette la cartella corrente in testa a `sys.path`, e la radice del repo ha
+  `gray_matter/` e `neurag/`. Lanciato da lì, il python del venv importava il
+  sorgente, e `versions` confrontava l'etichetta del venv col codice del repo:
+  un'installazione sana risultava "dist-info 1.5.3, codice 1.6.0", con una
+  reinstallazione inutile come rimedio. Ora dice da dove arriva il codice e
+  chiede di rilanciare da fuori. Le installazioni editable restano escluse.
+
 ## 1.6.0 (2026-10-25)
 - **Identità interna dell'IPC, fase 2 dell'ADR-012** (`gray_matter/ipcauth.py`,
   solo libreria standard). Prima: un segreto permanente in `ipc-token`, mandato

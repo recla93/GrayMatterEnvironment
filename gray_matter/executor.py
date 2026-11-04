@@ -100,6 +100,26 @@ def detect_state() -> dict:
 # Shared effectful primitives
 # --------------------------------------------------------------------------
 
+def _shadowed_by(dist, mod) -> str:
+    """La cartella da cui arriva `mod`, se non e' quella della sua installazione.
+
+    `python -m` mette la cartella corrente in testa a sys.path, e la radice del
+    repo ha `gray_matter/` e `neurag/`: lanciato da li', il python del venv
+    importa il sorgente al posto del pacchetto installato. Il doctor allora
+    confrontava l'etichetta del venv col codice del repo e chiamava "mista"
+    un'installazione sana (2026-11-03). Un editable vive fuori per scelta.
+    Senza posizione o senza file (un dist finto, un namespace) non si giudica."""
+    try:
+        direct = json.loads(dist.read_text("direct_url.json") or "{}")
+        if direct.get("dir_info", {}).get("editable"):
+            return ""
+        home = Path(dist.locate_file("")).resolve()
+        where = Path(mod.__file__).resolve().parent
+    except Exception:  # noqa: BLE001
+        return ""
+    return "" if where.is_relative_to(home) else str(where)
+
+
 def check_wiring() -> list[dict]:
     """Read-only: i PUNTATORI scritti sul disco puntano ancora dove serve?
 
@@ -239,7 +259,7 @@ def check_wiring() -> list[dict]:
         import importlib.metadata as _md
         from gray_matter.catalog import ENVIRONMENTS
 
-        problems = []
+        problems, shadowed = [], []
         for env in ENVIRONMENTS:
             dist = env["module"].replace("_", "-")
             # `d.name`, non `d.metadata["Name"]`: su 3.14 il getitem implicito
@@ -258,12 +278,22 @@ def check_wiring() -> list[dict]:
                 continue
             declared = vs[0]
             try:
-                body = getattr(importlib.import_module(env["module"]), "__version__", "")
+                mod = importlib.import_module(env["module"])
             except Exception:  # noqa: BLE001 — pacchetto rotto: lo dice il check 4
                 continue
+            where = _shadowed_by(found[0], mod)
+            if where:
+                shadowed.append(f"{dist}: importato da {where}, non dall'installazione")
+                continue
+            body = getattr(mod, "__version__", "")
             if body and declared and body != declared:
                 problems.append(f"{dist}: dist-info {declared}, codice {body}")
-        if problems:
+        if shadowed:
+            # Prima del confronto: con il codice preso dalla cartella corrente
+            # quel confronto e' falso, e il rimedio che suggerirebbe e' sbagliato.
+            rec("versions", False, "; ".join(shadowed),
+                "rilancia da una cartella fuori dal repo: `python -m` importa dalla cartella corrente")
+        elif problems:
             rec("versions", False, "; ".join(problems),
                 "pip install --force-reinstall --no-deps <sorgente>  (a client AI chiusi)")
         else:

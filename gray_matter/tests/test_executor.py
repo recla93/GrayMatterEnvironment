@@ -89,6 +89,48 @@ class _FakeDist:
         self.version = version
 
 
+class _InstalledDist(_FakeDist):
+    """Un dist con posizione su disco, come lo vede importlib.metadata."""
+    def __init__(self, name, version, site, editable=False):
+        super().__init__(name, version)
+        self._site, self._editable = site, editable
+
+    def locate_file(self, _path):
+        return self._site
+
+    def read_text(self, name):
+        if name == "direct_url.json" and self._editable:
+            return json.dumps({"url": "file:///repo", "dir_info": {"editable": True}})
+        return None
+
+
+def test_wiring_says_when_the_code_comes_from_the_current_folder(env, monkeypatch, tmp_path):
+    """Lanciato dalla radice del repo, il python del venv importa il sorgente.
+    Il doctor dava "dist-info 1.5.3, codice 1.6.0" su un'installazione sana, e
+    suggeriva una reinstallazione inutile (2026-11-03)."""
+    import importlib.metadata as md
+    import neuron
+    site = tmp_path / "venv" / "site-packages"
+    monkeypatch.setattr(md, "distributions",
+                        lambda: [_InstalledDist("neuron", "6.5.3", site)])
+    monkeypatch.setattr(neuron, "__version__", "6.7.0", raising=False)
+
+    r = _wiring(env)["versions"]
+    assert r["ok"] is False
+    assert "importato da" in r["detail"] and "dist-info" not in r["detail"], r
+    assert "fuori dal repo" in r["fix"], r
+
+
+def test_an_editable_install_is_not_shadowing(env, monkeypatch, tmp_path):
+    import importlib.metadata as md
+    import neuron
+    site = tmp_path / "venv" / "site-packages"
+    monkeypatch.setattr(md, "distributions",
+                        lambda: [_InstalledDist("neuron", "6.7.0", site, editable=True)])
+    monkeypatch.setattr(neuron, "__version__", "6.7.0", raising=False)
+    assert _wiring(env)["versions"]["ok"] is True
+
+
 def test_wiring_catches_a_label_that_lies_about_the_code(env, monkeypatch):
     """Un install andato a meta' lascia il dist-info NUOVO sopra i file VECCHI.
 
