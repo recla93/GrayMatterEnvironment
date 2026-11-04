@@ -1,6 +1,9 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **Il pannello delle impostazioni di Neuron nel control center.** Neuron ha
+  ora un comando `config` (il tetto dei concetti per grafo), e la GUI lo mostra
+  come fa con gray-matter e neurag; nel catalogo c'è la sua descrizione.
 - **Il doctor riconosce il codice preso dalla cartella corrente.** `python -m`
   mette la cartella corrente in testa a `sys.path`, e la radice del repo ha
   `gray_matter/` e `neurag/`. Lanciato da lì, il python del venv importava il

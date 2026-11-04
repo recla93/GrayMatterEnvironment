@@ -1,5 +1,15 @@
 # Changelog — NeuRAG
 
+## 1.7.0 (2026-11-04)
+- **Un file sparito smette di rispondere, senza essere cancellato.** Rifare
+  l'ingest di una cartella sostituiva i chunk dei file presenti e non guardava
+  quelli usciti: dopo la pulizia dei documenti del 27/10 il vault rispondeva
+  ancora coi documenti ritirati (1418 chunk su 6715, da 32 file). Ora
+  `auto_ingest` sposta i chunk dei file spariti sotto la radice nel godnode
+  `ritirati`, parcheggiato a L4 (I5: niente si cancella). Fuori dalla ricerca
+  normale, `recall` li restituisce identici, e se il file torna il suo ingest
+  li sostituisce. Il report e la riga finale dicono quanti ne ha ritirati.
+
 ## 1.6.0 (2026-11-04)
 - **Ogni nodo dice a quale spazio appartiene (ADR-013, fase 4a).** Colonna
   `space` su `nodes`; i chunk lo ereditano dal nodo. Vale `NEURAG_SPACE`,
