@@ -217,10 +217,15 @@ def auto_ingest(kg, root, godnode: "str | None" = None, say=None,
         report["chunks"] += n
         say(f"  {f.relative_to(root)} -> {n} chunk")
 
+    report["parked"] = kg.park_vanished(root)
+    if report["parked"]:
+        say(f"[park] {report['parked']} chunk di file spariti -> '{kg.RETIRED_NODE}' (L4)")
+
     say("[link] ricostruzione dei collegamenti…")
     report["links"] = kg.rebuild_links()
     say(f"[ok] nodi +{report['nodes']}, file {report['files']}, "
-        f"chunk {report['chunks']}, saltati {len(report['skipped'])}")
+        f"chunk {report['chunks']}, ritirati {report['parked']}, "
+        f"saltati {len(report['skipped'])}")
     return report
 
 

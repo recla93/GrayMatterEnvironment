@@ -1997,6 +1997,37 @@ class KnowledgeGraph:
             self._conn.commit()
         return {"applied": apply, "count": len(cands), "candidates": cands}
 
+    RETIRED_NODE = "ritirati"
+
+    def park_vanished(self, root: Path) -> int:
+        """Chunks of files under `root` that are gone from disk move to the
+        `ritirati` godnode, parked at L4. Returns how many moved.
+
+        Re-ingesting a folder replaced the chunks of every file still there and
+        never looked at the ones that left: a vault re-ingested after a docs
+        cleanup kept answering from the retired documents (2026-11-04: 1418 of
+        6715 chunks from 32 deleted files). I5 forbids deleting them, and does
+        not need to: parked, they leave the default scan, `recall` still
+        returns them byte-identical, and if the file comes back its next ingest
+        replaces them (`index_into_node` replaces by source)."""
+        root = Path(root).resolve()
+        gone = [r[0] for r in self._conn.execute(
+                    "SELECT DISTINCT source FROM chunks").fetchall()
+                if r[0] and Path(r[0]).is_relative_to(root) and not Path(r[0]).exists()]
+        if not gone:
+            return 0
+        node = self.get_node_by_name(self.RETIRED_NODE)
+        nid = node["id"] if node else self.add_node(self.RETIRED_NODE, "godnode")
+        moved = 0
+        for source in gone:
+            moved += self._conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE source = ? AND node_id != ?",
+                (source, nid)).fetchone()[0]
+            self._conn.execute("UPDATE chunks SET node_id = ? WHERE source = ?", (nid, source))
+        self._conn.execute("UPDATE nodes SET layer = ? WHERE id = ?", (self.LAYER_DEEP, nid))
+        self._conn.commit()
+        return moved
+
     def unpark(self, node_id: int) -> bool:
         """Back to L2 by hand. `recall` already reaches a parked node; this is
         for when it should stop being parked at all."""
