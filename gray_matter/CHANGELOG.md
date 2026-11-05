@@ -1,6 +1,6 @@
 # Changelog — Gray Matter
 
-## Unreleased
+## 1.7.0 (2026-11-06)
 - **Il loop di memoria come hook (ADR-014, prima fase).** `memhook.py recall`,
   per l'hook `UserPromptSubmit` di Claude Code, porta contesto, puntatore KB e
   flash prima che il modello legga il messaggio, con UNA richiesta al daemon

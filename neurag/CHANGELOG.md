@@ -1,6 +1,6 @@
 # Changelog — NeuRAG
 
-## Unreleased
+## 1.7.1 (2026-11-06)
 - **Licenza in formato SPDX** e cartelle di dati dichiarate come pacchetti: pip
   26.3 mostrava gli avvisi di setuptools a chi installa. Contenuto del pacchetto
   invariato.
