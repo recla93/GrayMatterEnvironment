@@ -485,3 +485,19 @@ def test_without_claude_code_no_hook_is_expected(env):
     w = _wiring(env)
     assert w["hook_entry"]["ok"] and w["hook_file"]["ok"], w
     assert "non rilevato" in w["hook_entry"]["detail"]
+
+
+def test_uninstall_takes_the_desktop_shortcut_and_the_icon_with_it(env, monkeypatch):
+    """Installazione isolata del 2026-11-05: dopo l'uninstall restavano l'icona
+    sul Desktop (che lancia un venv cancellato) e gray-matter.ico in graymatter/."""
+    from gray_matter import executor, paths, shortcut
+    monkeypatch.setattr(shortcut, "_windows_desktop", lambda: str(env / "Desktop"))
+    lnk = shortcut._shortcut_files("Gray Matter")[0]     # .lnk, .desktop o .command
+    lnk.parent.mkdir(parents=True, exist_ok=True)
+    lnk.write_text("x")
+    paths.gm_home().mkdir(parents=True, exist_ok=True)
+    ico = paths.gm_home() / "gray-matter.ico"
+    ico.write_text("x")
+    results = executor.execute_uninstall(assume_yes=True, remove_venv=False)
+    assert not lnk.exists() and not ico.exists(), results
+    assert any(r["action"] == "remove_shortcut" for r in results)

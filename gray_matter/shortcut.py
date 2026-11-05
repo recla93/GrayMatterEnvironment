@@ -54,11 +54,56 @@ def ensure_desktop_shortcut(tool: str, label: str, module_args: "list[str]",
         return False
 
 
+def _windows_desktop() -> str:
+    r"""The Desktop Windows actually uses: the folder `_windows_lnk` and
+    install.ps1 write into via GetFolderPath. USERPROFILE\Desktop is wrong on a
+    redirected Desktop (D:\Desktop, OneDrive): the shortcut always looked
+    missing there, so every `gui` launch rebuilt it through PowerShell."""
+    try:
+        import winreg
+        key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            return str(winreg.QueryValueEx(k, "Desktop")[0])
+    except OSError:
+        return os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+
+
+def _shortcut_files(label: str) -> "list[Path]":
+    """Every file a shortcut for `label` may live in, existing or not."""
+    if os.name == "nt":
+        desk = Path(_windows_desktop())
+        files = [desk / f"{label}.lnk"]
+        if label == "Gray Matter":                # the .cmd launcher of older installs
+            files.append(desk / "Gray Matter GUI.cmd")
+        return files
+    if sys.platform == "darwin":
+        return [Path.home() / "Desktop" / f"{label}.command"]
+    return [Path.home() / ".local" / "share" / "applications"
+            / f"{label.lower().replace(' ', '-')}.desktop",
+            Path.home() / "Desktop" / f"{label}.desktop"]
+
+
+def remove_desktop_shortcut(tool: str, label: str, dry_run: bool = False) -> "list[str]":
+    """Uninstall's half of ensure_desktop_shortcut: the icon pointed at an
+    interpreter the uninstall removes, and stayed on the Desktop doing nothing
+    on double-click. Returns the paths removed (or that would be)."""
+    gone = []
+    marker = Path(sys.executable).with_name(f".{tool}-gui-shortcut")
+    for f in [*_shortcut_files(label), marker]:
+        if f.is_file():
+            if not dry_run:
+                try:
+                    f.unlink()
+                except OSError:
+                    continue
+            gone.append(str(f))
+    return gone
+
+
 def _shortcut_file_exists(label: str) -> bool:
     """Check if the shortcut file actually exists on disk (not just the marker)."""
     if os.name == "nt":
-        desk = os.environ.get("USERPROFILE", "") + "\\Desktop"
-        return os.path.isfile(os.path.join(desk, f"{label}.lnk"))
+        return (Path(_windows_desktop()) / f"{label}.lnk").is_file()
     elif sys.platform == "darwin":
         return (Path.home() / "Desktop" / f"{label}.command").is_file()
     else:

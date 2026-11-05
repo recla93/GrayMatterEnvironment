@@ -978,9 +978,11 @@ def _remove_code(dry_run: bool) -> dict:
     # The cloud `.env` (Turso token) lives in gm_home() too and was never a
     # target either: uninstall left the credentials on disk.
     from gray_matter import cloud
+    # gray-matter.ico: install.ps1 copies it next to the code for the shortcut,
+    # and nothing removed it — the one file left in graymatter/ after a purge.
     targets = [paths.logs_dir(), paths.config_file(), paths.manifest_path(),
                paths.pids_path(), paths.gm_state(), paths.env_file(),
-               cloud.default_env_file()]
+               cloud.default_env_file(), paths.gm_home() / "gray-matter.ico"]
     if not dry_run:
         for t in targets:
             try:
@@ -1255,6 +1257,11 @@ def execute_uninstall(*, purge_data: bool = False, assume_yes: bool = False,
             results.append(_remove_hook(act["client"], act["path"], dry_run))
         elif a == "remove_code":
             results.append(_remove_code(dry_run))
+            # The control-center icon goes with the code: it launches GM's GUI.
+            from gray_matter import shortcut as _sc
+            gone = _sc.remove_desktop_shortcut("gray-matter", "Gray Matter", dry_run)
+            results.append({"action": "remove_shortcut", "ok": True,
+                            "detail": ", ".join(gone) or "no shortcut found"})
         elif a == "unregister_gme":
             results.append(_unregister_gme(act["key"], dry_run))
         elif a == "ask_data":
