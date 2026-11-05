@@ -54,6 +54,30 @@ function Get-RepairArgs([switch]$Always) {
     if (($Force -or $Always) -and (Test-HasMCP)) { return @("--force-reinstall", "--no-deps") }
     return @()
 }
+# Il messaggio di un pip fallito deve indicare la causa che si puo' accertare.
+# "Check network/Python" e' sbagliato quando la causa e' il limite di 260
+# caratteri di Windows: pip lo dice in un HINT a meta' log, e l'ultima riga
+# mandava a cercare altrove. Visto il 2026-11-05 con un venv a 120 caratteri:
+# WinError 206 su un file di licenza di pywin32, a ~110 caratteri dal venv.
+function Write-PipFailure([string]$what) {
+    $longOk = $false
+    try {
+        $v = Get-ItemPropertyValue "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" LongPathsEnabled -ErrorAction Stop
+        $longOk = ($v -eq 1)
+    } catch { }
+    Write-Host "ERROR: $what install failed."
+    if (-not $longOk -and $Venv.Length -gt 100) {
+        Write-Host "  Likely cause: the venv path is $($Venv.Length) characters long and Windows long paths are OFF."
+        Write-Host "  Some packages nest files ~110 characters deep, past the 260-character limit."
+        # Non proporre GM_HOME: l'installer lo legge ma non lo rende persistente
+        # (le entry dei client non lo portano), quindi codice e dati finirebbero
+        # in due radici diverse.
+        Write-Host "  Fix: enable Windows long paths (admin PowerShell), then re-run:"
+        Write-Host "    Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem LongPathsEnabled 1"
+    } else {
+        Write-Host "  Check network/Python and re-run; the pip output above names the failing package."
+    }
+}
 # Il repo GM (zip GitHub) bundle-a i tool come sottocartelle: cerca prima
 # DENTRO il repo ($Here), poi come sibling ($Root, checkout multi-repo).
 #
@@ -603,7 +627,7 @@ if ($gmVer) {
         $Repair = if ($choice -eq "upgrade") { @() } else { Get-RepairArgs -Always }
         & $VPy -m pip install @Repair $Here
         if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
-        if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1 }
+        if ($LASTEXITCODE -ne 0) { Write-PipFailure "gray-matter (the required gateway)"; exit 1 }
         & $VPy -c "import sys;sys.stderr=sys.stdout;import gray_matter"
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter module not found after install"; exit 1 }
         Write-Host "  gray-matter OK"
@@ -615,7 +639,7 @@ if ($gmVer) {
     $Repair = Get-RepairArgs
     & $VPy -m pip install @Repair $Here
     if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
-    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter install failed (the required gateway). Check network/Python and re-run."; exit 1 }
+    if ($LASTEXITCODE -ne 0) { Write-PipFailure "gray-matter (the required gateway)"; exit 1 }
     & $VPy -c "import sys;sys.stderr=sys.stdout;import gray_matter"
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter module not found after install"; exit 1 }
     Write-Host "  gray-matter OK"
