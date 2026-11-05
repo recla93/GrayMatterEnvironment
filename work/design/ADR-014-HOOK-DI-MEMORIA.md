@@ -158,6 +158,15 @@ può niente. `-S` ne toglie circa 30, al prezzo di un `sys.path` scritto a mano:
 | **3** | `save` attivo sui nodi esistenti | episodi registrati senza nodi nuovi; nessun doppio salvataggio con `store_turn` |
 | **4** | flash nel ramo `pre_turn` del gateway, per i client senza hook | l'app desktop riceve ⚡ senza `pulse` |
 
+**Stato al 2026-11-05**, sul branch `feat/hook-memoria`:
+
+- fase 1 fatta: `recall` attivo come una richiesta sola al daemon, `save` in dry-run;
+- fase 4 fatta: `call_tool("pre_turn")` porta il flash (`test_a_gateway_pre_turn_carries_the_flash_too`);
+- fasi 2 e 3 aperte: aspettano l'aggancio degli hook in `~/.claude/settings.json` e una settimana di
+  log del dry-run;
+- corretto lungo la strada: la pausa del flash per concetto usava come chiave il testo con il topic,
+  e lo stesso concetto tornava a ogni cambio d'argomento.
+
 ## 6. Cosa non copre
 
 - **I client senza hook.** Per loro vale la fase 4: il gateway resta il percorso.

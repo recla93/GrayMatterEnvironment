@@ -44,6 +44,7 @@ def test_wiring_reports_a_hook_entry_that_cannot_run(env):
     `doctor` usciva subito con "not running" perche' chiedeva a un server che
     per l'appunto non partiva."""
     home = env / "home"
+    (home / ".claude.json").write_text("{}")   # Claude Code c'e': gli hook sono attesi
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     dead = str(env / "venv-sparito" / "python.exe")
     (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": [
@@ -61,6 +62,7 @@ def test_wiring_reports_a_deployed_hook_older_than_the_source(env):
     """Un deploy vecchio resta li' per sempre: l'hook stantio che parlava di
     `mcp__neuron5__*` e' vissuto per mesi cosi'."""
     home = env / "home"
+    (home / ".claude.json").write_text("{}")   # Claude Code c'e': gli hook sono attesi
     dst = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("# una copia vecchia\n", encoding="utf-8")
@@ -398,6 +400,7 @@ def test_wiring_does_not_tell_you_to_delete_a_newer_deployed_hook(env):
     significa che il DEPLOY e' avanti, e il rimedio e' l'inverso del repair.
     """
     home = env / "home"
+    (home / ".claude.json").write_text("{}")   # Claude Code c'e': gli hook sono attesi
     dst = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
     dst.parent.mkdir(parents=True, exist_ok=True)
     src = ASSETS / "claude-code-hook" / "neuron_sessionstart_hook.py"
@@ -473,3 +476,12 @@ def test_wiring_sees_the_stale_desktop_config_outside_the_package(env, monkeypat
     r = _wiring(env)["mcp_entries"]
     assert r["ok"] is False
     assert "venv-vecchio" in r["detail"] and "Claude-Data" in r["detail"], r
+
+
+def test_without_claude_code_no_hook_is_expected(env):
+    """Installazione isolata del 2026-11-05: solo l'app desktop, nessun Claude
+    Code. L'installer non mette gli hook, e il doctor dava due [!!] con
+    "repair --reinstall": un'installazione sana dichiarata rotta."""
+    w = _wiring(env)
+    assert w["hook_entry"]["ok"] and w["hook_file"]["ok"], w
+    assert "non rilevato" in w["hook_entry"]["detail"]

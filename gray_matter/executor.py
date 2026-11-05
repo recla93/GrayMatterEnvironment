@@ -162,56 +162,68 @@ def check_wiring() -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         rec("registry", False, f"non leggibile: {exc}")
 
-    # 2. La entry SessionStart deve poter GIRARE: dopo la migrazione il venv ha
-    #    cambiato posto e il comando registrato puntava a un interprete sparito.
-    settings = _claude_dir() / "settings.json"
+    # Gli hook si deployano solo dove Claude Code c'e' (detect_state lo rileva da
+    # ~/.claude.json). Senza, i due controlli sotto davano [!!] e "repair" a chi
+    # usa solo l'app desktop: un'installazione sana dichiarata rotta.
     try:
-        cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
-        cmds = [h.get("command", "")
-                for g in (cfg.get("hooks", {}).get("SessionStart") or [])
-                if isinstance(g, dict)
-                for h in (g.get("hooks") or []) if isinstance(h, dict)]
-        ours = [c for c in cmds if "neuron_sessionstart_hook" in c]
-        broken = [c for c in ours if _entry_is_dead(c)]
-        if broken:
-            rec("hook_entry", False,
-                f"interprete inesistente: {_hook_interpreter(broken[0])}",
-                "gray-matter repair --reinstall (riscrive la entry)")
-        elif not ours:
-            rec("hook_entry", False, "nessuna entry SessionStart registrata",
-                "gray-matter repair --reinstall")
-        else:
-            rec("hook_entry", True, f"{len(ours)} entry, interprete presente")
-    except (json.JSONDecodeError, OSError) as exc:
-        rec("hook_entry", False, f"{settings} non leggibile: {exc}")
-
-    # 3. L'hook deployato deve essere il sorgente: un deploy vecchio resta li'
-    #    per sempre, e un hook stantio parla di tool che non esistono piu'.
-    try:
-        src = _find_clients_root() / "claude-code-hook" / "neuron_sessionstart_hook.py"
-        dst = _claude_dir() / "hooks" / "neuron_sessionstart_hook.py"
-        if not dst.exists():
-            rec("hook_file", False, f"non deployato: {dst}", "gray-matter repair --reinstall")
-        elif src.exists() and src.read_bytes() != dst.read_bytes():
-            # "Diverso" non vuol dire STANTIO. Il deployato puo' essere piu'
-            # AVANTI del sorgente: modificato in loco e mai portato nel repo.
-            # Nei due casi il rimedio e' opposto, e mandarli allo stesso
-            # consiglio significa proporre di cancellare l'unica copia di un
-            # lavoro (vedi _hook_drift).
-            added, removed = _hook_drift(src, dst)
-            if added and not removed:
-                rec("hook_file", False,
-                    f"{dst} ha {added} righe che il sorgente non ha: il deploy "
-                    f"e' PIU' AVANTI del repo",
-                    "NON riparare (perderesti quelle righe): portale nel "
-                    "sorgente, poi gray-matter repair --reinstall")
+        from gray_matter import clients as _cl
+        has_cc = any(os.path.exists(p) for p in _cl.CLIENTS["claude-code"]["paths"]())
+    except Exception:  # noqa: BLE001 — nel dubbio, controlla
+        has_cc = True
+    if not has_cc:
+        rec("hook_entry", True, "Claude Code non rilevato: nessun hook atteso")
+        rec("hook_file", True, "Claude Code non rilevato: nessun hook atteso")
+    else:
+        # 2. La entry SessionStart deve poter GIRARE: dopo la migrazione il venv ha
+        #    cambiato posto e il comando registrato puntava a un interprete sparito.
+        settings = _claude_dir() / "settings.json"
+        try:
+            cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
+            cmds = [h.get("command", "")
+                    for g in (cfg.get("hooks", {}).get("SessionStart") or [])
+                    if isinstance(g, dict)
+                    for h in (g.get("hooks") or []) if isinstance(h, dict)]
+            ours = [c for c in cmds if "neuron_sessionstart_hook" in c]
+            broken = [c for c in ours if _entry_is_dead(c)]
+            if broken:
+                rec("hook_entry", False,
+                    f"interprete inesistente: {_hook_interpreter(broken[0])}",
+                    "gray-matter repair --reinstall (riscrive la entry)")
+            elif not ours:
+                rec("hook_entry", False, "nessuna entry SessionStart registrata",
+                    "gray-matter repair --reinstall")
             else:
-                rec("hook_file", False, f"{dst} e' diverso dal sorgente",
-                    "gray-matter repair --reinstall (ri-deploya l'hook)")
-        else:
-            rec("hook_file", True, str(dst))
-    except OSError as exc:
-        rec("hook_file", False, f"non confrontabile: {exc}")
+                rec("hook_entry", True, f"{len(ours)} entry, interprete presente")
+        except (json.JSONDecodeError, OSError) as exc:
+            rec("hook_entry", False, f"{settings} non leggibile: {exc}")
+
+        # 3. L'hook deployato deve essere il sorgente: un deploy vecchio resta li'
+        #    per sempre, e un hook stantio parla di tool che non esistono piu'.
+        try:
+            src = _find_clients_root() / "claude-code-hook" / "neuron_sessionstart_hook.py"
+            dst = _claude_dir() / "hooks" / "neuron_sessionstart_hook.py"
+            if not dst.exists():
+                rec("hook_file", False, f"non deployato: {dst}", "gray-matter repair --reinstall")
+            elif src.exists() and src.read_bytes() != dst.read_bytes():
+                # "Diverso" non vuol dire STANTIO. Il deployato puo' essere piu'
+                # AVANTI del sorgente: modificato in loco e mai portato nel repo.
+                # Nei due casi il rimedio e' opposto, e mandarli allo stesso
+                # consiglio significa proporre di cancellare l'unica copia di un
+                # lavoro (vedi _hook_drift).
+                added, removed = _hook_drift(src, dst)
+                if added and not removed:
+                    rec("hook_file", False,
+                        f"{dst} ha {added} righe che il sorgente non ha: il deploy "
+                        f"e' PIU' AVANTI del repo",
+                        "NON riparare (perderesti quelle righe): portale nel "
+                        "sorgente, poi gray-matter repair --reinstall")
+                else:
+                    rec("hook_file", False, f"{dst} e' diverso dal sorgente",
+                        "gray-matter repair --reinstall (ri-deploya l'hook)")
+            else:
+                rec("hook_file", True, str(dst))
+        except OSError as exc:
+            rec("hook_file", False, f"non confrontabile: {exc}")
 
     # 4. Stessa domanda per i config MCP: un client che invoca un interprete
     #    sparito e' un server che non parte, in silenzio.

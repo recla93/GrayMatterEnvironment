@@ -229,7 +229,13 @@ def cmd_doctor() -> None:
     _report_wiring()
     r = _send_ipc({"action": "doctor"})
     if "error" in r:
-        print(f"Gray-Matter not running ({r['error']}).")
+        # Un errore di socket grezzo ("WinError 10061 ...") su un'installazione
+        # appena fatta sembra un guasto, ed e' lo stato normale: il daemon parte
+        # quando un'app AI apre GM. Dirlo, e dire come avviarlo.
+        print("Gray-Matter daemon: not running.")
+        print("  Normal right after install: it starts when an AI app opens Gray Matter.")
+        print("  To start it now: gray-matter start")
+        print(f"  (detail: {r['error']})")
         sys.exit(1)
     print(f"Gray-Matter v{r.get('version')} — {'sleeping' if r.get('sleeping') else 'awake'}")
     print(f"  cache: {r.get('cache_size')} entries | bridges: {r.get('bridges_total')}")
