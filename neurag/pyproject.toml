@@ -3,7 +3,10 @@ name = "neurag"
 version = "1.7.0"
 description = "Standalone MCP RAG server: hierarchical knowledge graph on Turso/SQLite with pluggable embeddings"
 requires-python = ">=3.10"
-license = { text = "PolyForm Noncommercial License 1.0.0" }
+# SPDX, non la tabella: pip >= 26.3 mostra ogni deprecazione di setuptools a chi
+# installa, e la tabella smette di funzionare dal 2027-02-18.
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Claudio C." }]
 keywords = ["mcp", "rag", "knowledge-base", "vector-search", "turso"]
 
@@ -55,7 +58,9 @@ neurag-mcp = "neurag.server:main"
 
 # Flat layout: the package IS this folder (no move needed after the rename).
 [tool.setuptools]
-packages = ["neurag"]
+# Le cartelle di soli dati sono pacchetti per setuptools: dichiararle toglie gli
+# avvisi "Package would be ignored" mostrati a chi installa.
+packages = ["neurag", "neurag._gm_vendor", "neurag.skills", "neurag.clients"]
 
 [tool.setuptools.package-dir]
 neurag = "."
@@ -74,5 +79,5 @@ neurag = [
 ]
 
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]   # 77: prima versione con license SPDX
 build-backend = "setuptools.build_meta"

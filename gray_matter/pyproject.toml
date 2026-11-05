@@ -3,7 +3,10 @@ name = "gray-matter"
 version = "1.6.0"
 description = "Gray-Matter: MCP orchestrator/proxy that fronts Neuron + NeuRAG"
 requires-python = ">=3.10"
-license = { text = "PolyForm Noncommercial License 1.0.0" }
+# SPDX, non la tabella: pip >= 26.3 mostra ogni deprecazione di setuptools a chi
+# installa, e la tabella smette di funzionare dal 2027-02-18.
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Claudio C." }]
 keywords = ["mcp", "orchestrator", "proxy"]
 
@@ -26,7 +29,9 @@ gray-matter-gui = "gray_matter.webgui:main"
 
 # Flat layout: the package IS this folder.
 [tool.setuptools]
-packages = ["gray_matter"]
+# assets/ e' una cartella di soli dati, ma per setuptools e' un pacchetto importabile:
+# dichiararla toglie l'avviso "Package would be ignored" mostrato a chi installa.
+packages = ["gray_matter", "gray_matter.assets"]
 include-package-data = true
 
 [tool.setuptools.package-data]
@@ -37,11 +42,12 @@ include-package-data = true
 # so the control center never showed its logo and the shortcut always fell back
 # to the bare interpreter icon. `include-package-data` does not catch these on a
 # flat layout without a MANIFEST.in, so they are listed explicitly.
-gray_matter = ["webgui.html", "assets/*"]
+gray_matter = ["webgui.html"]
+"gray_matter.assets" = ["*"]
 
 [tool.setuptools.package-dir]
 gray_matter = "."
 
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]   # 77: prima versione con license SPDX
 build-backend = "setuptools.build_meta"
