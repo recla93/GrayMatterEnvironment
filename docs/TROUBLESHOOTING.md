@@ -57,7 +57,6 @@ neurag-mcp
 **Fix:** Most common causes:
 - Missing dependency: `pip install neuron` or `pip install neurag`
 - pyturso compilation failure on Windows: install from vendored wheel (`Neuron/vendor/`)
-- Seed DB missing: reinstall the package
 
 ## NeuRAG vector tier DEGRADED
 
@@ -83,9 +82,9 @@ neurag-mcp
 
 **Symptom:** `neuron status` shows 0 nodes on a fresh install.
 
-**Diagnosis:** Check the graph store path: `neuron console` shows the active store location. Verify the seed DB exists at the package's `data/base_knowledge.db`.
+**Diagnosis:** that is expected. A new context starts empty: Neuron ships no seed knowledge, and the graph fills with what you store. `neuron console` shows the active store location.
 
-**Fix:** The seed DB is loaded on first `get_context` or `pre_turn` call. Call `neuron status` or `pre_turn(topic="test")` to trigger initialization. If still empty, reinstall: `pip install --force-reinstall neuron`.
+**Fix:** none needed. Store a turn (`store_turn`) and `neuron status` counts it.
 
 ## Client doesn't see Neuron/NeuRAG tools
 
