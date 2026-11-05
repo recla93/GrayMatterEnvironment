@@ -33,9 +33,13 @@ def srv(monkeypatch):
             return _forgotten(args["near"], "around")
         if tool == "knowledge_neighbors":
             return json.dumps({"node": None, "neighbors": []})
+        if tool == "knowledge_query":
+            return S._kq_reply
         raise AssertionError(f"unexpected {server}.{tool}")
     monkeypatch.setattr(S, "_call_server_async", fake_call)
     S._calls = calls
+    S._kq_reply = ("Top 1 results:\n  [1] D:\\repo\\docs\\INSTALL.md :: Install > Long paths (3/7)"
+                   "  (cos 0.61)\n")
     return S
 
 
@@ -51,7 +55,9 @@ def test_one_request_brings_context_and_flash(srv):
     out = asyncio.run(srv._hook_recall("parliamo ancora del flash di GM", "s1"))
     assert out.startswith("[neuron] CTX")
     assert "⚡ Flashback:" in out and "around" in out
-    assert "knowledge_query" not in srv._calls, "niente ricerca vettoriale sul percorso del hook"
+    # Il puntatore KB e' vettoriale: la ricerca per nome indicava cartelle intere.
+    assert "knowledge_query" in srv._calls and "knowledge_neighbors" not in srv._calls
+    assert '📚 KB: "INSTALL.md :: Install > Long paths" (cos 0.61)' in out, out
 
 
 def test_each_session_has_its_own_cooldown(srv):
@@ -75,3 +81,23 @@ def test_a_gateway_pre_turn_carries_the_flash_too(srv, monkeypatch):
     out = asyncio.run(srv.call_tool("pre_turn", {"topic": "flash", "keywords": ["flash"]}))
     assert out[0].text.startswith("[neuron] CTX")
     assert "⚡ Flashback:" in out[0].text
+
+
+def test_a_weak_kb_match_gives_no_pointer(srv):
+    srv._kq_reply = "Top 1 results:\n  [1] D:\\repo\\A.md :: Titolo (1/2)  (cos 0.46)\n"
+    out = asyncio.run(srv._hook_recall("dove salva le credenziali Turso per il cloud?", "s1"))
+    assert "📚" not in out, "sotto soglia il vettoriale sbagliava: meglio niente"
+
+
+def test_the_same_kb_section_is_pointed_at_once_per_session(srv):
+    a = asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s1"))
+    b = asyncio.run(srv._hook_recall("e ancora sui path lunghi di Windows?", "s1"))
+    assert "📚" in a and "📚" not in b
+
+
+def test_the_vector_pointer_mints_no_bridge(srv, monkeypatch):
+    from gray_matter import bridges
+    minted = []
+    monkeypatch.setattr(bridges, "add_bridge", lambda *a, **k: minted.append(a) or True)
+    asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s1"))
+    assert minted == [], "un puntatore e' un suggerimento, un bridge e' un'affermazione"

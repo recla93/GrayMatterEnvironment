@@ -52,9 +52,27 @@ al daemon il contesto e lo restituisce come `additionalContext`. Il modello non 
 un concetto dormiente, una volta per sessione per concetto. Così «ne abbiamo già parlato» scatta prima
 che il modello legga il messaggio.
 
-**D3. La KB entra come puntatore, non come estratto.** È la stessa regola del gateway
-(`server.py:402`): una ricerca per nome in SQL, mai vettoriale, e una riga sola. Il contenuto costa
-token e tempo, il puntatore no. Misurato: `knowledge_query` 320–350 ms, `knowledge_neighbors` 23 ms.
+**D3. La KB entra come puntatore, non come estratto, e il puntatore è vettoriale.** Una riga sola,
+con la sezione e il punteggio, sopra la soglia di 0,55. Il contenuto resta dietro una
+`knowledge_query` esplicita.
+
+*Corretto il 2026-11-05.* La prima versione usava la ricerca per nome in SQL del gateway
+(`server.py:402`, 23 ms contro 320). Confrontata su cinque messaggi veri, indicava **una cartella
+intera** ogni volta (`audit`, `docs`, `gray_matter`), e aveva coniato i bridge di rumore
+`flash↔audit` e `flusso↔docs`. Il vettoriale ha indicato la sezione giusta tre volte, e sotto
+soglia, dove sbagliava, tace:
+
+```
+ 348 ms  Il flash era gestito da GM...       "CHANGELOG.md :: Changelog — Gray Matter > 1.2.0" (cos 0.58)
+ 272 ms  inoltre, i bridge? ...              (nessun puntatore)
+ 311 ms  Serve controllare tutto il flusso…  "RICHIESTA-FLUSSO-INSTALL.md :: intro" (cos 0.55)
+ 290 ms  come si configura la cache…         "ARCHITECTURE.md :: ... > Dynamic cache TTL" (cos 0.55)
+ 376 ms  dove salva le credenziali Turso…    (nessun puntatore)
+```
+
+Il puntatore **non conia bridge**: un puntatore è un suggerimento, un bridge è un'affermazione.
+La ricerca parte per prima e si sovrappone al resto; il ramo `pre_turn` del gateway usa ancora la
+ricerca per nome.
 
 **D3b. Il daemon compone, l'hook consegna.** L'hook fa **una** richiesta IPC (`action: "recall"`).
 Il daemon, già caldo, compone contesto, puntatore KB, suggerimento di brainstorm e flash con le

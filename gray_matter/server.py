@@ -1414,18 +1414,52 @@ def _norm(s: str) -> str:
 
 _HOOK_SEEN: dict = {}            # session -> (kb pointers shown, concepts flashed)
 _HOOK_SESSIONS_MAX = 50          # ponytail: clear-all when full; LRU if sessions ever overlap that much
+# ponytail: soglia tarata su 5 messaggi veri (2026-11-05): i 2 utili stavano a
+# 0,55, i 2 sbagliati a 0,45-0,46. Rifarla sul log quando ci sono piu' turni.
+KB_VECTOR_MIN_COS = 0.55
+_KB_HIT = re.compile(r"\[1\]\s+(.+?)\s+\(cos ([0-9.]+)\)")
+
+
+async def _kb_vector_pointer(text: str, shown: set) -> str:
+    """One line pointing at the KB SECTION closest in meaning to the message.
+
+    Vector, not the name/trigger lookup of _knowledge_hint. Measured on five real
+    messages: the SQL lookup named a whole folder every time ("audit", "docs",
+    "gray_matter") — and minted the noise bridges flash<->audit, flusso<->docs —
+    while the vector search named the right section twice, both at cos 0.55.
+    It mints NO bridge: a pointer is a hint, a bridge is a claim."""
+    neurag = _registry.get_server("neurag")
+    if not (neurag and neurag.is_alive() and neurag.collaborative) or PROACTIVE_BUDGET <= 0:
+        return ""
+    try:
+        kq = await _call_server_async("neurag", "knowledge_query", {"query": text, "top_n": 1})
+    except Exception:  # noqa: BLE001 — a pointer is best-effort, never blocks the recall
+        return ""
+    m = _KB_HIT.search(kq or "")
+    if not m or float(m.group(2)) < KB_VECTOR_MIN_COS:
+        return ""
+    src, _, section = m.group(1).partition(" :: ")
+    where = os.path.basename(src.strip())
+    section = re.sub(r"\s*\(\d+/\d+\)$", "", section.strip())     # drop "(11/15)", the chunk index
+    label = f"{where} :: {section}" if section else where
+    if label in shown:
+        return ""
+    shown.add(label)
+    return f'\n\n📚 KB: "{label}" (cos {m.group(2)}) → knowledge_query for the detail'
 
 
 async def _hook_recall(prompt: str, session: str) -> str:
     """ADR-014: what the UserPromptSubmit hook injects, composed in ONE IPC call.
 
-    Same pieces as a gateway pre_turn (context, KB pointer, brainstorm hint) plus
-    the flash, which a gateway only gives on pulse. The hook process stays a
-    courier: start, one request, print."""
+    Context, KB pointer, brainstorm hint, plus the flash. The KB search needs only
+    the message, so it starts FIRST and overlaps everything else (it is the slow
+    piece, ~320 ms; NeuRAG and Neuron have separate locks). The hook process
+    stays a courier: start, one request, print."""
     if session not in _HOOK_SEEN and len(_HOOK_SEEN) >= _HOOK_SESSIONS_MAX:
         _HOOK_SEEN.clear()
     shown, flashed = _HOOK_SEEN.setdefault(session, (set(), set()))
     q = " ".join(prompt.split())[:300]
+    kb_task = asyncio.ensure_future(_kb_vector_pointer(q, shown))
     try:
         ex = json.loads(await _call_server_async("neuron", "extract", {"text": q}) or "{}")
     except (ValueError, TypeError):
@@ -1433,10 +1467,10 @@ async def _hook_recall(prompt: str, session: str) -> str:
     args = {"topic": str(ex.get("topic") or q[:120]),
             "keywords": [str(k) for k in (ex.get("keywords") or [])][:5]}
     _inject_neuron_mode(args)
-    ctx, kb, (flash, _c) = await asyncio.gather(
+    ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
-        _knowledge_hint(args, shown),
-        _maybe_flash(args["topic"], flashed))
+        _maybe_flash(args["topic"], flashed),
+        kb_task)
     return (ctx or "") + kb + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
 
 
