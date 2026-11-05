@@ -26,8 +26,9 @@ ACKS = {"ok", "si", "sì", "no", "grazie", "va bene", "perfetto", "fallo", "vai"
 
 
 def _ipc(msg: dict) -> str:
-    from gray_matter.cli import _send_ipc
-    r = _send_ipc(msg, TIMEOUT)
+    from gray_matter.cli import FAST_CONNECT, _send_ipc
+    # Daemon spento = niente ricordo, in 0,5 s invece dei ~2 s di Windows.
+    r = _send_ipc(msg, TIMEOUT, connect_timeout=FAST_CONNECT)
     return "" if not isinstance(r, dict) or "error" in r else str(r.get("result") or "")
 
 

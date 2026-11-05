@@ -853,7 +853,8 @@ class Api:
             resp = None
             try:
                 resp = _cli._send_ipc({"action": action, "tool": tool,
-                                       "args": {}}, timeout=8.0)
+                                       "args": {}}, timeout=8.0,
+                                      connect_timeout=_cli.FAST_CONNECT)
             except Exception as e:  # noqa: BLE001 — daemon down / token missing
                 out[key] = {"error": str(e)}
                 continue
@@ -930,6 +931,9 @@ class Api:
             try:
                 import socket
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    # Without a timeout a closed port costs ~2 s on Windows
+                    # (refused connects are retried): 6 s for this panel.
+                    s.settimeout(0.2)
                     if s.connect_ex(("127.0.0.1", port)) == 0:
                         active_bridges.append(port)
             except Exception:  # noqa: BLE001

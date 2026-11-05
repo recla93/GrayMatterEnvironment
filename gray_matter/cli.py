@@ -132,30 +132,40 @@ def gm_answers(host: str, port: int, timeout: float = 0.4) -> bool:
 # gm-neuron falliva SEMPRE con "timed out".
 IPC_TIMEOUT = 3.0
 IPC_TOOL_TIMEOUT = 60.0
+FAST_CONNECT = 0.5               # opt-in connect timeout for callers that must fail fast (see _send_raw)
 
 
-def _send_ipc(data: dict, timeout: float = IPC_TIMEOUT) -> dict:
+def _send_ipc(data: dict, timeout: float = IPC_TIMEOUT,
+              connect_timeout: "float | None" = None) -> dict:
     """Send a JSON IPC message to the local Gray-Matter process.
 
     The only sender: CLI, GUI, stdio gateways and sub-server registration all
     come through here, so the token is attached in one place."""
     if "token" in data or data.get("action") == "ping":
-        return _send_raw(data, timeout)
+        return _send_raw(data, timeout, connect_timeout)
     from gray_matter import ipcauth
-    resp = _send_raw({**data, "token": ipcauth.client_token()}, timeout)
+    resp = _send_raw({**data, "token": ipcauth.client_token()}, timeout, connect_timeout)
     if resp.get("error") == "unauthorized":
         # A restarted daemon has a new key, so a cached token is dead: renew once.
-        resp = _send_raw({**data, "token": ipcauth.client_token(refresh=True)}, timeout)
+        resp = _send_raw({**data, "token": ipcauth.client_token(refresh=True)}, timeout,
+                         connect_timeout)
     return resp
 
 
-def _send_raw(data: dict, timeout: float) -> dict:
+def _send_raw(data: dict, timeout: float, connect_timeout: "float | None" = None) -> dict:
     payload = json.dumps(data).encode("utf-8")
     length = struct.pack("!I", len(payload))
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(timeout)
+            # `connect_timeout` is OPT-IN. On Windows a refused connection to
+            # localhost is retried for ~2 s before it fails, so a caller that
+            # must fail fast (a memory hook on every message, a GUI panel) passes
+            # FAST_CONNECT. NOT the default: a gateway that times out on a busy
+            # daemon falls back to LOCAL workers, a second writer on the same
+            # graph. Waiting 2 s is the cheaper failure there.
+            s.settimeout(min(timeout, connect_timeout) if connect_timeout else timeout)
             s.connect((GRAY_MATTER_HOST, resolve_port()))
+            s.settimeout(timeout)
             s.sendall(length + payload)
             hdr = _recv_exact(s, 4)
             if not hdr:

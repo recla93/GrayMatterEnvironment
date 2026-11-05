@@ -65,3 +65,19 @@ def test_no_daemon_no_output(monkeypatch):
     import gray_matter.cli as cli
     monkeypatch.setattr(cli, "_send_ipc", lambda *a, **k: {"error": "connection refused"})
     assert mh.recall({"prompt": "una domanda abbastanza lunga"}) == ""
+
+
+def test_a_down_daemon_costs_the_hook_half_a_second_not_two(monkeypatch):
+    """Su Windows una connessione rifiutata a localhost viene ritentata per ~2 s.
+    L'hook gira a ogni messaggio: con il daemon spento deve fallire in fretta."""
+    import socket
+    import time
+    import gray_matter.cli as cli
+    with socket.socket() as s:                   # una porta libera, poi chiusa
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    monkeypatch.setattr(cli, "resolve_port", lambda: port)
+    t = time.perf_counter()
+    out = mh.recall({"prompt": "una domanda abbastanza lunga"})
+    assert out == ""
+    assert time.perf_counter() - t < 1.5
