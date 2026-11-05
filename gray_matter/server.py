@@ -283,9 +283,9 @@ async def _do_promote(apply: bool = False) -> dict:
                     await _call_server_async("neurag", "knowledge_add_chunks", {
                         "node_name": c["keyword"], "chunks": c["chunks"]})
                     chunks_written += len(c["chunks"])
-                # No bridge: the node carries the concept's own name, and
-                # _kb_lookup resolves a pre_turn keyword by name — the name IS
-                # the join (add_bridge refuses same-name endpoints anyway).
+                # No bridge: the node carries the concept's own name, and its
+                # chunks are the concept's facts — the vector pointer finds it by
+                # their text (add_bridge refuses same-name endpoints anyway).
             except Exception as exc:  # noqa: BLE001 — un nodo rotto non ferma il resto
                 skipped.append(f"{c['keyword']}: {exc}")
     return {"applied": apply, "count": len(cands), "candidates": cands,
@@ -399,53 +399,22 @@ async def _bridge_blocks(topic: str, neurag_tags: set, limit: int) -> list[str]:
     return out
 
 
-# --- Knowledge on pre_turn (2026-09-12) --------------------------------------
+# --- Knowledge on pre_turn (2026-09-12, vector since 2026-11-05) ------------
 # The model calls pre_turn every turn and pulse never: on a real vault test the
 # KB was indexed, bridged, and consulted zero times in the whole session. So the
-# KB rides the call that actually happens. Gate first, content never: a SQL-only
-# name/trigger lookup per keyword (knowledge_neighbors was built for this), and
-# on a hit ONE pointer line — "the KB knows this, ask knowledge_query" — plus the
-# bridges for the topic, all inside the proactive budget. No vector search here,
-# ever: that stays behind an explicit knowledge_query / pulse, which is where the
-# token cost belongs.
+# KB rides the call that actually happens: ONE pointer line ("the KB has this
+# section, ask knowledge_query") plus the bridges for the topic, inside the
+# proactive budget. The content stays behind an explicit knowledge_query.
+#
+# The pointer was a SQL name/trigger lookup (knowledge_neighbors) until
+# 2026-11-05. Measured on five real messages it named a WHOLE FOLDER every time
+# ("audit", "docs", "gray_matter") and minted false bridges (flash<->audit,
+# flusso<->docs); the vector search named the right section three times and was
+# silent below its threshold. See _kb_vector_pointer and ADR-014 D3.
 _KB_HINTS_PER_TURN = 1          # bridges shown next to the pointer; tokens, not a knob
-_KB_HINT_CACHE: dict = {}       # keyword -> (line, tags, node); ("", set(), "") = known miss
-_KB_HINT_SHOWN: set = set()     # pointers already shown this session: once per keyword.
+_KB_HINT_SHOWN: set = set()     # sections already pointed at this session: once each.
                                 # A repeat is ~25 tokens that invite a ~1000-token
                                 # knowledge_query the model already chose to make or not.
-_KB_HINT_CACHE_MAX = 500        # ponytail: clear-all when full; LRU if it ever matters
-
-
-async def _kb_lookup(query: str) -> tuple:
-    """Resolve one keyword to a KB node by trigger/name (SQL-only). Returns
-    (pointer line, tags, node name); empty strings on a miss or any error."""
-    miss = ("", set(), "")
-    try:
-        import json as _json
-        raw = await _call_server_async("neurag", "knowledge_neighbors",
-                                       {"query": query[:200], "depth": 1, "limit": 3})
-        data = _json.loads(raw)
-    except Exception:  # noqa: BLE001 — proactive = best-effort, never blocks pre_turn
-        return miss
-    node = data.get("node") or {}
-    name = str(node.get("name") or "").strip()
-    path = str(node.get("path") or "").strip()
-    # A root node (one path segment) is the vault itself: its triggers are the
-    # whole corpus' vocabulary, stopwords included, so a topic like "verifica
-    # del puntatore" resolves to it through "del". That is not "the KB knows
-    # this" — it is a miss.
-    if not name or "/" not in path.strip("/"):
-        return miss
-    tags = {str(t) for t in (data.get("tags") or [])}
-    near = [n["name"] for n in data.get("neighbors", []) if n.get("name")][:3]
-    # The KB path repeats every ancestor and ends with the node name itself:
-    # keep the parent segment only, and nothing when there is none.
-    parent = path.rstrip("/").rsplit("/", 2)[-2:-1]
-    where = parent[0] if parent and parent[0].lower() != name.lower() else ""
-    line = (f'📚 KB knows "{name}"' + (f" (in {where})" if where else "")
-            + (" · near: " + ", ".join(near) if near else "")
-            + f' → knowledge_query("{name}") for the detail')
-    return line, tags, name
 
 
 # Un tool ricorda l'altro: `around`/`brainstorm` sono letture che nessun loop
@@ -473,12 +442,11 @@ def _brainstorm_hint(arguments: dict) -> str:
 
 
 async def _knowledge_hint(arguments: dict, shown: "set | None" = None) -> str:
-    """The KB addendum for a pre_turn: one pointer on the first keyword the KB
-    resolves, plus the topic's bridges. Empty when NeuRAG is off, isolated, the
-    budget is zero, or nothing matches — which is the common case and costs a
-    few SQL lookups, cached per keyword for the session.
+    """The KB addendum for a pre_turn: one vector pointer (_kb_vector_pointer)
+    plus the bridges already persisted for the topic. Empty when NeuRAG is off,
+    isolated, the budget is zero, or nothing clears the threshold.
 
-    `shown`: the set of pointers already given. A gateway serves one session and
+    `shown`: the sections already pointed at. A gateway serves one session and
     uses the module's; the daemon serves many and passes one per session."""
     shown = _KB_HINT_SHOWN if shown is None else shown
     neurag = _registry.get_server("neurag")
@@ -487,33 +455,11 @@ async def _knowledge_hint(arguments: dict, shown: "set | None" = None) -> str:
     topic = " ".join(str(arguments.get("topic", "")).split())[:200]
     kws = [str(k).strip() for k in (arguments.get("keywords") or []) if str(k).strip()]
     blocks: list[str] = []
-    tags: set = set()
-    for q in [*kws[:5], topic]:
-        if not q:
-            continue
-        key = q.lower()
-        fresh = key not in _KB_HINT_CACHE
-        if fresh:
-            if len(_KB_HINT_CACHE) >= _KB_HINT_CACHE_MAX:
-                _KB_HINT_CACHE.clear()
-            _KB_HINT_CACHE[key] = await _kb_lookup(q)
-        line, kb_tags, node = _KB_HINT_CACHE[key]
-        if not line or key in shown:
-            continue
-        shown.add(key)
-        tags = kb_tags                  # the node's tags feed the bridges only with its pointer
-        blocks.append(line)
+    pointer = await _kb_vector_pointer(" ".join([topic, *kws[:5]])[:300], shown)
+    if pointer:
+        blocks.append(pointer.strip())
         _stats["kb_hints"] += 1
-        # A keyword the KB resolves by name IS a bridge: Neuron concept on one
-        # side, KB node on the other. Minted on first sighting in the session
-        # (add_bridge is idempotent and reinforces on repeat — a cached hit
-        # would otherwise promote a bridge every turn the keyword recurs).
-        if fresh and q in kws:
-            from gray_matter.bridges import add_bridge
-            if add_bridge(q, node, f"co-named on pre_turn '{topic}'"):
-                _stats["bridges_added"] += 1
-        break                       # one pointer is enough; the rest is a query away
-    blocks.extend(await _bridge_blocks(topic, tags, _KB_HINTS_PER_TURN))
+    blocks.extend(await _bridge_blocks(topic, set(), _KB_HINTS_PER_TURN))
     extra, _dropped = _fit(PROACTIVE_BUDGET, blocks)
     return ("\n\n" + extra) if extra else ""
 

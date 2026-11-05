@@ -19,7 +19,6 @@ def srv(monkeypatch):
     monkeypatch.setattr(S, "FLASH_MIN_GAP", 0)
     monkeypatch.setattr(S, "PROACTIVE_BUDGET", 800)
     monkeypatch.setattr(S, "_last_topic", "")
-    S._KB_HINT_CACHE.clear()
     S._HOOK_SEEN.clear()
     calls = []
 
