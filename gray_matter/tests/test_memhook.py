@@ -10,37 +10,9 @@ def test_acks_commands_and_short_text_are_not_recalled():
     assert mh.worth_recalling("Come mai GM non è partito?")
 
 
-def test_flash_takes_the_first_dormant_concept():
-    out = ("Dormant & mid-band related to 'x':\n"
-           "  episodi-append-only  last_turn=189  (6 turns ago)  salience=4\nTotal: 1 concepts")
-    assert mh.flash_concept(out) == "episodi-append-only"
-    assert mh.flash_concept("") == ""
 
 
-def test_kb_pointer_only_above_threshold():
-    hit = "Top 1 results:\n  [1] docs/A.md :: Titolo (2/5)  (cos 0.61)\n"
-    low = "Top 1 results:\n  [1] docs/A.md :: Titolo (2/5)  (cos 0.40)\n"
-    assert "docs/A.md" in mh.kb_pointer(hit)
-    assert mh.kb_pointer(low) == ""
 
-
-def test_compose_skips_a_flash_already_in_context_and_respects_budget():
-    assert "⚡" not in mh.compose("nodes: flash(1)", "flash", "")
-    assert "⚡ Ne avevate già parlato: around" in mh.compose("ctx", "around", "")
-    assert len(mh.compose("x" * 5000, "around", "")) == mh.BUDGET
-
-
-def test_no_daemon_no_output(monkeypatch):
-    import gray_matter.cli as cli
-    monkeypatch.setattr(cli, "gm_answers", lambda *a, **k: False)
-    assert mh.recall({"prompt": "una domanda abbastanza lunga"}) == ""
-
-
-def test_a_flash_is_shown_once_per_session(monkeypatch, tmp_path):
-    monkeypatch.setattr(mh.tempfile, "gettempdir", lambda: str(tmp_path))
-    assert mh._take_new("s1", "around")
-    assert not mh._take_new("s1", "around")
-    assert mh._take_new("s2", "around")
 
 
 def test_save_sees_a_store_turn_after_the_last_prompt(tmp_path):
@@ -79,3 +51,17 @@ def test_output_is_the_userpromptsubmit_shape(monkeypatch, capsys):
     sys.stdout.flush()
     out = json.loads(buf.getvalue().decode("utf-8"))
     assert out["hookSpecificOutput"]["additionalContext"] == "contesto"
+
+
+def test_recall_is_one_request_with_the_session(monkeypatch):
+    sent = []
+    monkeypatch.setattr(mh, "_ipc", lambda msg: sent.append(msg) or "x" * 5000)
+    out = mh.recall({"prompt": "una domanda abbastanza lunga", "session_id": "s1"})
+    assert [m["action"] for m in sent] == ["recall"] and sent[0]["session"] == "s1"
+    assert len(out) == mh.BUDGET
+
+
+def test_no_daemon_no_output(monkeypatch):
+    import gray_matter.cli as cli
+    monkeypatch.setattr(cli, "_send_ipc", lambda *a, **k: {"error": "connection refused"})
+    assert mh.recall({"prompt": "una domanda abbastanza lunga"}) == ""

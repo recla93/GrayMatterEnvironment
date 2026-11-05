@@ -472,11 +472,15 @@ def _brainstorm_hint(arguments: dict) -> str:
             "before answering — the seed is the problem in one sentence.")
 
 
-async def _knowledge_hint(arguments: dict) -> str:
+async def _knowledge_hint(arguments: dict, shown: "set | None" = None) -> str:
     """The KB addendum for a pre_turn: one pointer on the first keyword the KB
     resolves, plus the topic's bridges. Empty when NeuRAG is off, isolated, the
     budget is zero, or nothing matches — which is the common case and costs a
-    few SQL lookups, cached per keyword for the session."""
+    few SQL lookups, cached per keyword for the session.
+
+    `shown`: the set of pointers already given. A gateway serves one session and
+    uses the module's; the daemon serves many and passes one per session."""
+    shown = _KB_HINT_SHOWN if shown is None else shown
     neurag = _registry.get_server("neurag")
     if not (neurag and neurag.is_alive() and neurag.collaborative) or PROACTIVE_BUDGET <= 0:
         return ""
@@ -494,9 +498,9 @@ async def _knowledge_hint(arguments: dict) -> str:
                 _KB_HINT_CACHE.clear()
             _KB_HINT_CACHE[key] = await _kb_lookup(q)
         line, kb_tags, node = _KB_HINT_CACHE[key]
-        if not line or key in _KB_HINT_SHOWN:
+        if not line or key in shown:
             continue
-        _KB_HINT_SHOWN.add(key)
+        shown.add(key)
         tags = kb_tags                  # the node's tags feed the bridges only with its pointer
         blocks.append(line)
         _stats["kb_hints"] += 1
@@ -1401,6 +1405,34 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
+_HOOK_SEEN: dict = {}            # session -> (kb pointers shown, concepts flashed)
+_HOOK_SESSIONS_MAX = 50          # ponytail: clear-all when full; LRU if sessions ever overlap that much
+
+
+async def _hook_recall(prompt: str, session: str) -> str:
+    """ADR-014: what the UserPromptSubmit hook injects, composed in ONE IPC call.
+
+    Same pieces as a gateway pre_turn (context, KB pointer, brainstorm hint) plus
+    the flash, which a gateway only gives on pulse. The hook process stays a
+    courier: start, one request, print."""
+    if session not in _HOOK_SEEN and len(_HOOK_SEEN) >= _HOOK_SESSIONS_MAX:
+        _HOOK_SEEN.clear()
+    shown, flashed = _HOOK_SEEN.setdefault(session, (set(), set()))
+    q = " ".join(prompt.split())[:300]
+    try:
+        ex = json.loads(await _call_server_async("neuron", "extract", {"text": q}) or "{}")
+    except (ValueError, TypeError):
+        ex = {}
+    args = {"topic": str(ex.get("topic") or q[:120]),
+            "keywords": [str(k) for k in (ex.get("keywords") or [])][:5]}
+    _inject_neuron_mode(args)
+    ctx, kb, (flash, _c) = await asyncio.gather(
+        _call_server_async("neuron", "pre_turn", args),
+        _knowledge_hint(args, shown),
+        _maybe_flash(args["topic"], flashed))
+    return (ctx or "") + kb + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
+
+
 def _first_concept(text: str) -> str:
     # ponytail: parse the top keyword out of forgotten's text output (fragile; a
     # structured return would be cleaner — deferred to the persistence refactor).
@@ -1412,12 +1444,13 @@ def _first_concept(text: str) -> str:
     return ""
 
 
-async def _maybe_flash(topic: str):
+async def _maybe_flash(topic: str, flashed: "set | None" = None):
     """Flash v1/v2 — returns (note, concept). `concept` is the dormant keyword
     surfaced (or ""), which pulse uses to auto-persist a cross-store bridge (v3b).
     Fires at a topic shift, mid-band `near` selection, rate-limited by a min gap +
-    a per-session per-concept cooldown."""
+    a per-session per-concept cooldown (`flashed`, like `shown` in _knowledge_hint)."""
     global _last_topic, _calls_since_flash
+    flashed = _flashed if flashed is None else flashed
     _calls_since_flash += 1
     shifted = _norm(topic) != _norm(_last_topic)
     _last_topic = topic
@@ -1430,10 +1463,12 @@ async def _maybe_flash(topic: str):
     forgotten = (await _call_server_async("neuron", "forgotten", {"threshold": 5, "near": topic, "top_n": 1})).strip()
     if not forgotten or forgotten.startswith("["):   # skip empties / "[neuron] error: ..."
         return "", ""
-    key = forgotten[:80]
-    if key in _flashed:                              # per-concept cooldown
+    # The concept, not the text: the text opens with "related to '<topic>'", so
+    # keyed on it the same concept came back on every new topic.
+    key = _first_concept(forgotten) or forgotten[:80]
+    if key in flashed:                               # per-concept cooldown
         return "", ""
-    _flashed.add(key)
+    flashed.add(key)
     _calls_since_flash = 0
     _stats["flashes"] += 1
     return f"⚡ Flashback: {forgotten}", _first_concept(forgotten)
@@ -1639,6 +1674,16 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     try:
                         result = await _call_server_async(srv, tool_name, tool_args)
                         response = {"result": result}
+                    except Exception as e:
+                        response = {"error": str(e)}
+                elif action == "recall":
+                    # ADR-014: the memory hook's one request. Counted like a
+                    # call, so stats shows how often the hook did the loop.
+                    _tool_calls["hook_recall"] = _tool_calls.get("hook_recall", 0) + 1
+                    _last_call_time = time.time()
+                    try:
+                        response = {"result": await _hook_recall(
+                            str(msg.get("prompt") or ""), str(msg.get("session") or ""))}
                     except Exception as e:
                         response = {"error": str(e)}
                 elif action == "schemas":

@@ -6,31 +6,33 @@
 `-I` e il percorso del file, non `-m`: `-m` mette la cartella corrente in testa a
 `sys.path`, e dalla radice del repo importerebbe il sorgente invece del venv.
 
-Parla solo col daemon, via lo stesso IPC autenticato di CLI e GUI. Daemon assente,
-timeout o qualunque errore: l'hook esce senza scrivere niente. Un ricordo mancato
-costa meno di un messaggio bloccato.
+Parla solo col daemon, via lo stesso IPC autenticato di CLI e GUI. `recall` e' UNA
+richiesta: il daemon compone contesto, puntatore KB e flash con le funzioni del
+gateway (`server._hook_recall`), gia' caldo. Daemon assente, timeout o qualunque
+errore: l'hook esce senza scrivere niente. Un ricordo mancato costa meno di un
+messaggio bloccato.
 """
 from __future__ import annotations
 
 import json
-import re
 import sys
-import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-TIMEOUT = 2.5            # secondi per chiamata IPC
+TIMEOUT = 2.5            # secondi per la richiesta IPC
 BUDGET = 1200            # caratteri iniettati, ~300 token
 MIN_CHARS = 12
-KB_MIN_COS = 0.55        # ponytail: soglia stimata, da tarare sul log del dry-run
 ACKS = {"ok", "si", "sì", "no", "grazie", "va bene", "perfetto", "fallo", "vai", "procedi"}
 
 
-def _call(server: str, tool: str, args: dict) -> str:
+def _ipc(msg: dict) -> str:
     from gray_matter.cli import _send_ipc
-    r = _send_ipc({"action": "call", "server": server, "tool": tool, "args": args}, TIMEOUT)
+    r = _send_ipc(msg, TIMEOUT)
     return "" if not isinstance(r, dict) or "error" in r else str(r.get("result") or "")
+
+
+def _call(server: str, tool: str, args: dict) -> str:
+    return _ipc({"action": "call", "server": server, "tool": tool, "args": args})
 
 
 def worth_recalling(prompt: str) -> bool:
@@ -48,69 +50,18 @@ def _keywords(prompt: str) -> tuple[str, list]:
     return str(d.get("topic", "")), list(d.get("keywords", []))[:5]
 
 
-def flash_concept(forgotten: str) -> str:
-    """Il primo concetto dell'uscita di `forgotten`, o ''."""
-    lines = [ln for ln in forgotten.splitlines()[1:] if ln.startswith("  ")]
-    return lines[0].split()[0] if lines else ""
-
-
-def kb_pointer(kq: str) -> str:
-    m = re.search(r"\[1\]\s+(.+?)\s+\(cos ([0-9.]+)\)", kq)
-    if not m or float(m.group(2)) < KB_MIN_COS:
-        return ""
-    return f"📚 La KB ha materiale: {m.group(1)} (cos {m.group(2)}) → knowledge_query per il dettaglio"
-
-
-def _seen_file(session: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "", session)[:64] or "nosession"
-    return Path(tempfile.gettempdir()) / f"gm-memhook-{safe}.json"
-
-
-def _take_new(session: str, concept: str) -> bool:
-    """True la prima volta che `concept` emerge in questa sessione."""
-    f = _seen_file(session)
-    try:
-        seen = set(json.loads(f.read_text(encoding="utf-8")))
-    except (OSError, ValueError):
-        seen = set()
-    if concept in seen:
-        return False
-    seen.add(concept)
-    try:
-        f.write_text(json.dumps(sorted(seen)), encoding="utf-8")
-    except OSError:
-        pass
-    return True
-
-
-def compose(context: str, concept: str, pointer: str) -> str:
-    parts = [context.strip()] if context.strip() else []
-    if concept and concept not in context:
-        parts.append(f"⚡ Ne avevate già parlato: {concept} → recall o get_context se serve")
-    if pointer:
-        parts.append(pointer)
-    out = "\n".join(parts)
-    return out if len(out) <= BUDGET else out[:BUDGET - 1] + "…"
+def fit(text: str) -> str:
+    text = text.strip()
+    return text if len(text) <= BUDGET else text[:BUDGET - 1] + "…"
 
 
 def recall(payload: dict) -> str:
     prompt = str(payload.get("prompt") or "")
     if not worth_recalling(prompt):
         return ""
-    from gray_matter.cli import GRAY_MATTER_HOST, gm_answers, resolve_port
-    if not gm_answers(GRAY_MATTER_HOST, resolve_port()):
-        return ""
-    q = prompt[:300]
-    topic, kws = _keywords(q)
-    with ThreadPoolExecutor(3) as ex:
-        ctx = ex.submit(_call, "neuron", "pre_turn", {"topic": topic or q[:120], "keywords": kws})
-        fg = ex.submit(_call, "neuron", "forgotten", {"threshold": 5, "near": q, "top_n": 1})
-        kb = ex.submit(_call, "neurag", "knowledge_query", {"query": q, "top_n": 1})
-        context, forgotten, kq = ctx.result(), fg.result(), kb.result()
-    concept = flash_concept(forgotten)
-    if concept and not _take_new(str(payload.get("session_id") or ""), concept):
-        concept = ""
-    return compose(context, concept, kb_pointer(kq))
+    # Nessun ping prima: senza daemon la connessione e' rifiutata subito, e _ipc da' ''.
+    return fit(_ipc({"action": "recall", "prompt": prompt[:300],
+                     "session": str(payload.get("session_id") or "")}))
 
 
 # --- save (dry-run) ----------------------------------------------------------
@@ -170,10 +121,9 @@ def save(payload: dict) -> str:
     prompt, saved = last_turn(_entries(str(payload.get("transcript_path") or "")))
     if saved or not worth_recalling(prompt):
         return ""
-    from gray_matter.cli import GRAY_MATTER_HOST, gm_answers, resolve_port
-    if not gm_answers(GRAY_MATTER_HOST, resolve_port()):
-        return ""
     topic, kws = _keywords(prompt[:600])
+    if not topic and not kws:                   # daemon assente o estrazione vuota
+        return ""
     keep = existing(kws)
     from gray_matter.paths import logs_dir
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "session": payload.get("session_id"),

@@ -52,8 +52,14 @@ al daemon il contesto e lo restituisce come `additionalContext`. Il modello non 
 un concetto dormiente, una volta per sessione per concetto. Così «ne abbiamo già parlato» scatta prima
 che il modello legga il messaggio.
 
-**D3. La KB entra come puntatore, non come estratto.** Una riga con la fonte e il punteggio, sopra
-una soglia. È la stessa regola del gateway (`server.py:402`): il contenuto costa token, il puntatore no.
+**D3. La KB entra come puntatore, non come estratto.** È la stessa regola del gateway
+(`server.py:402`): una ricerca per nome in SQL, mai vettoriale, e una riga sola. Il contenuto costa
+token e tempo, il puntatore no. Misurato: `knowledge_query` 320–350 ms, `knowledge_neighbors` 23 ms.
+
+**D3b. Il daemon compone, l'hook consegna.** L'hook fa **una** richiesta IPC (`action: "recall"`).
+Il daemon, già caldo, compone contesto, puntatore KB, suggerimento di brainstorm e flash con le
+funzioni che il gateway usa per `pre_turn` (`server._hook_recall`). La logica vive in un posto solo,
+e l'hook non deve importare né thread né parser.
 
 **D4. Il salvataggio automatico non conia concetti.** L'estrazione di Neuron è euristica, e sul vivo
 produce parole vuote:
@@ -81,12 +87,14 @@ messaggio dell'utente
    │
    ▼  hook UserPromptSubmit  (gray_matter/memhook.py recall)
    │    1. filtro: comandi, conferme brevi, testo vuoto → niente
-   │    2. extract(messaggio)                       → parole chiave
-   │    3. in parallelo, via IPC al daemon:
-   │         neuron.pre_turn(topic, keywords)       → contesto + stimoli 🧠
-   │         neuron.forgotten(near=messaggio)       → flash ⚡
-   │         neurag.knowledge_query(top_n=1)        → puntatore 📚 se cos ≥ soglia
-   │    4. budget in caratteri, poi additionalContext
+   │    2. UNA richiesta IPC: {"action": "recall", "prompt", "session"}
+   │         daemon (server._hook_recall):
+   │           neuron.extract(messaggio)            → topic e parole chiave
+   │           in parallelo:
+   │             neuron.pre_turn(topic, keywords)   → contesto + stimoli 🧠
+   │             _knowledge_hint (SQL)              → puntatore 📚
+   │             _maybe_flash → neuron.forgotten    → flash ⚡, una volta per concetto per sessione
+   │    3. budget in caratteri, poi additionalContext
    ▼
 modello: risponde con il contesto già presente
    │
@@ -108,15 +116,30 @@ modello: risponde con il contesto già presente
 
 ### 3.2 Misure sul daemon vero (2026-11-05)
 
-Tre chiamate in parallelo da un processo esterno, come farebbe l'hook:
+**Prima versione** (quattro richieste dall'hook, KB vettoriale), fase per fase:
 
 ```
-giro 1: totale 354 ms -> pre_turn 229ms, forgotten 63ms, knowledge_query 352ms
-giro 2: totale 320 ms -> pre_turn  59ms, forgotten 64ms, knowledge_query 320ms
+avvio python -I                 145 ms
+import (json, concurrent, cli)  170 ms   ← concurrent.futures da solo 50 ms (logging, traceback)
+extract                          13 ms
+parallelo: pre_turn 78, forgotten 82, knowledge_query 335
+processo intero                 692 ms   (785 a freddo)
 ```
 
-Avvio di Python più import di `gray_matter.cli`: circa 180 ms. `extract`: 14–86 ms.
-In tutto circa mezzo secondo per messaggio.
+**Seconda versione** (una richiesta, KB in SQL). I pezzi del percorso critico, misurati sul daemon:
+
+```
+import json+cli+ipcauth          82 ms
+giro 2: extract 13  pre_turn 25  forgotten  8  kb-SQL 23  → ~45 ms
+giro 3: extract 12  pre_turn 16  forgotten  5  kb-SQL 23  → ~33 ms
+```
+
+Stima per messaggio: 145 + 82 + 35–120 ≈ **260–350 ms**, contro 692. `pre_turn` e `forgotten`
+vanno entrambi a Neuron, e il lucchetto per server li serializza: la somma, non il massimo.
+La misura end-to-end aspetta un daemon con il codice del branch.
+
+**Il pavimento è l'avvio di Python**: circa 230 ms fra interprete e import, su cui il daemon non
+può niente. `-S` ne toglie circa 30, al prezzo di un `sys.path` scritto a mano: non vale ancora.
 
 ## 4. Cosa cambia per chi usa la suite
 
@@ -152,6 +175,8 @@ In tutto circa mezzo secondo per messaggio.
 
 ## 8. Domande aperte
 
-- **Soglia della KB.** 0,55 è una stima: va tarata sul log.
+- **Il flash nel daemon condivide il passo fra sessioni.** `_last_topic` e il passo minimo
+  (`flash_min_gap`) sono del processo: due sessioni aperte insieme si spostano il turno a vicenda.
+  La pausa per concetto, invece, è già per sessione.
 - **Topic per `pre_turn`.** Il messaggio intero o il topic dell'estrazione: va misurato quale porta
   più nodi pertinenti.
