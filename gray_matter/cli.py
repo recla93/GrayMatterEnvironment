@@ -689,10 +689,10 @@ def _verify_uninstall() -> dict:
         "state": not paths.gm_state().exists(),
         "paths_record": not paths.env_file().exists(),
     }
-    for entry in _clients.doctor():
+    for entry in _clients.doctor():           # one entry per config FILE: AND them
         for slug in ("neuron", "neuron5", "neurag", "gray-matter"):
-            checks[f"deregistered_{entry['client']}_{slug}"] = \
-                slug not in entry.get("servers", [])
+            key = f"deregistered_{entry['client']}_{slug}"
+            checks[key] = checks.get(key, True) and slug not in entry.get("servers", [])
     return {"ok": all(checks.values()), "checks": checks}
 
 

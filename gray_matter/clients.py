@@ -62,10 +62,16 @@ def _claude_desktop_paths() -> list[str]:
     if _env("APPDATA"):
         out = [os.path.join(_env("APPDATA"), "Claude", "claude_desktop_config.json")]
         # MSIX install reads its LocalCache redirect, NOT %APPDATA% — cover both.
+        # A newer MSIX moves its user data OUT of the package, to
+        # %LOCALAPPDATA%\Claude-Data\claude_<id>: that is the file it reads, and
+        # the one left stale when only the other two were rewritten (2026-11-05:
+        # "gray-matter non è riuscito ad avviarsi", old venv path, spawn ENOENT).
         if _env("LOCALAPPDATA"):
             import glob
             out += glob.glob(os.path.join(_env("LOCALAPPDATA"), "Packages", "Claude_*",
                                           "LocalCache", "Roaming", "Claude",
+                                          "claude_desktop_config.json"))
+            out += glob.glob(os.path.join(_env("LOCALAPPDATA"), "Claude-Data", "claude_*",
                                           "claude_desktop_config.json"))
         return out
     return [_home(".config", "Claude", "claude_desktop_config.json")]
@@ -672,19 +678,17 @@ def release_tool(name: str) -> list[str]:
 
 
 def doctor(py: "str | None" = None) -> list[dict]:
-    """Read-only: which servers each detected client currently lists."""
+    """Read-only: which servers each detected client currently lists — one entry
+    per config file, because a client can read more than one (Claude Desktop)."""
     out = []
-    for ckey, spec in CLIENTS.items():
-        path = _pick(spec["paths"]())
-        if path is None:
-            continue
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8-sig") or "{}")
-            node = data
-            for k in keys_for(spec, path):
-                node = node.get(k, {}) if isinstance(node, dict) else {}
-            present = [s for s in SERVERS if isinstance(node, dict) and s in node]
-        except (json.JSONDecodeError, OSError):
-            present = []
-        out.append({"client": spec["label"], "path": path, "servers": present})
+    for spec in CLIENTS.values():
+        for path in [p for p in spec["paths"]() if os.path.exists(p)]:
+            try:
+                node = json.loads(Path(path).read_text(encoding="utf-8-sig") or "{}")
+                for k in keys_for(spec, path):
+                    node = node.get(k, {}) if isinstance(node, dict) else {}
+                present = [s for s in SERVERS if isinstance(node, dict) and s in node]
+            except (json.JSONDecodeError, OSError):
+                present = []
+            out.append({"client": spec["label"], "path": path, "servers": present})
     return out

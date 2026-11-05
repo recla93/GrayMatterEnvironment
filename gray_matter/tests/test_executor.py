@@ -450,3 +450,26 @@ def test_wiring_flags_a_daemon_older_than_the_code(env, monkeypatch, tmp_path):
     monkeypatch.setattr(pids, "tracked", lambda: [
         {"pid": 1, "ppid": 0, "role": "daemon", "started": int(time.time()) + 60}])
     assert _wiring(env)["processes"]["ok"]
+
+
+def test_wiring_sees_the_stale_desktop_config_outside_the_package(env, monkeypatch):
+    r"""2026-11-05, sul vivo: l'installer aveva riscritto %APPDATA%\Claude, ma
+    l'app (MSIX con i dati fuori dal pacchetto) legge Claude-Data\claude_<id>,
+    rimasto col venv vecchio. Popup "comando non trovato", e doctor verde:
+    guardava un file solo, e non quello."""
+    monkeypatch.setenv("APPDATA", str(env / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(env / "Local"))
+    alive = env / "venv" / "python.exe"
+    alive.parent.mkdir()
+    alive.write_text("")
+    good = env / "Roaming" / "Claude" / "claude_desktop_config.json"
+    stale = env / "Local" / "Claude-Data" / "claude_pzs8sxrjxfjjc" / "claude_desktop_config.json"
+    for p, exe in ((good, alive), (stale, env / "venv-vecchio" / "python.exe")):
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({"mcpServers": {"gray-matter": {
+            "command": str(exe), "args": ["-m", "gray_matter.server"]}}}), encoding="utf-8")
+    os.utime(stale, (1, 1))          # il vecchio meccanismo guardava solo il piu' recente
+
+    r = _wiring(env)["mcp_entries"]
+    assert r["ok"] is False
+    assert "venv-vecchio" in r["detail"] and "Claude-Data" in r["detail"], r

@@ -219,25 +219,27 @@ def check_wiring() -> list[dict]:
         from gray_matter import clients as _c
         bad = []
         for _key, spec in _c.CLIENTS.items():
-            path = _c._pick(spec["paths"]())
-            if not path or spec.get("format") == "toml":
+            if spec.get("format") == "toml":
                 continue
-            try:
-                node = json.loads(Path(path).read_text(encoding="utf-8-sig") or "{}")
-            except (json.JSONDecodeError, OSError):
-                continue
-            for k in _c.keys_for(spec, path):
-                node = node.get(k) if isinstance(node, dict) else None
-            if not isinstance(node, dict):
-                continue
-            for slug in _c.SERVERS:
-                entry = node.get(slug)
-                if not isinstance(entry, dict):
+            # EVERY config the client may read, not the newest: Claude Desktop
+            # keeps up to three, and the stale one was never the newest-checked.
+            for path in [p for p in spec["paths"]() if os.path.exists(p)]:
+                try:
+                    node = json.loads(Path(path).read_text(encoding="utf-8-sig") or "{}")
+                except (json.JSONDecodeError, OSError):
                     continue
-                cmd = entry.get("command")
-                exe = cmd[0] if isinstance(cmd, list) and cmd else cmd
-                if isinstance(exe, str) and os.path.isabs(exe) and not os.path.exists(exe):
-                    bad.append(f"{spec['label']}/{slug} -> {exe}")
+                for k in _c.keys_for(spec, path):
+                    node = node.get(k) if isinstance(node, dict) else None
+                if not isinstance(node, dict):
+                    continue
+                for slug in _c.SERVERS:
+                    entry = node.get(slug)
+                    if not isinstance(entry, dict):
+                        continue
+                    cmd = entry.get("command")
+                    exe = cmd[0] if isinstance(cmd, list) and cmd else cmd
+                    if isinstance(exe, str) and os.path.isabs(exe) and not os.path.exists(exe):
+                        bad.append(f"{spec['label']}/{slug} -> {exe} (in {path})")
         if bad:
             rec("mcp_entries", False, "; ".join(bad[:3]),
                 "gray-matter register (riscrive le entry)")
