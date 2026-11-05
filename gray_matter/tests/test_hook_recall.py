@@ -59,3 +59,19 @@ def test_each_session_has_its_own_cooldown(srv):
     a2 = asyncio.run(srv._hook_recall("secondo messaggio su altro tema", "s1"))
     b1 = asyncio.run(srv._hook_recall("terzo messaggio in un'altra sessione", "s2"))
     assert "⚡" in a1 and "⚡" not in a2 and "⚡" in b1
+
+
+def test_a_gateway_pre_turn_carries_the_flash_too(srv, monkeypatch):
+    """Fase 4: i client senza hook ricevono il flash su pre_turn, senza pulse."""
+    from gray_matter.registry import ServerEntry
+    neuron = ServerEntry(name="neuron", tool_names=["pre_turn"], socket_path="", pid=0)
+    monkeypatch.setattr(srv._registry, "find_server_by_tool",
+                        lambda tool: neuron if tool == "pre_turn" else None)
+    monkeypatch.setattr(srv, "_flashed", set())
+
+    async def no_net(*a, **k):
+        return ""
+    monkeypatch.setattr(srv, "_safety_net_note", no_net)
+    out = asyncio.run(srv.call_tool("pre_turn", {"topic": "flash", "keywords": ["flash"]}))
+    assert out[0].text.startswith("[neuron] CTX")
+    assert "⚡ Flashback:" in out[0].text

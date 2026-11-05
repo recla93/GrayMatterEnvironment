@@ -906,10 +906,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     is_pre = server.name == "neuron" and name == "pre_turn"
     kb = (await _knowledge_hint(arguments) if is_pre else "")
     bs = _brainstorm_hint(arguments) if is_pre else ""
+    # Il flash viaggia sulla stessa call (ADR-014 fase 4): il modello chiama
+    # pre_turn, non pulse, e un ricordo spontaneo non puo' aspettare una
+    # chiamata che nessuno fa. Per i client con l'hook lo da' gia' "recall".
+    flash = ""
+    if is_pre and PROACTIVE_BUDGET > 0:
+        flash, _c = await _maybe_flash(str(arguments.get("topic", "")))
+        flash = f"\n\n{flash}" if flash else ""
     # Rete di sicurezza stimoli: se il piggyback di Neuron non passa da troppi
     # turni (LLM ha "dimenticato" i tool giusti), GM lo rilancia qui.
-    note = await _safety_net_note(name, arguments, result or "")
-    return [TextContent(type="text", text=(result or "(empty)") + kb + bs + note)]
+    note = await _safety_net_note(name, arguments, (result or "") + flash)
+    return [TextContent(type="text", text=(result or "(empty)") + kb + bs + flash + note)]
 
 
 # Persistent workers: one long-lived subprocess per server (imported once, model
