@@ -1,5 +1,10 @@
 # Changelog — NeuRAG
 
+## Unreleased
+- **Licenza in formato SPDX** e cartelle di dati dichiarate come pacchetti: pip
+  26.3 mostrava gli avvisi di setuptools a chi installa. Contenuto del pacchetto
+  invariato.
+
 ## 1.7.0 (2026-11-04)
 - **Un file sparito smette di rispondere, senza essere cancellato.** Rifare
   l'ingest di una cartella sostituiva i chunk dei file presenti e non guardava

@@ -1,6 +1,39 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **Il loop di memoria come hook (ADR-014, prima fase).** `memhook.py recall`,
+  per l'hook `UserPromptSubmit` di Claude Code, porta contesto, puntatore KB e
+  flash prima che il modello legga il messaggio, con UNA richiesta al daemon
+  (azione IPC `recall`). `memhook.py save` registra in dry-run cosa salverebbe
+  a fine turno (`logs/memhook-save.jsonl`). Non si aggancia da solo: va messo
+  negli hook di `~/.claude/settings.json`.
+- **Il flash arriva anche su `pre_turn`.** Nasceva solo dentro `pulse`, che il
+  modello non chiama quasi mai. E la sua pausa "una volta per concetto" usava
+  come chiave il testo con dentro il topic: lo stesso concetto tornava a ogni
+  cambio d'argomento. Ora la chiave è il concetto.
+- **Il puntatore alla KB indica una sezione, non una cartella.** Era una ricerca
+  per nome in SQL: su cinque messaggi veri indicava sempre una cartella intera
+  e coniava bridge falsi. Ora è vettoriale, sopra cos 0,55, una volta per
+  sessione, e non conia bridge. Su `pre_turn` e nel richiamo dell'hook.
+- **La config dell'app desktop fuori dal pacchetto.** L'app MSIX con i dati in
+  `%LOCALAPPDATA%\Claude-Data\claude_<id>` legge quel file: registrazione e
+  doctor non lo conoscevano, e un venv spostato dava il popup "comando non
+  trovato" con il doctor verde. Il doctor ora guarda ogni config del client,
+  non solo la più recente.
+- **Il doctor non dichiara rotta un'installazione sana.** Senza Claude Code non
+  segnala più gli hook mancanti; con il daemon spento dice che è normale e come
+  avviarlo, invece di un `WinError 10061`.
+- **La disinstallazione toglie il collegamento sul Desktop** e l'icona copiata
+  dall'installer. Il collegamento ora si cerca nel Desktop vero di Windows, che
+  può essere spostato (`D:\Desktop`, OneDrive).
+- **Hook e GUI non aspettano 2 secondi un daemon spento.** Su Windows una
+  connessione rifiutata a localhost viene ritentata per ~2 s. `_send_ipc` ha un
+  `connect_timeout` opzionale, usato dall'hook e dai pannelli della GUI; non dal
+  gateway, che in timeout ripiegherebbe sui worker locali.
+- **Installer.** Con i path lunghi di Windows spenti, un pip fallito dice la
+  causa vera invece di "Check network/Python". La licenza è in formato SPDX:
+  pip 26.3 mostrava a chi installa 20 avvisi di setuptools, e la tabella smette
+  di buildare dal 2027-02-18.
 - **Il pannello delle impostazioni di Neuron nel control center.** Neuron ha
   ora un comando `config` (il tetto dei concetti per grafo), e la GUI lo mostra
   come fa con gray-matter e neurag; nel catalogo c'è la sua descrizione.
