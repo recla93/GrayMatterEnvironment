@@ -1,5 +1,12 @@
 # Changelog — Gray Matter
 
+## Unreleased
+- **L'install aggancia il memhook (ADR-014, fase 2).** Il deploy degli hook di
+  Claude Code copia `memhook.py` in `~/.claude/hooks/gm_memhook.py` e lo
+  registra: `recall` su `UserPromptSubmit`, `save` (ancora dry-run) su `Stop`,
+  con `-I`. L'uninstall toglie file ed entry, `Stop` compreso. Prima andava
+  aggiunto a mano, e a mano non era mai stato aggiunto.
+
 ## 1.7.0 (2026-11-06)
 - **Il loop di memoria come hook (ADR-014, prima fase).** `memhook.py recall`,
   per l'hook `UserPromptSubmit` di Claude Code, porta contesto, puntatore KB e

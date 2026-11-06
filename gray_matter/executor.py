@@ -539,6 +539,14 @@ _REMINDER_HOOK = "neuron_reminder_hook.py"
 # compact imminent it nudges anyway), so both registrations are needed.
 _REMINDER_EVENTS = (("UserPromptSubmit", None), ("PreCompact", "manual|auto"))
 
+# ADR-014: the memory loop run BY the hook, not asked of the model. GM's own
+# (it talks to GM's daemon), so only this deployer ships it. Copied next to
+# the others rather than pointed at inside the venv: a path into site-packages
+# changes with the Python version, and run from the repo root the installer
+# would import the SOURCE and register that path instead.
+_MEMHOOK = "gm_memhook.py"
+_MEMHOOK_EVENTS = (("UserPromptSubmit", "recall"), ("Stop", "save"))
+
 
 def _upsert_hook_group(cfg: dict, event: str, matcher: str | None,
                        marker: str, command: str) -> bool:
@@ -584,13 +592,16 @@ def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
     dest = _claude_dir() / "hooks" / src.name
     reminder_src = src.parent / _REMINDER_HOOK
     reminder_dest = dest.parent / _REMINDER_HOOK
+    memhook_dest = dest.parent / _MEMHOOK
     deployed = [str(dest)] + ([str(reminder_dest)] if reminder_src.exists() else [])
+    deployed.append(str(memhook_dest))
     if dry_run:
-        return deployed, "hooks copied + SessionStart/UserPromptSubmit registered"
+        return deployed, "hooks copied + SessionStart/UserPromptSubmit/Stop registered"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
     if reminder_src.exists():
         shutil.copy2(reminder_src, reminder_dest)
+    shutil.copy2(Path(__file__).with_name("memhook.py"), memhook_dest)
     settings = _claude_dir() / "settings.json"
     try:
         cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
@@ -609,6 +620,12 @@ def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
                                   f'"{sys.executable}" "{reminder_dest}"'):
                 changed = True
                 added.append(event)
+    for event, mode in _MEMHOOK_EVENTS:
+        # -I: never import from the current folder (see memhook.py docstring).
+        if _upsert_hook_group(cfg, event, None, _MEMHOOK[:-3],
+                              f'"{sys.executable}" -I "{memhook_dest}" {mode}'):
+            changed = True
+            added.append(f"{event}({mode})")
     if not changed:
         return deployed, "hooks refreshed (already registered)"
     settings.parent.mkdir(parents=True, exist_ok=True)
@@ -890,9 +907,9 @@ def _scrub_claude_settings(dry_run: bool) -> None:
         cfg = json.loads(settings.read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001
         return
-    markers = ("neuron_sessionstart_hook", _REMINDER_HOOK[:-3])
+    markers = ("neuron_sessionstart_hook", _REMINDER_HOOK[:-3], _MEMHOOK[:-3])
     dirty = False
-    for event in ("SessionStart", *(e for e, _ in _REMINDER_EVENTS)):
+    for event in ("SessionStart", *(e for e, _ in _REMINDER_EVENTS), "Stop"):
         groups = (cfg.get("hooks") or {}).get(event)
         if not groups:
             continue

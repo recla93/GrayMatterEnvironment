@@ -498,6 +498,29 @@ def test_deploying_twice_does_not_duplicate_the_reminder(monkeypatch, tmp_path, 
         assert len([c for c in _cmds(body, event) if "neuron_reminder_hook" in c]) == 1
 
 
+def test_the_install_wires_the_memory_hook(monkeypatch, tmp_path):
+    """ADR-014 fase 2: il memhook arrivava solo a mano, e a mano non e' mai
+    arrivato — il loop restava affidato al modello, che lo salta. recall su
+    UserPromptSubmit, save su Stop, con -I perche' dalla radice del repo il
+    python del venv importerebbe il sorgente. Due deploy, una entry sola."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    src = ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py"
+    executor._deploy_claude_code(src, dry_run=False)
+    deployed, _ = executor._deploy_claude_code(src, dry_run=False)
+
+    hook = home / ".claude" / "hooks" / "gm_memhook.py"
+    assert hook.exists() and str(hook) in deployed     # l'uninstall lo cancella
+    body = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8-sig"))
+    for event, mode in (("UserPromptSubmit", "recall"), ("Stop", "save")):
+        ours = [c for c in _cmds(body, event) if "gm_memhook" in c]
+        assert len(ours) == 1, f"{event}: {ours}"
+        assert f' -I "{hook}" {mode}' in ours[0], ours[0]
+
+
 def test_uninstall_scrubs_every_event_we_registered(monkeypatch, tmp_path):
     """Cleaning one event out of three leaves two commands pointing at a file
     just deleted: an error on every user prompt, forever."""
@@ -520,8 +543,9 @@ def test_uninstall_scrubs_every_event_we_registered(monkeypatch, tmp_path):
     executor._scrub_claude_settings(dry_run=False)
 
     body = json.loads(settings.read_text(encoding="utf-8-sig"))
-    for event in ("SessionStart", "UserPromptSubmit", "PreCompact"):
+    for event in ("SessionStart", "UserPromptSubmit", "PreCompact", "Stop"):
         left = [c for c in _cmds(body, event)
-                if "neuron_sessionstart_hook" in c or "neuron_reminder_hook" in c]
+                if any(m in c for m in ("neuron_sessionstart_hook",
+                                        "neuron_reminder_hook", "gm_memhook"))]
         assert left == [], f"{event}: {left}"
     assert "echo mio" in _cmds(body, "UserPromptSubmit"), "deleted a user's own hook"
