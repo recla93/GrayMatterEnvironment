@@ -75,3 +75,19 @@ def test_the_tool_refuses_before_reading(tree):
     _, outside = tree
     out = asyncio.run(server.call_tool("knowledge_index", {"path": str(outside / "b.md")}))
     assert "refused" in out[0].text and "riservato" not in out[0].text
+
+
+def test_the_users_own_cli_ingest_is_not_held_to_the_ais_roots(tree):
+    """With GM running, `neurag ingest <dir>` goes through GM's worker, and the
+    root check meant for the AI refused the user's own command (2026-11-08).
+    Only GM's worker sets USER_INITIATED, for the daemon's authenticated
+    `gm-neurag` IPC; never an argument an MCP caller could send. Keys stay out."""
+    from neurag.ingest import USER_INITIATED
+    allowed, outside = tree
+    tok = USER_INITIATED.set(True)
+    try:
+        assert ai_ingest_refusal(outside / "b.md") is None
+        assert ai_ingest_refusal(allowed / "prod.env"), "keys stay out for the user too"
+    finally:
+        USER_INITIATED.reset(tok)
+    assert ai_ingest_refusal(outside / "b.md"), "reset: the AI is held again"

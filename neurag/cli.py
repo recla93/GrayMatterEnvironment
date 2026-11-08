@@ -859,8 +859,8 @@ def _dispatch() -> None:
         if _run_via_gm("knowledge_import", {"mapping": args.mapping}):
             return
     elif args.command == "ingest":
-        if _run_via_gm("knowledge_ingest",
-                       {"path": str(Path(args.path)), "godnode": args.godnode}):
+        if _run_via_gm("knowledge_ingest", {"path": str(Path(args.path).resolve()),
+                                            "godnode": args.godnode, "code": args.code}):
             return
     elif args.command == "rename-node":
         if _run_via_gm("knowledge_rename_node",

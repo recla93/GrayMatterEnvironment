@@ -89,7 +89,20 @@ def main() -> None:
                     name=req["tool"], arguments=req.get("args", {})
                 )
             )
-            resp = loop.run_until_complete(handler(mcp_req))
+            # The user's own CLI/GUI (daemon `gm-neurag`), never an MCP caller:
+            # NeuRAG lets it ingest outside the AI's declared roots.
+            tok = None
+            if req.get("user"):
+                try:
+                    from neurag.ingest import USER_INITIATED
+                    tok = USER_INITIATED.set(True)
+                except ImportError:
+                    pass
+            try:
+                resp = loop.run_until_complete(handler(mcp_req))
+            finally:
+                if tok is not None:
+                    USER_INITIATED.reset(tok)
             # Checkpoint periodico: le mutazioni vengono flushato su disco
             # ogni _CHECKPOINT_EVERY, indipendentemente dallo shutdown pulito.
             global _mutations

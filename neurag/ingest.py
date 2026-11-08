@@ -26,6 +26,7 @@ Due modi d'uso:
 """
 from __future__ import annotations
 
+import contextvars
 import threading
 import time
 import uuid
@@ -74,6 +75,15 @@ def ingest_roots() -> "list[Path]":
     return [Path(r).expanduser().resolve() for r in raw.split(os.pathsep) if r.strip()]
 
 
+# Set ONLY by Gray Matter's worker for a request that came through the
+# daemon's authenticated `gm-neurag` IPC action, i.e. the user's own CLI or GUI.
+# Never an argument: an MCP caller (the AI) cannot reach it. With GM running,
+# `neurag ingest <dir>` is routed through the worker (single writer), and the
+# root check meant for the AI refused the user's own command (2026-11-08).
+USER_INITIATED: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "neurag_user_initiated", default=False)
+
+
 def ai_ingest_refusal(path) -> "str | None":
     """Why an MCP (AI-initiated) ingest or index of `path` is refused, or None.
 
@@ -84,6 +94,8 @@ def ai_ingest_refusal(path) -> "str | None":
     p = Path(path).expanduser().resolve()
     if is_secret(p):
         return f"refused: {p} looks like keys or credentials, never indexed"
+    if USER_INITIATED.get():
+        return None
     roots = ingest_roots()
     if not roots:
         return ("refused: no ingest roots declared. The user picks the folders "

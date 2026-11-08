@@ -234,9 +234,9 @@ def _tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Topic or question"},
+                    "query": {"type": "string", "description": "Topic or question, in the documents' language: a question in another language finds much less (measured 2026-11-08, hit@5 7/8 vs 5/8)"},
                     "top_n": {
-                        "type": "integer", "description": "Number of results (1-10, default 5)",
+                        "type": "integer", "description": "Number of results (1-10, default 5; 2-3 is usually enough, each costs ~100 tokens)",
                         "default": 5, "minimum": 1, "maximum": 10,
                     },
                 },
@@ -474,7 +474,9 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
         query = " ".join(str(arguments.get("query", "")).split())[:200]
         if not query:
             return [TextContent(type="text", text=_json.dumps({"node": None, "neighbors": []}))]
-        node = db.find_node_by_trigger(query) or db.get_node_by_name(query)
+        # The exact name first: a bridge end is validated by it (ADR-016 D4), and
+        # a trigger could answer "docs" for "design" (2026-11-08).
+        node = db.get_node_by_name(query) or db.find_node_by_trigger(query)
         if not node:  # fallback: try single words of a multi-word topic
             for w in query.split():
                 node = db.find_node_by_trigger(w) or db.get_node_by_name(w)
