@@ -348,9 +348,8 @@ async def _bridge_blocks(topic: str, neurag_tags: set, limit: int) -> list[str]:
     block so the budget packs as many as fit instead of dropping them all. The
     rationale is TRUNCATED: the store keeps 500 chars because there it is
     documentation; here it is an injected hint, and five whole rationales alone
-    blew the budget and took every bridge down with them.
-    B4 — a bridge just promoted (5+ real uses) has proven its Neuron concept:
-    confirm it (salience + trust). Best-effort."""
+    blew the budget and took every bridge down with them. Showing confirms
+    nothing in Neuron any more (ADR-016 D5)."""
     from gray_matter.bridges import bridges_for
     rel = bridges_for(topic, tags=neurag_tags, limit=limit)
     out: list[str] = []
@@ -359,13 +358,6 @@ async def _bridge_blocks(topic: str, neurag_tags: set, limit: int) -> list[str]:
         if len(why) > _BRIDGE_WHY_CHARS:
             why = why[:_BRIDGE_WHY_CHARS - 1].rstrip() + "…"
         out.append(f"🔗 {b['neuron']} ↔ {b['neurag']}" + (f" — {why}" if why else ""))
-    promoted = [b["neuron"] for b in rel if b.pop("_just_promoted", False)]
-    if promoted:
-        try:
-            await _call_server_async("neuron", "confirm",
-                                     {"keywords": promoted, "confidence": 0.5})
-        except Exception:  # noqa: BLE001
-            pass
     return out
 
 
@@ -521,7 +513,7 @@ async def list_tools() -> list[Tool]:
     # Gray-Matter's own tools
     tools.append(Tool(
         name="gray_matter_pulse",
-        description="Pre-context + knowledge chunks + flash. Calls neuron_get_context and neurag_query in parallel, merges the results, uses the cache.",
+        description="The richer explicit read: Neuron's facts for the topic (as pre_turn), NeuRAG's knowledge excerpts, saved bridges and a flash, in one call.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -650,12 +642,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         neuron = _registry.get_server("neuron")
         if neuron and neuron.is_alive() and neuron.collaborative:
-            # max_tokens esplicito: `get_context` ha il suo budget in caratteri
-            # ma il default (400) lo decideva Neuron, non l'utente.
-            n_args = {"topic": topic, "depth": 1,
-                      "max_tokens": MEMORY_MAX_TOKENS}
-            _inject_neuron_mode(n_args)   # modalità dal blackboard
-            tasks.append(_call_server_async("neuron", "get_context", n_args))
+            # ADR-016 D1: the same read as pre_turn and the hook — facts, not
+            # node names (get_context gave 10 links, 6 names and zero facts on
+            # a question whose fact pre_turn put first).
+            n_args = {"topic": topic, "max_tokens": MEMORY_MAX_TOKENS,
+                      "exclude": sorted(_flashed)}
+            _inject_neuron_mode(n_args)
+            tasks.append(_call_server_async("neuron", "pre_turn", n_args))
             labels.append("neuron")
 
         neurag = _registry.get_server("neurag")
@@ -688,72 +681,39 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             _neurag_links_built = True
 
         context_parts = []
-        neurag_hit = False
         for lbl, r in zip(labels, results):
             if isinstance(r, Exception):
                 context_parts.append(f"[error: {r}]")
             elif r:
                 context_parts.append(r)
-                if lbl == "neurag" and "No results" not in str(r):
-                    neurag_hit = True
+                if lbl == "neuron":
+                    _note_facts(r, _flashed)
 
         response = "\n---\n".join(context_parts) if context_parts else "No results."
 
-        # D3 — knowledge proattiva: vicini strutturati del nodo NeuRAG matchato
-        # (parent/children/links, depth 2) non già presenti nella risposta.
-        # JSON dal tool knowledge_neighbors: niente parsing di prosa (anti-F15).
-        # Va PRIMA dei bridge: la stessa risposta porta i tag canonici del nodo,
-        # ed è su quelli che i bridge fanno il join (§4). Un secondo round-trip
-        # solo per chiedere quattro parole non lo vogliamo nella pulse.
-        # Tutto ciò che segue è PROATTIVO: non l'ha chiesto nessuno, quindi vive
-        # dentro `proactive_budget_chars`. A 0 la pulse resta solo le risposte
-        # vere — che è una risposta legittima per chi ha il contesto stretto.
+        # Everything below is PROACTIVE: nobody asked for it, so it lives inside
+        # `proactive_budget_chars`. At 0 the pulse is only the real answers.
         proactive: list[str] = []
-        neurag_tags: set[str] = set()
-        if neurag_hit and PROACTIVE_BUDGET > 0:
-            try:
-                import json as _json
-                raw = await _call_server_async(
-                    "neurag", "knowledge_neighbors",
-                    {"query": topic, "depth": 2, "limit": 5})
-                data = _json.loads(raw)
-                neurag_tags = {str(t) for t in (data.get("tags") or [])}
-                fresh = [n["name"] for n in data.get("neighbors", [])
-                         if n.get("name") and n["name"].lower() not in response.lower()][:3]
-                if fresh:
-                    proactive.append("💡 Potrebbe interessarti: " + ", ".join(fresh))
-            except Exception:  # noqa: BLE001 — proattiva = best-effort, mai bloccare la pulse
-                pass
 
-        # Cross-store bridges the orchestrator has persisted for this topic.
-        # Matched on whole tokens AND on the tag identity above — a bridge to a
-        # node whose NAME says nothing about the topic is reachable through its
-        # tags, which is the whole point of the substrate.
+        # Cross-store bridges persisted for this topic, matched on whole tokens.
         if PROACTIVE_BUDGET > 0:
-            proactive.extend(await _bridge_blocks(topic, neurag_tags, _BRIDGES_PER_PULSE))
+            proactive.extend(await _bridge_blocks(topic, set(), _BRIDGES_PER_PULSE))
 
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
         if PROACTIVE_BUDGET > 0:
-            flash_note, concept = await _maybe_flash(topic)
+            # ADR-016 D4: no bridge is born from a flash any more.
+            flash_note, _concept = await _maybe_flash(topic)
             if flash_note:
                 proactive.append(flash_note)
-                # v3b auto-discovery: a mid-band dormant Neuron concept surfaced on a
-                # topic where NeuRAG has real knowledge → that co-occurrence is a bridge
-                # worth keeping. Persist it (idempotent, gated by the flash rate-limit).
-                if concept and neurag_hit:
-                    from gray_matter.bridges import add_bridge
-                    if add_bridge(concept, topic, f"co-surfaced on '{topic}'"):
-                        _stats["bridges_added"] += 1
 
-        # Il flash è primo: è l'unico contenuto proattivo che non si può
-        # ri-ottenere chiedendo (i bridge stanno in `gray-matter bridges`, i
-        # vicini in `knowledge_neighbors`). Un flash tagliato è perso.
+        # The flash goes first: it is the only proactive content that cannot be
+        # asked for again (bridges are in `gray-matter bridges`). A cut flash is lost.
         extra, dropped = _fit(PROACTIVE_BUDGET, list(reversed(proactive)))
         if extra:
             response += "\n\n" + extra
         if dropped:
-            response += (f"\n\n(+{dropped} spunti omessi: budget proattivo "
-                         f"{PROACTIVE_BUDGET} char — `gray-matter config set "
+            response += (f"\n\n(+{dropped} leads left out: proactive budget "
+                         f"{PROACTIVE_BUDGET} chars — `gray-matter config set "
                          f"proactive_budget_chars <n>`)")
 
         # Cache + record the real-work latency (this was a miss).
@@ -773,9 +733,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "gray_matter_bridge":
         from gray_matter.bridges import add_bridge
-        created = add_bridge(arguments["neuron_concept"], arguments["neurag_node"],
-                             arguments.get("rationale", ""))
-        return [TextContent(type="text", text="Bridge saved." if created else "Bridge already exists.")]
+        node = " ".join(str(arguments.get("neurag_node", "")).split())
+        # ADR-016 D4: the NeuRAG end must be a node that exists, by its exact
+        # name (bridges were born pointing at the question's text).
+        try:
+            found = (json.loads(await _call_server_async(
+                "neurag", "knowledge_neighbors", {"query": node, "depth": 1, "limit": 1}))
+                .get("node") or {}).get("name") or ""
+        except Exception as exc:  # noqa: BLE001 — no NeuRAG: nothing to bridge to
+            return [TextContent(type="text", text=f"Bridge not saved: NeuRAG unavailable ({exc}).")]
+        if found.lower() != node.lower():
+            hint = f" Did you mean '{found}'?" if found else ""
+            return [TextContent(type="text", text=f"Bridge not saved: no NeuRAG node named '{node}'.{hint}")]
+        created = add_bridge(arguments.get("neuron_concept", ""), found, arguments.get("rationale", ""))
+        return [TextContent(type="text", text="Bridge saved." if created
+                            else "Bridge reinforced (it already existed), or an endpoint was invalid.")]
 
     if name == "gray_matter_state_set":
         from gray_matter.state import state_set

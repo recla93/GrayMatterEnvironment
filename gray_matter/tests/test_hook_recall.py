@@ -251,3 +251,37 @@ def test_the_hook_reads_what_it_injected_from_the_transcript(tmp_path):
     t.write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n", encoding="utf-8")
     assert mh.session_memory(str(t)) == (True, ["00ff00ff", "0a1b2c3d"])
     assert mh.session_memory(str(tmp_path / "missing.jsonl")) == (False, [])
+
+
+def test_pulse_reads_facts_like_pre_turn_and_mints_no_bridge(srv, monkeypatch):
+    """ADR-016 D1/D4: pulse used get_context (names, zero facts) and minted a
+    bridge from every flash that met a KB hit."""
+    import gray_matter.bridges as br
+
+    async def no_bridges(*_a):
+        return []
+    monkeypatch.setattr(srv, "_bridge_blocks", no_bridges)
+    monkeypatch.setattr(br, "add_bridge", lambda *a, **k: pytest.fail("a flash minted a bridge"))
+    monkeypatch.setattr(srv, "_flashed", set())
+    out = asyncio.run(srv.call_tool("gray_matter_pulse", {"topic": "flash pulse unique topic"}))[0].text
+    assert "pre_turn" in srv._calls and "get_context" not in srv._calls, srv._calls
+    assert "knowledge_neighbors" not in srv._calls, srv._calls
+    assert out.startswith("[neuron] CTX") and "⚡ Flash: [idea]" in out, out
+
+
+def test_a_bridge_needs_a_neurag_node_with_that_exact_name(srv, monkeypatch):
+    """ADR-016 D4: bridges were born pointing at the question's text."""
+    import gray_matter.bridges as br
+    made = []
+    monkeypatch.setattr(br, "add_bridge", lambda n, r, why="": made.append((n, r)) or True)
+
+    async def kb(server, tool, args):
+        name = {"install guide": "Install Guide", "install": "Install Guide"}.get(args["query"].lower())
+        return json.dumps({"node": {"name": name} if name else None, "neighbors": []})
+    monkeypatch.setattr(srv, "_call_server_async", kb)
+    bridge = lambda node: asyncio.run(srv.call_tool("gray_matter_bridge", {  # noqa: E731
+        "neuron_concept": "venv", "neurag_node": node}))[0].text
+    assert bridge("install guide") == "Bridge saved." and made == [("venv", "Install Guide")]
+    assert "Did you mean 'Install Guide'" in bridge("install")
+    assert "no NeuRAG node named 'come installo?'" in bridge("come installo?")
+    assert len(made) == 1

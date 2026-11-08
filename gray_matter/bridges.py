@@ -32,7 +32,6 @@ import time
 from pathlib import Path
 
 _WEIGHT_CAP = 1000          # weights are relative; cap keeps them bounded
-_PROMOTE_AT = 5             # B4: a 5+ volte il concetto Neuron merita un confirm
 _MAX_LEN = 200              # ingest guard: longer endpoints are pasted blobs, not concepts
 _MIN_LEN = 2                # a 1-char endpoint substring-matches almost every topic -> noise
 
@@ -443,9 +442,8 @@ def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "") -> bo
 def bridges_for(topic: str, tags: "set[str] | None" = None,
                 limit: "int | None" = None) -> list[dict]:
     """Bridges whose Neuron or NeuRAG endpoint matches the topic (either
-    direction). Surfacing a bridge in a pulse *is* using it -> reinforce.
-    Returned strongest-first; a just-crossed-threshold bridge is flagged
-    `_just_promoted` (in-memory only, never persisted).
+    direction), strongest first. Surfacing keeps a bridge alive, it does not
+    strengthen it (ADR-016 D5).
 
     Two ways to match, and neither is substring containment any more:
 
@@ -465,8 +463,7 @@ def bridges_for(topic: str, tags: "set[str] | None" = None,
     GM's pulse, and opening a NeuRAG vault (and its embedder) per pulse to
     resolve four words would be a poor trade. The caller already has the handle.
 
-    `limit` caps how many are returned AND how many are reinforced — the two are
-    the same thing, because surfacing is what counts as using.
+    `limit` caps how many are returned AND how many are kept alive.
     """
     t_tokens = _tokens(topic)
     if not t_tokens:
@@ -492,18 +489,13 @@ def bridges_for(topic: str, tags: "set[str] | None" = None,
         # between a hint and a mass promotion.
         matched.sort(key=lambda b: b.get("weight", 1), reverse=True)
         out = matched if limit is None else matched[:max(0, int(limit))]
+        # ADR-016 D5: showing a bridge keeps it alive (decay prunes idle ones)
+        # but does not strengthen it: a bridge matching many topics promoted
+        # itself. It grows when re-affirmed (add_bridge on an existing one).
         for b in out:
-            just = (min(b["weight"] + 1, _WEIGHT_CAP) >= _PROMOTE_AT) and not b["promoted"]
-            conn.execute(
-                "UPDATE bridges SET weight=min(weight+1,?), last_used=?, "
-                "promoted=CASE WHEN min(weight+1,?)>=? THEN 1 ELSE promoted END "
-                "WHERE neuron_key=? AND neurag_key=?",
-                (_WEIGHT_CAP, now, _WEIGHT_CAP, _PROMOTE_AT, b["neuron_key"], b["neurag_key"]))
-            b["weight"] = min(b["weight"] + 1, _WEIGHT_CAP)
+            conn.execute("UPDATE bridges SET last_used=? WHERE neuron_key=? AND neurag_key=?",
+                         (now, b["neuron_key"], b["neurag_key"]))
             b["last_used"] = now
-            if just:
-                b["promoted"] = 1
-                b["_just_promoted"] = True
         conn.commit()
     finally:
         conn.close()

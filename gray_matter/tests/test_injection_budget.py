@@ -35,26 +35,26 @@ def test_limit_caps_what_comes_back(B):
 def test_the_strongest_survive_the_cut(B):
     for i in range(6):
         B.add_bridge(f"c_{i}", f"Nodo_{i}")
-    # porta c_3 in cima usandolo da solo
-    for _ in range(4):
-        B.bridges_for("c_3")
+    for _ in range(4):                     # c_3 re-affirmed: the strongest
+        B.add_bridge("c_3", "Nodo_3")
     top = B.bridges_for("topic muto", tags={f"nodo_{i}" for i in range(6)}, limit=2)
     assert top[0]["neuron"] == "c_3"
     assert top[0]["weight"] > top[1]["weight"]
 
 
-def test_what_is_not_shown_is_not_reinforced(B):
-    """La regola era già scritta nel docstring — "far emergere un bridge è
-    usarlo" — ma match e rinforzo stavano nello stesso loop, quindi si
-    rinforzava anche ciò che il chiamante non mostrava mai."""
+def test_showing_reinforces_nothing_and_refreshes_only_what_is_shown(B):
+    """ADR-016 D5: showing is not using. Only the shown ones are kept alive
+    (last_used), so decay prunes the bridges nothing ever matches."""
     for i in range(10):
         B.add_bridge(f"c_{i}", f"Nodo_{i}")
     tags = {f"nodo_{i}" for i in range(10)}
+    stamp = {b["neuron"]: b["last_used"] for b in B.all_bridges()}
     shown = {b["neuron"] for b in B.bridges_for("topic muto", tags=tags, limit=3)}
     assert len(shown) == 3
     for b in B.all_bridges():
-        expected = 2 if b["neuron"] in shown else 1
-        assert b["weight"] == expected, f"{b['neuron']}: peso {b['weight']}"
+        assert b["weight"] == 1, f"{b['neuron']}: weight {b['weight']}"
+        if b["neuron"] not in shown:
+            assert b["last_used"] == stamp[b["neuron"]], b
 
 
 def test_mass_matching_no_longer_mass_promotes(B):
