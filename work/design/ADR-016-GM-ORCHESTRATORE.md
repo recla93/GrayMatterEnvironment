@@ -107,7 +107,7 @@ comando esplicito. Il dettaglio è nell'ADR di NeuRAG.
 | **3** ✓ | Bridge solo espliciti, validati, rinforzati dall'uso (D4, D5) — `3849166`; il capo Neuron non è ancora validato | test: nessun bridge nasce da un flash; un capo NeuRAG inesistente è rifiutato; mostrarlo non cambia il peso |
 | **4** ✓ | Daemon caldo all'avvio (D6) (§3.2) | il primo `recall` dopo un riavvio del daemon porta i fatti |
 | **5** ✓ | L'install toglie `neuron_reminder_hook` dove c'è il memhook (D7); in più riavvia il daemon a fine install, nella cartella di GM, e nomina le app da riavviare | dopo un install, `settings.json` ha un solo hook su `Stop` e nessun promemoria — verificato dal vivo il 2026-11-08 |
-| **6** | `promote` per fatti (D8), con l'ADR di NeuRAG | il rapporto elenca fatti, nessuno `user`/`habit` |
+| **6** ✓ | `promote` per fatti (D8), con l'ADR di NeuRAG (ADR-017 D5) | il rapporto elenca fatti, nessuno `user`/`habit` |
 
 ### 3.1 Fase 1: fatta, provata dal vivo
 
