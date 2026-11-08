@@ -1,5 +1,10 @@
 # Changelog — NeuRAG
 
+## Unreleased
+- **Gli hook dei client chiedono fatti (ADR-015).** Le copie degli hook di
+  Claude Code e Cowork, del plugin OpenCode e della skill `neuron-usage` dicono
+  `store_turn(facts=[{kind, text, concepts}])`, allineate a Neuron.
+
 ## 1.7.1 (2026-11-06)
 - **Licenza in formato SPDX** e cartelle di dati dichiarate come pacchetti: pip
   26.3 mostrava gli avvisi di setuptools a chi installa. Contenuto del pacchetto
