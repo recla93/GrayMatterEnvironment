@@ -153,3 +153,39 @@ def test_the_daemon_warms_neurons_model_and_recall_vectors():
     import gray_matter.server as S
     tool, args = S._WARM_TOOL["neuron"]
     assert (tool, args.get("facts")) == ("forgotten", True)
+
+
+def _profile_spy(srv, monkeypatch):
+    sent, fake = [], srv._call_server_async
+
+    async def spy(server, tool, args):
+        if tool == "pre_turn":
+            sent.append(bool(args.get("profile")))
+        return await fake(server, tool, args)
+    monkeypatch.setattr(srv, "_call_server_async", spy)
+    return sent
+
+
+def test_the_hook_asks_for_the_profile_once_per_session(srv, monkeypatch):
+    """ADR-015 D7.1: user/habit facts on a session's first message only."""
+    sent = _profile_spy(srv, monkeypatch)
+    for msg, session in (("first message long enough", "s1"), ("second message, same session", "s1"),
+                         ("first message of another session", "s2")):
+        asyncio.run(srv._hook_recall(msg, session))
+    assert sent == [True, False, True], sent
+
+
+def test_a_gateway_asks_for_the_profile_on_its_first_pre_turn_only(srv, monkeypatch):
+    """A stdio gateway lives as long as its client's session: clients without
+    the hook get the profile on their first pre_turn."""
+    from gray_matter.registry import ServerEntry
+    neuron = ServerEntry(name="neuron", tool_names=["pre_turn"], socket_path="", pid=0)
+    monkeypatch.setattr(srv._registry, "find_server_by_tool",
+                        lambda tool: neuron if tool == "pre_turn" else None)
+    monkeypatch.setattr(srv, "_PROFILE_SENT", False)
+    sent = _profile_spy(srv, monkeypatch)
+    args = {"topic": "flash"}
+    for _ in range(2):
+        asyncio.run(srv.call_tool("pre_turn", args))
+    assert sent == [True, False], sent
+    assert "profile" not in args, "the caller's arguments are not mutated"

@@ -816,6 +816,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # Modalità dal blackboard: il talamo decide, Neuron esegue (parametro).
     if server.name == "neuron" and name in ("get_context", "pre_turn"):
         _inject_neuron_mode(arguments)
+    # ADR-015 D7.1 for clients without the hook: a stdio gateway lives as long
+    # as its client's session, so its first pre_turn carries the profile.
+    global _PROFILE_SENT
+    if server.name == "neuron" and name == "pre_turn" and not _PROFILE_SENT:
+        arguments = {**arguments, "profile": True}
+        _PROFILE_SENT = True
 
     result = await _call_server_async(server.name, name, arguments)
     # The KB travels on the call the model really makes (see _knowledge_hint).
@@ -1329,6 +1335,7 @@ def _norm(s: str) -> str:
 
 
 _HOOK_SEEN: dict = {}            # session -> (kb pointers shown, concepts flashed)
+_PROFILE_SENT = False            # this gateway process already served the user/habit facts
 _HOOK_SESSIONS_MAX = 50          # ponytail: clear-all when full; LRU if sessions ever overlap that much
 # ponytail: threshold tuned on 5 real messages (2026-11-05): the 2 useful ones
 # scored 0.55, the 2 wrong ones 0.45-0.46. Redo it on the log once there are more turns.
@@ -1373,6 +1380,7 @@ async def _hook_recall(prompt: str, session: str) -> str:
     stays a courier: start, one request, print."""
     if session not in _HOOK_SEEN and len(_HOOK_SEEN) >= _HOOK_SESSIONS_MAX:
         _HOOK_SEEN.clear()
+    first = session not in _HOOK_SEEN
     shown, flashed = _HOOK_SEEN.setdefault(session, (set(), set()))
     q = " ".join(prompt.split())[:300]
     kb_task = asyncio.ensure_future(_kb_vector_pointer(q, shown))
@@ -1382,7 +1390,7 @@ async def _hook_recall(prompt: str, session: str) -> str:
     # 2026-11-06: extracted topic -> wasapi/endpoint-audio, message -> release/
     # installer/daemon. ponytail: no keywords at all; graph-filtered ones only
     # if the dry-run log shows recall missing concepts the message names.
-    args = {"topic": q}
+    args = {"topic": q, "profile": first}     # ADR-015 D7.1: user/habit once per session
     _inject_neuron_mode(args)
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
