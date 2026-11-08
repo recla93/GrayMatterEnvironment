@@ -129,7 +129,7 @@ entrambi richiedono un re-ingest.
 |---|---|---|
 | **1** ✓ | L'ingest dell'utente con GM acceso (D2); `promote` per fatti con bridge di provenienza (D5); bridge nel richiamo dell'hook (D4) | `neurag ingest <repo>` parte con GM acceso; un fatto promosso compare con il suo 🔗 nel richiamo |
 | **2** (in parte) | Contenuto (D1) e lingua (D3): sulla KB di questo PC la storia è fuori (rumore 27% → 10%), lo schema di `knowledge_query` chiede la lingua dei documenti, l'etichetta del puntatore è l'ultimo titolo. Restano: i CHANGELOG fuori di default, un modo per escludere file all'ingest | sul banco italiano il rumore scende sotto il 5% e il puntatore non indica mai il documento sbagliato sopra soglia |
-| **2b** | Conoscenza datata e archivio (D1): data del documento sui chunk, il recente a parità, la storia al livello d'archivio, `knowledge_query(archive=true)` | la storia reingerita come archivio: rumore italiano ≤ 10% e ogni documento storico ancora raggiungibile con `archive` |
+| **2b** ✓ | Conoscenza datata e archivio (D1) — `5e3c557`: `doc_date` su ogni chunk, il recente vince a parità, `neurag archive` / `knowledge_archive`, `knowledge_query(archive=true)` con data e [archive] nei risultati | misurato: 5882 chunk datati; storia archiviata (non cancellata): domande in italiano hit@5 12/14 e rumore 10% (era 27%), e `archive=true` ritrova `GrayMatterAudit` e i riepiloghi |
 | **3** | Il documento come nodo (D7), tag bilingui e gerarchici (D8), un modello multilingue a confronto | hit@5 italiano ≥ inglese di oggi (7/8) |
 | **4** | Ingest incrementale: solo i file cambiati (mtime + hash) | un re-ingest senza modifiche dura secondi |
 
