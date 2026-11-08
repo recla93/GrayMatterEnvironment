@@ -248,13 +248,15 @@ async def _do_promote(apply: bool = False) -> dict:
     except Exception as exc:  # noqa: BLE001
         return {"error": f"Neuron unreachable or export unreadable: {exc}"}
 
-    cands = _promote.candidates(export)
+    # ADR-016 D8: facts, not nodes. A fact already in the vault has its
+    # `#id <-> node` bridge: that bridge is the record, so it is never re-added.
+    from gray_matter.bridges import add_bridge, all_bridges
+    promoted_ids = {b["neuron"][1:] for b in all_bridges() if str(b["neuron"]).startswith("#")}
+    cands = _promote.candidates(export, promoted=promoted_ids)
     written, skipped, already, chunks_written = [], [], [], 0
     if apply and cands:
-        # One godnode for everything that comes from memory: a `fundamental`
-        # needs a parent (NeuRAG raises without one — the old apply never
-        # wrote a single node), and the vault tree stays readable: the
-        # ingested repo on one side, the promoted memory on the other.
+        # One godnode for everything that comes from memory: the vault tree
+        # keeps the ingested documents on one side, the promoted memory on the other.
         try:
             await _call_server_async("neurag", "knowledge_add_node", {
                 "name": _promote.PROMOTE_PARENT, "node_type": "godnode",
@@ -263,37 +265,23 @@ async def _do_promote(apply: bool = False) -> dict:
             return {"error": f"godnode '{_promote.PROMOTE_PARENT}' could not be created: {exc}"}
         for c in cands:
             try:
-                # The tags it already shares travel with it — that is what makes
-                # a promotion a JOIN between the two graphs instead of an orphan
-                # dropped into NeuRAG (§4).
+                # A node that already exists is reused: new facts of a promoted
+                # concept join it (the old rule skipped them forever).
                 res = str(await _call_server_async("neurag", "knowledge_add_node", {
                     "name": c["keyword"], "node_type": "fundamental",
                     "parent_name": _promote.PROMOTE_PARENT,
                     "triggers": c["tags"] or [c["keyword"]],
                 })).lower()
-                if "already exists" in res:
-                    # ponytail: a concept is promoted once; chunks have no dedup in
-                    # NeuRAG, so re-applying must not re-add them. Episodes that
-                    # arrive AFTER the promotion stay in Neuron: diff-and-append
-                    # when a real case asks for it.
-                    already.append(c["keyword"])
-                    continue
                 if "not found" in res:
                     skipped.append(c["keyword"])
                     continue
-                written.append(c["keyword"])
-                # The memory, not just the name: link rationales and episodes
-                # become chunks, so knowledge_query can FIND the promoted concept
-                # by the text of one of its facts. Before this a promoted node
-                # was a bare label — no text, no embedding, never retrieved.
-                if c.get("chunks"):
-                    await _call_server_async("neurag", "knowledge_add_chunks", {
-                        "node_name": c["keyword"], "chunks": c["chunks"]})
-                    chunks_written += len(c["chunks"])
-                # No bridge: the node carries the concept's own name, and its
-                # chunks are the concept's facts — the vector pointer finds it by
-                # their text (add_bridge refuses same-name endpoints anyway).
-            except Exception as exc:  # noqa: BLE001 — un nodo rotto non ferma il resto
+                (already if "already exists" in res else written).append(c["keyword"])
+                await _call_server_async("neurag", "knowledge_add_chunks", {
+                    "node_name": c["keyword"], "chunks": c["chunks"]})
+                chunks_written += len(c["chunks"])
+                for fid, ch in zip(c["facts"], c["chunks"]):
+                    add_bridge(f"#{fid}", c["keyword"], f"promoted {ch['section']}")
+            except Exception as exc:  # noqa: BLE001 — one broken node does not stop the rest
                 skipped.append(f"{c['keyword']}: {exc}")
     return {"applied": apply, "count": len(cands), "candidates": cands,
             "written": written, "already": already, "skipped": skipped,
@@ -479,7 +467,7 @@ GM_INSTRUCTIONS = (
     "gray_matter_pulse(topic) merges memory + knowledge + flash in one call.\n"
     "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
     "supersedes=<#id>; links typed, never a "
-    "self-link; before minting a concept check find_candidates; never store "
+    "self-link; a near-duplicate fact is flagged when stored; never store "
     "secrets or tokens. Skip on procedural turns (ack/thanks/yes-no)."
 )
 
@@ -544,39 +532,42 @@ async def list_tools() -> list[Tool]:
             "required": ["neuron_concept", "neurag_node"],
         },
     ))
-    tools.append(Tool(
-        name="gray_matter_state_set",
-        description="Blackboard (GM, thalamus): publish key=value with an optional TTL in seconds. Keys are 'org/component/name'. Returns the entry with its version.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "key": {"type": "string", "description": "Key, e.g. 'cervello/mode'"},
-                "value": {"description": "Arbitrary JSON value"},
-                "ttl": {"type": "number", "description": "Expiry in seconds (default: never)"},
+    # The blackboard (state_*) is GM's plumbing: callable by name, announced
+    # only with GM_TOOLS=all — ~1k chars of schema per session the loop never uses.
+    if os.environ.get("GM_TOOLS", "core").lower() == "all":
+        tools.append(Tool(
+            name="gray_matter_state_set",
+            description="Blackboard (GM, thalamus): publish key=value with an optional TTL in seconds. Keys are 'org/component/name'. Returns the entry with its version.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Key, e.g. 'cervello/mode'"},
+                    "value": {"description": "Arbitrary JSON value"},
+                    "ttl": {"type": "number", "description": "Expiry in seconds (default: never)"},
+                },
+                "required": ["key", "value"],
             },
-            "required": ["key", "value"],
-        },
-    ))
-    tools.append(Tool(
-        name="gray_matter_state_get",
-        description="Blackboard: read key. None if missing or expired — state decays on its own.",
-        inputSchema={
-            "type": "object",
-            "properties": {"key": {"type": "string"}},
-            "required": ["key"],
-        },
-    ))
-    tools.append(Tool(
-        name="gray_matter_state_delta",
-        description="Blackboard: changes from version `since` onwards, filtered by key prefix (expired entries included).",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "prefix": {"type": "string", "description": "Key prefix (default '')"},
-                "since_version": {"type": "integer", "description": "Version to list changes from (default 0)"},
+        ))
+        tools.append(Tool(
+            name="gray_matter_state_get",
+            description="Blackboard: read key. None if missing or expired — state decays on its own.",
+            inputSchema={
+                "type": "object",
+                "properties": {"key": {"type": "string"}},
+                "required": ["key"],
             },
-        },
-    ))
+        ))
+        tools.append(Tool(
+            name="gray_matter_state_delta",
+            description="Blackboard: changes from version `since` onwards, filtered by key prefix (expired entries included).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "prefix": {"type": "string", "description": "Key prefix (default '')"},
+                    "since_version": {"type": "integer", "description": "Version to list changes from (default 0)"},
+                },
+            },
+        ))
     tools.append(Tool(
         name="gray_matter_brainstorm",
         description="Brain (GM, thalamus): what surrounds a problem, with its history. Mid-band memory nodes (related but not obvious) with their facts and link rationales — a past decision, a bug solved once — plus the nearest knowledge chunks. For dilemmas, problems and decisions. Requires 'seed'.",
@@ -1021,14 +1012,17 @@ async def _via_daemon(payload: dict, timeout: float = 60.0):
     return resp.get("result")
 
 
-async def _call_server_async(server_name: str, tool_name: str, arguments: dict) -> str:
+async def _call_server_async(server_name: str, tool_name: str, arguments: dict,
+                             user: bool = False) -> str:
     """Call a server tool via its persistent worker (imported once, model kept warm).
 
     Prefers the daemon's shared worker; spawns a local one only if there is none.
+    ``user``: the request is the user's own (CLI/GUI through `gm-neurag`), never
+    an MCP caller's — only the daemon sets it, and it travels outside the args.
     """
-    shared = await _via_daemon({"action": "call", "server": server_name,
-                                "tool": tool_name, "args": arguments},
-                               timeout=IPC_TOOL_TIMEOUT)
+    shared = None if user else await _via_daemon(
+        {"action": "call", "server": server_name, "tool": tool_name, "args": arguments},
+        timeout=IPC_TOOL_TIMEOUT)
     if shared is not None:
         return shared
     lock = _worker_locks.setdefault(server_name, asyncio.Lock())
@@ -1040,7 +1034,8 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict) 
         loop = asyncio.get_running_loop()
 
         def _io() -> str:
-            p.stdin.write(json.dumps({"tool": tool_name, "args": arguments}) + "\n")
+            p.stdin.write(json.dumps({"tool": tool_name, "args": arguments,
+                                      **({"user": True} if user else {})}) + "\n")
             p.stdin.flush()
             return p.stdout.readline()
 
@@ -1361,6 +1356,8 @@ async def _kb_vector_pointer(text: str, shown: set) -> str:
     src, _, section = m.group(1).partition(" :: ")
     where = os.path.basename(src.strip())
     section = re.sub(r"\s*\(\d+/\d+\)$", "", section.strip())     # drop "(11/15)", the chunk index
+    # The last heading only, capped: a five-level breadcrumb cost ~70 tokens per message.
+    section = section.split(" > ")[-1][:60]
     label = f"{where} :: {section}" if section else where
     if label in shown:
         return ""
@@ -1400,7 +1397,13 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
         kb_task)
     from gray_matter.memhook import BUDGET, PROFILE_BUDGET
     _note_facts(ctx, flashed)
-    extra = kb + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
+    # Episodes -> knowledge: bridges matching the message, or the facts just
+    # shown (a promoted fact has its `#id <-> node` bridge). Nothing when none.
+    links = ""
+    if PROACTIVE_BUDGET > 0:
+        shown_ids = " ".join(_FACT_ID.findall(ctx or ""))
+        links = "".join(f"\n{b}" for b in await _bridge_blocks(f"{q} {shown_ids}", set(), 2))
+    extra = kb + links + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
     # The hook cuts at memhook.BUDGET from the END: three long facts filled it
     # and the flash and the KB pointer, last, were cut away (live, 2026-11-08).
     # Room for them first, then the memory context gets what is left; the
@@ -1696,7 +1699,10 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                         response = {"error": "Missing 'tool' parameter"}
                     else:
                         try:
-                            result = await _call_server_async("neurag", tool_name, tool_args)
+                            # Authenticated IPC from the user's CLI/GUI: their
+                            # own command, not the AI's (see neurag.ingest).
+                            result = await _call_server_async("neurag", tool_name, tool_args,
+                                                              user=True)
                             response = {"result": result}
                         except Exception as e:
                             response = {"error": str(e)}

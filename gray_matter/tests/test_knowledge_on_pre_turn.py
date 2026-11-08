@@ -54,7 +54,7 @@ def _hint(S, **args):
 def test_a_close_section_yields_one_pointer_and_no_bridge(srv):
     from gray_matter import bridges
     out = _hint(srv, topic="scelta del database", keywords=["latency", "libsql", "wal"])
-    assert '📚 KB: "TURSO.md :: Turso > Embedded replica" (cos 0.61)' in out, out
+    assert '📚 KB: "TURSO.md :: Embedded replica" (cos 0.61)' in out, out
     assert "knowledge_query" in out, "the pointer says how to get the detail"
     assert [c[1] for c in srv._calls] == ["knowledge_query"]
     assert bridges.all_bridges() == [], "a pointer is a hint, a bridge is a claim"
@@ -112,4 +112,4 @@ def test_pre_turn_passthrough_carries_the_hint(srv, monkeypatch):
     out = asyncio.run(srv.call_tool("pre_turn", {"topic": "db", "keywords": ["turso"]}))
     text = out[0].text
     assert text.startswith("[neuron] ctx=ai turn=1")
-    assert '📚 KB: "TURSO.md :: Turso > Embedded replica"' in text
+    assert '📚 KB: "TURSO.md :: Embedded replica"' in text

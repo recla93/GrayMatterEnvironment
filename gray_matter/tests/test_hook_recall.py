@@ -68,7 +68,7 @@ def test_one_request_brings_context_and_flash(srv):
     assert "⚡ Flash: [idea]" in out and "around" in out
     # The KB pointer is by vector: the search by name pointed at whole folders.
     assert "knowledge_query" in srv._calls and "knowledge_neighbors" not in srv._calls
-    assert '📚 KB: "INSTALL.md :: Install > Long paths" (cos 0.61)' in out, out
+    assert '📚 KB: "INSTALL.md :: Long paths" (cos 0.61)' in out, out
 
 
 def test_recall_searches_the_message_not_the_extracted_words(srv, monkeypatch):
@@ -322,3 +322,44 @@ def test_the_first_message_has_room_for_the_profile_too(srv, monkeypatch):
     assert mh.BUDGET < len(first) <= mh.BUDGET + mh.PROFILE_BUDGET, len(first)
     assert len(later) <= mh.BUDGET, len(later)
     assert len(mh.fit("x" * 3000, mh.BUDGET + mh.PROFILE_BUDGET)) == mh.BUDGET + mh.PROFILE_BUDGET
+
+
+def test_only_the_gm_neurag_ipc_marks_a_call_as_the_users(monkeypatch):
+    """The daemon sends `user` to the worker only for its authenticated
+    `gm-neurag` action; a gateway's MCP call never carries it, whatever the
+    arguments say."""
+    import gray_matter.server as S
+    sent = []
+
+    class _P:
+        class stdin:
+            @staticmethod
+            def write(s): sent.append(json.loads(s))
+            @staticmethod
+            def flush(): pass
+
+        class stdout:
+            @staticmethod
+            def readline(): return json.dumps({"ok": True, "text": "x"}) + "\n"
+    monkeypatch.setattr(S, "_worker_for", lambda name: _P)
+    monkeypatch.setattr(S, "_daemon_reachable", lambda: False)
+    asyncio.run(S._call_server_async("neurag", "knowledge_ingest", {"path": "p", "user": True}))
+    asyncio.run(S._call_server_async("neurag", "knowledge_ingest", {"path": "p"}, user=True))
+    assert "user" not in sent[0] and sent[1]["user"] is True, sent
+
+
+def test_the_recall_shows_the_bridge_of_a_fact_it_shows(srv, monkeypatch, tmp_path):
+    """Episodes -> knowledge on the everyday path: a promoted fact carries its
+    `#id <-> node` bridge, and the hook shows it with the fact."""
+    monkeypatch.setenv("GRAY_MATTER_BRIDGES", str(tmp_path / "bridges.db"))
+    from gray_matter import bridges
+    bridges.add_bridge("#0a1b2c3d", "turso", "promoted decision")
+    fake = srv._call_server_async
+
+    async def ctx(server, tool, args):
+        if tool == "pre_turn":
+            return "facts: [decision] Turso in local too (turso) #0a1b2c3d"
+        return await fake(server, tool, args)
+    monkeypatch.setattr(srv, "_call_server_async", ctx)
+    out = asyncio.run(srv._hook_recall("which database do we use locally?", "s1", profile=False))
+    assert "🔗 #0a1b2c3d ↔ turso" in out, out

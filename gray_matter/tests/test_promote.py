@@ -1,233 +1,77 @@
-"""CLS: la memoria che si è dimostrata valida diventa conoscenza (§5.3).
+"""CLS by facts (ADR-016 D8): a fact that proved useful becomes knowledge.
 
-`sleep_maybe()` consolida Neuron dentro sé stesso e non scrive mai in NeuRAG,
-quindi un concetto rinforzato per 200 turni resta nello store che decade e non
-diventa mai permanente. Questo lo promuove — ma **report-only** finché non passi
-`--apply`, perché le soglie non sono misurate su un grafo reale e un nodo
-promosso, al contrario di un bridge, **non decade**: promuovere rumore costa più
-che non promuovere niente.
+Report-only unless --apply: a promoted chunk does not decay, so promoting noise
+costs more than promoting nothing.
 """
-import pytest
+import asyncio
+import json
 
-from gray_matter.promote import PROMOTE_RULES, candidates, report_lines, score
-
-
-def _exp(nodes, turn_count=200):
-    """Node.turn è l'ULTIMO tocco (il motore lo riscrive a ogni rinforzo); la
-    nascita vive nei link. Ogni nodo qui ha un link nato a `born`."""
-    links = [{"source": n["keyword"], "target": "altro", "created_turn": n.pop("born")}
-             for n in nodes if "born" in n]
-    return {"turn_count": turn_count, "nodes": nodes, "links": links}
+from gray_matter.promote import PROMOTE_PARENT, PROMOTE_RULES, candidates, report_lines
 
 
-def _n(keyword, salience=9, trust=0.8, born=10, tags=None):
-    return {"keyword": keyword, "salience": salience, "trust": trust,
-            "turn": 199, "born": born, "tags": tags or [], "topic": "t", "domain": "d"}
+def _f(fid, kind="decision", turn=10, confirmed=1, status="active", concepts=("turso",), text=None):
+    return {"id": fid, "kind": kind, "text": text or f"fact {fid}", "turn": turn,
+            "status": status, "confirmed": confirmed, "concepts": list(concepts)}
 
 
-# ---------- età come soglia, poi UN segnale che non decade ----------
-#
-# Misurato sul grafo `ai` il 14 settembre 2026 (380 nodi, 140 turni): salienza
-# e trust non stanno mai sullo stesso nodo. La salienza decade a ogni turno,
-# il trust lo scrive `confirm` e resta. Un AND fra i due passava solo un nodo
-# confermato nel turno stesso in cui era caldo: mai successo, 0 candidati.
-
-def test_a_confirmed_old_concept_is_promoted():
-    c = candidates(_exp([_n("quorum")]))
-    assert [x["keyword"] for x in c] == ["quorum"]
-    assert c[0]["why"] == ["trust"]
+def _exp(*facts, turn_count=100):
+    return {"turn_count": turn_count, "facts": list(facts)}
 
 
-def test_hot_but_never_confirmed_and_unanchored_is_not_promoted():
-    """Salienza altissima, trust zero, un solo link medio: niente che resti.
-    È esattamente ciò che non va reso permanente."""
-    assert candidates(_exp([_n("hot", salience=400, trust=0.0)])) == []
+def test_an_old_used_active_fact_is_promoted_with_its_provenance():
+    c = candidates(_exp(_f("a1", text="Turso in local too")))
+    assert [(x["keyword"], x["facts"]) for x in c] == [("turso", ["a1"])]
+    assert c[0]["chunks"] == [{"text": "Turso in local too", "source": "neuron:#a1",
+                               "section": "decision"}]
 
 
-def test_trusted_but_too_young_is_not_promoted():
-    assert candidates(_exp([_n("nuovo", born=199)])) == []
+def test_never_user_or_habit_and_never_a_progress():
+    """The vault is shared; user/habit are the user's (ADR-016 D8)."""
+    assert candidates(_exp(_f("u", kind="user"), _f("h", kind="habit"),
+                           _f("p", kind="progress"), _f("i", kind="idea"))) == []
 
 
-def test_salience_no_longer_gates():
-    """Un concetto confermato a luglio ha trust 1.0 e salienza 0 a settembre:
-    è il caso reale, e deve passare."""
-    assert candidates(_exp([_n("confermato", salience=0, trust=1.0)]))
+def test_too_young_unused_or_superseded_stay_out():
+    assert candidates(_exp(_f("y", turn=95), _f("n", confirmed=0),
+                           _f("s", status="superseded", confirmed=9))) == []
 
 
-def test_strong_links_open_the_gate_without_trust():
-    """Il caso reale: `extraheader`, `subtree-prefix` — mai confermati, ma
-    ancorati da link forti con la loro ragione. Le ragioni diventano chunk."""
-    exp = {"turn_count": 200,
-           "nodes": [{"keyword": "x", "salience": 0, "trust": 0.0, "turn": 199}],
-           "links": [{"source": "x", "target": "y", "created_turn": 10, "weight": "strong",
-                      "link_type": "cause-effect", "rationale": "perche' uno"},
-                     {"source": "z", "target": "x", "created_turn": 20, "weight": "strong",
-                      "link_type": "deepening", "rationale": "perche' due"}]}
-    c = candidates(exp)
-    assert [k["keyword"] for k in c] == ["x"]
-    assert c[0]["why"] == ["strong-links"]
-    assert [ch["text"] for ch in c[0]["chunks"]] == [
-        "x -[cause-effect]-> y: perche' uno", "z -[deepening]-> x: perche' due"]
+def test_exactly_at_the_floors_is_in():
+    age, used = PROMOTE_RULES["min_age_turns"], PROMOTE_RULES["min_confirmed"]
+    assert candidates(_exp(_f("x", turn=100 - age, confirmed=used)))
 
 
-def test_coactivation_opens_the_gate_without_trust():
-    exp = {"turn_count": 200,
-           "nodes": [{"keyword": "x", "salience": 0, "trust": 0.0, "turn": 199}],
-           "links": [{"source": "x", "target": "y", "created_turn": 10, "weight": "tangential",
-                      "co_activation_count": 3}]}
-    assert candidates(exp)[0]["why"] == ["co-activation"]
+def test_an_already_promoted_fact_is_skipped():
+    assert candidates(_exp(_f("a1")), promoted={"a1"}) == []
 
 
-def test_one_strong_link_is_not_enough():
-    exp = {"turn_count": 200,
-           "nodes": [{"keyword": "x", "salience": 0, "trust": 0.0, "turn": 199}],
-           "links": [{"source": "x", "target": "y", "created_turn": 10, "weight": "strong"}]}
-    assert candidates(exp) == []
+def test_facts_group_by_their_first_concept_and_rank_by_use():
+    c = candidates(_exp(_f("a", concepts=("wal", "pyturso"), confirmed=1),
+                        _f("b", concepts=("turso",), confirmed=3),
+                        _f("c", concepts=("wal",), kind="fix", confirmed=1)))
+    assert [(x["keyword"], x["facts"]) for x in c] == [("turso", ["b"]), ("wal", ["a", "c"])]
+    assert c[1]["tags"] == ["wal", "pyturso"]
 
-
-def test_episodes_travel_as_dated_chunks_after_the_link_rationales():
-    exp = _exp([_n("quorum")])
-    exp["links"][0].update({"weight": "medium", "link_type": "deepening", "rationale": "why"})
-    exp["episodes"] = {"quorum": [{"turn": 12, "text": "chose raft because ..."},
-                                  {"turn": 40, "text": "  "}]}   # empty episode dropped
-    chunks = candidates(exp)[0]["chunks"]
-    assert [(c["section"], c["source"]) for c in chunks] == [
-        ("link", "neuron:quorum"), ("turn 12", "neuron:quorum")]
-
-
-@pytest.mark.parametrize("field,value", [
-    ("trust", PROMOTE_RULES["min_trust"] - 0.01),
-])
-def test_just_below_a_floor_is_out(field, value):
-    assert candidates(_exp([_n("borderline", **{field: value})])) == []
-
-
-@pytest.mark.parametrize("field,value", [
-    ("trust", PROMOTE_RULES["min_trust"]),
-])
-def test_exactly_at_a_floor_is_in(field, value):
-    assert candidates(_exp([_n("borderline", **{field: value})]))
-
-
-def test_age_is_counted_in_turns_from_the_graphs_own_clock():
-    """Non wall-clock: un grafo rimasto inutilizzato un mese non ha per questo
-    concetti più stabili, e l'inattività non è evidenza."""
-    young = _exp([_n("x", born=160)], turn_count=200)      # 40 turni
-    old = _exp([_n("x", born=10)], turn_count=200)         # 190 turni
-    assert candidates(young) == []
-    assert candidates(old)
-
-
-# ---------- il punteggio ordina, non decide ----------
-
-def test_the_report_is_ranked_by_score():
-    cands = candidates(_exp([
-        _n("debole", salience=5, trust=0.5),
-        _n("forte", salience=50, trust=1.0),
-        _n("medio", salience=20, trust=0.7),
-    ]))
-    assert [c["keyword"] for c in cands] == ["forte", "medio", "debole"]
-    assert cands[0]["score"] > cands[1]["score"] > cands[2]["score"]
-
-
-def test_salience_only_breaks_ties():
-    """Senza segnali che restano, la salienza da sola vale quasi nulla."""
-    assert score({"salience": 100, "trust": 0.0}, age=500) == pytest.approx(1.0)
-    assert score({"salience": 0, "trust": 1.0}, age=100) == pytest.approx(1.0)
-    assert score({"salience": 0, "trust": 0.0}, age=100, strong=2) == pytest.approx(1.0)
-
-
-# ---------- l'età viene dai link, non da Node.turn ----------
-
-def test_age_is_the_oldest_link_not_the_last_touch():
-    """Sul grafo reale (347 nodi) nessun candidato, mai: Node.turn è l'ultimo
-    tocco e la salienza decade con l'inattività, quindi 'vecchio' e 'saliente'
-    si escludevano. Un nodo toccato ieri e collegato 190 turni fa è stabile."""
-    exp = {"turn_count": 200,
-           "nodes": [{"keyword": "x", "salience": 9, "trust": 0.8, "turn": 199}],
-           "links": [{"source": "x", "target": "y", "created_turn": 10},
-                     {"source": "z", "target": "x", "created_turn": 150}]}
-    c = candidates(exp)
-    assert [k["keyword"] for k in c] == ["x"]
-    assert c[0]["age_turns"] == 190, "conta il link più vecchio"
-
-
-def test_a_node_with_no_links_has_no_age_and_is_not_promoted():
-    exp = {"turn_count": 200,
-           "nodes": [{"keyword": "solo", "salience": 99, "trust": 1.0, "turn": 10}],
-           "links": []}
-    assert candidates(exp) == []
-
-
-# ---------- i tag viaggiano: è un join, non un orfano ----------
-
-def test_the_tags_it_already_shares_travel_with_it():
-    """§4 ha fatto del tag l'unico oggetto su cui i due store concordano: una
-    promozione senza tag lascerebbe cadere un nodo isolato in NeuRAG."""
-    c = candidates(_exp([_n("quorum", tags=["raft", "consensus"])]))[0]
-    assert c["tags"] == ["raft", "consensus"]
-
-
-# ---------- robustezza sull'input, che arriva da un altro processo ----------
 
 def test_an_empty_or_broken_export_is_not_a_crash():
-    assert candidates({}) == []
-    assert candidates({"turn_count": 0, "nodes": []}) == []
-    assert candidates({"nodes": [{"keyword": "x"}]}) == []          # campi assenti
-    assert candidates(_exp([{"keyword": "", "salience": 99, "trust": 1.0,
-                             "turn": 0}])) == [], "un keyword vuoto non è un nodo"
+    assert candidates({}) == [] and candidates({"facts": None}) == []
 
 
-def test_none_values_are_treated_as_zero():
-    assert candidates(_exp([_n("x", salience=None, trust=None)])) == []
-
-
-# ---------- il report dice che non ha fatto niente ----------
-
-def test_the_dry_run_report_says_nothing_was_written():
-    lines = "\n".join(report_lines(candidates(_exp([_n("quorum")])), applied=False))
-    assert "dry run" in lines.lower()
-    assert "Niente è stato scritto" in lines
-    assert "--apply" in lines
-
-
-def test_the_applied_report_does_not_claim_a_dry_run():
-    lines = "\n".join(report_lines(candidates(_exp([_n("quorum")])), applied=True))
-    assert "dry run" not in lines.lower()
-    assert "Niente è stato scritto" not in lines
-
-
-def test_an_empty_report_shows_the_thresholds():
-    lines = "\n".join(report_lines([], applied=False))
-    assert "soglie" in lines and "min_trust" in lines
-
-
-def test_the_cut_points_are_constants_not_literals():
-    """§8.2: hanno bisogno di dati veri e si muoveranno, quindi stanno in un
-    dict da regolare, non sparsi in una query."""
-    assert set(PROMOTE_RULES) == {"min_age_turns", "min_trust", "min_strong_links",
-                                  "min_coactivation"}
-    loose = candidates(_exp([_n("x", salience=1, trust=0.1, born=199)]),
-                       rules={"min_trust": 0.0, "min_age_turns": 0})
-    assert [c["keyword"] for c in loose] == ["x"]
+def test_the_reports_say_what_happened():
+    c = candidates(_exp(_f("a1")))
+    assert "Nothing was written" in "\n".join(report_lines(c, applied=False))
+    assert "Nothing was written" not in "\n".join(report_lines(c, applied=True))
+    assert "rules" in "\n".join(report_lines([]))
 
 
 def test_the_self_check_runs():
-    from gray_matter.promote import demo
-    demo()
+    from gray_matter import promote
+    promote.demo()
 
 
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))
+# ---------- --apply: parent, chunks, the #id bridge ----------
 
-
-# ---------- --apply: parent, chunk, bridge, idempotenza ----------
-
-def _apply(monkeypatch, export, answers):
-    """Esegue _do_promote(apply=True) con NeuRAG finto: `answers` mappa il nome
-    del nodo alla risposta di knowledge_add_node. Ritorna (result, calls)."""
-    import asyncio
-    import json
+def _apply(monkeypatch, export, answers=None, bridges=()):
     import gray_matter.server as srv
     import gray_matter.bridges as br
     calls = []
@@ -237,35 +81,25 @@ def _apply(monkeypatch, export, answers):
         if tool == "export":
             return json.dumps(export)
         if tool == "knowledge_add_node":
-            return answers.get(args["name"], f"Created node '{args['name']}'")
+            return (answers or {}).get(args["name"], f"Created node '{args['name']}'")
         return "ok"
     monkeypatch.setattr(srv, "_call_server_async", fake_call)
+    monkeypatch.setattr(br, "all_bridges", lambda: [{"neuron": b, "neurag": "x"} for b in bridges])
     monkeypatch.setattr(br, "add_bridge", lambda a, b, r="": calls.append(("bridge", a, b)) or True)
     return asyncio.run(srv._do_promote(apply=True)), calls
 
 
-def _export_with_one_candidate():
-    exp = _exp([_n("quorum", tags=["raft"])])
-    exp["links"][0].update({"weight": "medium", "link_type": "deepening", "rationale": "why"})
-    exp["episodes"] = {"quorum": [{"turn": 12, "text": "chose raft"}]}
-    return exp
-
-
-def test_apply_creates_the_parent_then_the_node_with_chunks(monkeypatch):
-    from gray_matter.promote import PROMOTE_PARENT
-    r, calls = _apply(monkeypatch, _export_with_one_candidate(), {})
+def test_apply_writes_parent_node_chunks_and_the_provenance_bridge(monkeypatch):
+    r, calls = _apply(monkeypatch, _exp(_f("a1")))
     adds = [c[2] for c in calls if c[1] == "knowledge_add_node"]
-    assert adds[0]["name"] == PROMOTE_PARENT and adds[0]["node_type"] == "godnode"
-    assert adds[1]["parent_name"] == PROMOTE_PARENT   # senza parent NeuRAG rifiuta un fundamental
-    chunks = [c[2] for c in calls if c[1] == "knowledge_add_chunks"]
-    assert [ch["section"] for ch in chunks[0]["chunks"]] == ["link", "turn 12"]
-    assert not [c for c in calls if c[0] == "bridge"]   # il nome e' il join, niente self-bridge
-    assert r["written"] == ["quorum"] and r["chunks"] == 2
+    assert adds[0]["name"] == PROMOTE_PARENT and adds[1]["parent_name"] == PROMOTE_PARENT
+    assert [c[2]["chunks"][0]["source"] for c in calls if c[1] == "knowledge_add_chunks"] == ["neuron:#a1"]
+    assert [c[1:] for c in calls if c[0] == "bridge"] == [("#a1", "turso")]
+    assert r["written"] == ["turso"] and r["chunks"] == 1
 
 
-def test_apply_twice_does_not_duplicate_chunks(monkeypatch):
-    """NeuRAG non deduplica i chunk: un nodo gia' promosso va saltato del tutto."""
-    r, calls = _apply(monkeypatch, _export_with_one_candidate(),
-                      {"quorum": "Node 'quorum' already exists (type=fundamental)."})
-    assert r["already"] == ["quorum"] and r["written"] == [] and r["chunks"] == 0
-    assert not [c for c in calls if c[1] == "knowledge_add_chunks"]
+def test_a_new_fact_joins_an_existing_node_and_a_bridged_one_is_not_readded(monkeypatch):
+    r, calls = _apply(monkeypatch, _exp(_f("a1"), _f("a2")),
+                      {"turso": "Node 'turso' already exists (type=fundamental)."}, bridges=("#a1",))
+    assert r["already"] == ["turso"] and r["chunks"] == 1
+    assert [c[1:] for c in calls if c[0] == "bridge"] == [("#a2", "turso")]
