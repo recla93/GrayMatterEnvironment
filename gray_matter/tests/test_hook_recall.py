@@ -285,3 +285,23 @@ def test_a_bridge_needs_a_neurag_node_with_that_exact_name(srv, monkeypatch):
     assert "Did you mean 'Install Guide'" in bridge("install")
     assert "no NeuRAG node named 'come installo?'" in bridge("come installo?")
     assert len(made) == 1
+
+
+def test_a_claude_code_gateway_leaves_the_profile_to_the_hook(srv, monkeypatch, tmp_path):
+    """Seen live 2026-11-08: Claude Code got the profile from the hook AND from
+    its gateway's first pre_turn."""
+    from types import SimpleNamespace as NS
+    from gray_matter.registry import ServerEntry
+    neuron = ServerEntry(name="neuron", tool_names=["pre_turn"], socket_path="", pid=0)
+    monkeypatch.setattr(srv._registry, "find_server_by_tool",
+                        lambda tool: neuron if tool == "pre_turn" else None)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text('{"hooks": "gm_memhook.py recall"}')
+    monkeypatch.setenv("USERPROFILE", str(tmp_path)); monkeypatch.setenv("HOME", str(tmp_path))
+    for client, expect in (("claude-code", False), ("cursor", True)):
+        ctx = NS(session=NS(client_params=NS(clientInfo=NS(name=client))))
+        monkeypatch.setattr(type(srv.app), "request_context", property(lambda self, c=ctx: c))
+        monkeypatch.setattr(srv, "_PROFILE_SENT", False)
+        sent = _profile_spy(srv, monkeypatch)
+        asyncio.run(srv.call_tool("pre_turn", {"topic": "flash"}))
+        assert sent == [expect], (client, sent)

@@ -792,7 +792,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # as its client's session, so its first pre_turn carries the profile.
     global _PROFILE_SENT
     if server.name == "neuron" and name == "pre_turn":
-        arguments = {**arguments, "exclude": sorted(_flashed), "profile": not _PROFILE_SENT}
+        arguments = {**arguments, "exclude": sorted(_flashed),
+                     "profile": not (_PROFILE_SENT or _client_has_memhook())}
         _PROFILE_SENT = True
 
     result = await _call_server_async(server.name, name, arguments)
@@ -1317,6 +1318,21 @@ def _note_facts(text: str, seen: set) -> None:
     pre_turn nor a flash brings them back in the same session."""
     seen.update(_FACT_ID.findall(text or ""))
 _PROFILE_SENT = False            # this gateway process already served the user/habit facts
+
+
+def _client_has_memhook() -> bool:
+    """The client is Claude Code with our memory hook wired: the hook brings
+    the profile on the session's first message, so the gateway must not bring
+    it a second time (seen live, 2026-11-08). Any doubt: False."""
+    try:
+        client = app.request_context.session.client_params.clientInfo.name or ""
+        if "claude-code" not in client.lower():
+            return False
+        settings = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+        with open(settings, encoding="utf-8-sig") as fh:
+            return "gm_memhook" in fh.read()
+    except Exception:  # noqa: BLE001 — no request context, no file: assume no hook
+        return False
 _HOOK_SESSIONS_MAX = 50          # ponytail: clear-all when full; LRU if sessions ever overlap that much
 # ponytail: threshold tuned on 5 real messages (2026-11-05): the 2 useful ones
 # scored 0.55, the 2 wrong ones 0.45-0.46. Redo it on the log once there are more turns.
