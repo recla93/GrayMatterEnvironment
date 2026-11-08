@@ -351,7 +351,6 @@ and **environment variables** (set before starting the daemon).
 | Knob | Default | What it controls |
 |---|---|---|
 | `flash_min_gap` | `3` | Minimum pulses between serendipitous flashbacks (anti-spam) |
-| `stimulus_safety_net` / `stimulus_safety_gap` | `True` / `5` | Re-launch the stimulus from GM when Neuron's piggyback goes silent for N tool turns |
 | `brainstorm_hint` | `True` | On a `pre_turn` that names a bug, error, dilemma or decision, append *call `gray_matter_brainstorm`* |
 | `cache_ttl_seconds` | `60` | TTL for the context cache — raise if topics repeat quickly |
 | `cache_max_size` | `100` | LRU cap on cached pulse results |

@@ -314,75 +314,6 @@ class TestSourceDirDiscovery:
 
 
 # ---------------------------------------------------------------------------
-# 8. Stimuli from GM — safety-net re-injects Neuron concepts when LLM forgets
-# ---------------------------------------------------------------------------
-
-class TestStimuliFromGM:
-    """GM's safety-net and _stim_seen keep Neuron concepts flowing."""
-
-    def test_stim_seen_resets_counter(self):
-        """_stim_seen zeros the counter when brain emoji is in the text."""
-        import gray_matter.server as srv
-        srv._turns_since_stim = 10
-        srv._stim_seen("some response 🧠 note")
-        assert srv._turns_since_stim == 0
-
-    def test_stim_seen_ignores_clean_text(self):
-        """_stim_seen does NOT reset when no emoji is present."""
-        import gray_matter.server as srv
-        srv._turns_since_stim = 10
-        srv._stim_seen("clean response without emoji")
-        assert srv._turns_since_stim == 10
-
-    def test_stim_seen_resets_on_lightning(self):
-        """_stim_seen also resets on ⚡ (flash) emoji."""
-        import gray_matter.server as srv
-        srv._turns_since_stim = 10
-        srv._stim_seen("⚡ Flashback: dormant concept")
-        assert srv._turns_since_stim == 0
-
-    def test_safety_net_fires_after_gap(self, monkeypatch):
-        """After STIM_SAFETY_GAP turns without stimuli, safety-net calls neuron forgotten."""
-        import gray_matter.server as srv
-        from gray_matter.registry import ServerEntry
-        srv._turns_since_stim = srv.STIM_SAFETY_GAP  # at the threshold
-        # Mock neuron as alive
-        fake_neuron = ServerEntry(name="neuron", tool_names=[], socket_path="", pid=0)
-        monkeypatch.setattr(srv._registry, "get_server", lambda name: fake_neuron)
-        # Mock _call_server_async to return a forgotten concept
-        async def fake_call(server, tool, args):
-            return "Dormant: kotlin_coroutines (salience=5)"
-        monkeypatch.setattr(srv, "_call_server_async", fake_call)
-        result = asyncio.run(srv._safety_net_note("query", {"topic": "kotlin"}, ""))
-        assert "🧠 (GM safety-net)" in result
-        assert "kotlin_coroutines" in result
-        assert srv._turns_since_stim == 0  # counter reset after firing
-
-    def test_safety_net_skips_below_gap(self, monkeypatch):
-        """Below the gap threshold, safety-net returns empty."""
-        import gray_matter.server as srv
-        srv._turns_since_stim = 0
-        result = asyncio.run(srv._safety_net_note("query", {}, ""))
-        assert result == ""
-
-    def test_safety_net_skips_when_result_has_emoji(self, monkeypatch):
-        """If the result already has 🧠, safety-net does not double-fire."""
-        import gray_matter.server as srv
-        srv._turns_since_stim = srv.STIM_SAFETY_GAP
-        result = asyncio.run(srv._safety_net_note("query", {}, "🧠 already has stimulus"))
-        assert result == ""
-        assert srv._turns_since_stim == 0  # reset because emoji was seen
-
-    def test_safety_net_no_neuron_returns_empty(self, monkeypatch):
-        """If neuron is not registered, safety-net returns empty."""
-        import gray_matter.server as srv
-        srv._turns_since_stim = srv.STIM_SAFETY_GAP
-        monkeypatch.setattr(srv._registry, "get_server", lambda name: None)
-        result = asyncio.run(srv._safety_net_note("query", {}, ""))
-        assert result == ""
-
-
-# ---------------------------------------------------------------------------
 # 9. GM + SingleTool — pulse works with only one peer installed
 # ---------------------------------------------------------------------------
 
@@ -495,24 +426,29 @@ class TestGMPlusStandalone:
 class TestFlashAndAutoBridge:
     """Flash surfaces dormant Neuron concepts; pulse auto-creates bridges."""
 
-    def test_first_concept_parses_output(self):
-        """_first_concept extracts the keyword from Neuron's forgotten output."""
-        from gray_matter.server import _first_concept
-        text = ("Dormant & mid-band related to 'spring':\n"
-                "  spring_boot    last_turn=3  (7 turns ago)  salience=4\n"
-                "Total: 1 concepts")
-        assert _first_concept(text) == "spring_boot"
+    def test_flash_line_parses_a_dormant_fact(self):
+        """_FLASH_LINE reads Neuron's forgotten(facts=True) line: kind, concept,
+        id. The concept is the LAST parenthesis, so one inside the text is fine."""
+        from gray_matter.server import _FLASH_LINE
+        out = ("Dormant facts near 'spring':\n"
+               "  [decision] scelto https (non wss) per Turso (spring boot) #0a1b2c3d")
+        m = _FLASH_LINE.search(out)
+        assert (m.group("kind"), m.group("concept"), m.group("id")) == \
+            ("decision", "spring boot", "0a1b2c3d")
 
-    def test_first_concept_empty_on_no_results(self):
-        """_first_concept returns '' when Neuron reports no forgotten concepts."""
-        from gray_matter.server import _first_concept
-        assert _first_concept("No forgotten concepts in 5 turns.") == ""
+    def test_flash_line_ignores_no_result_errors_and_personal_kinds(self):
+        from gray_matter.server import _FLASH_LINE
+        for out in ("No dormant fact near 'x'.", "[neuron] error: boom", "",
+                    "  [user] l'utente lavora su due PC (utente) #0a1b2c3d",
+                    "  [habit] vuole il piano prima (piano) #0a1b2c3d"):
+            assert not _FLASH_LINE.search(out), out
 
-    def test_first_concept_handles_malformed(self):
-        """_first_concept returns '' on empty or header-only text."""
-        from gray_matter.server import _first_concept
-        assert _first_concept("") == ""
-        assert _first_concept("Total: 0 concepts") == ""
+    def test_flash_line_accepts_a_migrated_fact(self):
+        """Live on 2026-11-08 Neuron sent `[fact]` flashes (migrated facts) and
+        this pattern dropped them all: no flash ever reached the model."""
+        from gray_matter.server import _FLASH_LINE
+        m = _FLASH_LINE.search("  [fact] mocoder architecture in docs (mocoder) #3425c02f")
+        assert m and m.group("id") == "3425c02f"
 
     def test_norm_lowercases_and_strips(self):
         """_norm normalizes topics for comparison (lowercase, strip)."""

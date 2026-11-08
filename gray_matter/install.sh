@@ -622,6 +622,10 @@ echo "  [OK] INSTALL COMPLETE - Gray Matter $GM_VER"
 echo "  ============================================================"
 [ -n "$NEURON_DIR" ] && echo "  Neuron:  installed"
 [ -n "$NEURAG_DIR" ] && echo "  NeuRAG:  installed"
+# keep-in-sync con install.ps1: l'install ha fermato ogni processo del venv,
+# daemon compreso. Riavviarlo qui fa rispondere gli hook al messaggio dopo.
+# -I: mai importare dalla cartella corrente (dalla radice del repo = sorgente).
+[ "${GM_NO_DAEMON_START:-}" = "1" ] || "$VPY" -I -m gray_matter.cli start || true
 echo "Done. Restart your AI apps to load the servers."
 echo "Control center: the 'Gray-Matter-GUI' icon on your Desktop"
 echo "                (or run: gray-matter gui)"

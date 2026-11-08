@@ -101,3 +101,17 @@ def test_worker_spawn_has_no_window():
             continue
         assert "CREATE_NO_WINDOW" in expr, f"spawn senza CREATE_NO_WINDOW: {expr}"
         assert "DETACHED_PROCESS" not in expr, f"DETACHED_PROCESS rimasto: {expr}"
+
+
+def test_the_daemon_starts_in_a_folder_of_ours(monkeypatch, tmp_path):
+    """`-m` puts the current folder first on sys.path: a daemon started from the
+    repo root imported gray_matter and neurag from the SOURCE, and its workers
+    inherit the folder (seen 2026-11-08). The spawn sets cwd to gm_home()."""
+    import subprocess
+    from gray_matter import paths, server
+    seen = {}
+    monkeypatch.setattr(paths, "gm_home", lambda: tmp_path / "gm")
+    monkeypatch.setattr(server, "daemon_log_path", lambda: tmp_path / "gm" / "daemon.log")
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: seen.update(kw))
+    server._spawn_gray_matter()
+    assert seen.get("cwd") == str(tmp_path / "gm"), seen

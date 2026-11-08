@@ -442,7 +442,7 @@ def _cmds(body: dict, event: str) -> "list[str]":
             for h in (e.get("hooks") or [])]
 
 
-@pytest.mark.parametrize("who", ["gm", "standalone"])
+@pytest.mark.parametrize("who", ["standalone"])
 def test_the_reminder_hook_is_deployed_too(monkeypatch, tmp_path, who):
     """The external reminder had been in the repo since 6.4.4, with its own
     test, and NEITHER deployer copied it: shipped and never once on a real
@@ -476,26 +476,47 @@ def test_the_reminder_hook_is_deployed_too(monkeypatch, tmp_path, who):
     assert [c for c in _cmds(body, "SessionStart") if "neuron_sessionstart_hook" in c]
 
 
-@pytest.mark.parametrize("who", ["gm", "standalone"])
-def test_deploying_twice_does_not_duplicate_the_reminder(monkeypatch, tmp_path, who):
-    """Same rule as the handshake: two deployers with different interpreters
-    must not append two entries for the same hook."""
+def test_deploying_twice_does_not_duplicate_the_reminder(monkeypatch, tmp_path):
+    """Same rule as the handshake: a deployer run twice must not append two
+    entries for the same hook. (Standalone: GM no longer deploys it.)"""
+    import json
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
+
+    body = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8-sig"))
+    for event in ("UserPromptSubmit", "PreCompact"):
+        assert len([c for c in _cmds(body, event) if "neuron_reminder_hook" in c]) == 1
+
+
+def test_the_gm_install_removes_the_old_reminder(monkeypatch, tmp_path):
+    """ADR-016 D7: with the memhook the Stop check replaces the reminder, which
+    also counted a store_turn with keywords only as a save. A standalone
+    install left it registered: GM's install takes it out, and leaves a hook
+    of the user's own alone."""
     import json
     from gray_matter import executor
 
     home = _fake_home(monkeypatch, tmp_path)
     (home / ".claude").mkdir(parents=True, exist_ok=True)
-    src = ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py"
-    for _ in range(2):
-        if who == "gm":
-            executor._deploy_claude_code(src, dry_run=False)
-        else:
-            _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
-    executor._deploy_claude_code(src, dry_run=False)      # and mixed, too
+    _deployer().deploy_claude_code(ASSET_DIRS["neuron"], dry_run=False)
+    settings = home / ".claude" / "settings.json"
+    body = json.loads(settings.read_text(encoding="utf-8-sig"))
+    body["hooks"]["UserPromptSubmit"].append({"hooks": [{"type": "command", "command": "echo mio"}]})
+    settings.write_text(json.dumps(body), encoding="utf-8")
 
-    body = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8-sig"))
+    src = ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py"
+    deployed, note = executor._deploy_claude_code(src, dry_run=False)
+
+    body = json.loads(settings.read_text(encoding="utf-8-sig"))
     for event in ("UserPromptSubmit", "PreCompact"):
-        assert len([c for c in _cmds(body, event) if "neuron_reminder_hook" in c]) == 1
+        assert not [c for c in _cmds(body, event) if "neuron_reminder_hook" in c], event
+    assert "echo mio" in _cmds(body, "UserPromptSubmit")
+    assert [c for c in _cmds(body, "Stop") if "gm_memhook" in c], "the Stop check is what replaces it"
+    assert not any("neuron_reminder_hook" in d for d in deployed)
+    assert "old reminder" in note, note
 
 
 def test_the_install_wires_the_memory_hook(monkeypatch, tmp_path):

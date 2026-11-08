@@ -146,9 +146,20 @@ def _spawn_gray_matter() -> None:
     except OSError:
         out = None
     stdout_err = out if out is not None else subprocess.DEVNULL
+    # cwd: a folder of ours, never the caller's. `-m` puts the current folder
+    # first on sys.path, so a daemon started from the repo root imported
+    # gray_matter and neurag from the SOURCE, and its workers inherit it
+    # (seen 2026-11-08: neurag/embedder.py loaded from the checkout).
+    from gray_matter.paths import gm_home
+    home = gm_home()
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        home = Path(sys.executable).parent
     try:
         subprocess.Popen(
             cmd,
+            cwd=str(home),
             creationflags=creationflags,
             stdin=subprocess.DEVNULL,
             stdout=stdout_err,
@@ -202,11 +213,7 @@ FLASH_MIN_GAP = _cfg["flash_min_gap"]   # min pulses between flashes (anti-spam)
 # Stimulus safety-net (design §Decisioni 3): il motore degli stimoli è di Neuron
 # (piggyback 🧠 sui suoi tool); se l'LLM smette di far passare stimoli per N
 # turni-tool, GM lo rilancia LUI sul prossimo pass-through. Toggle/tuning in
-# settings (→ GUI Preferences): stimulus_safety_net / stimulus_safety_gap.
-STIM_SAFETY_NET = _cfg["stimulus_safety_net"]
-STIM_SAFETY_GAP = _cfg["stimulus_safety_gap"]
 BRAINSTORM_HINT = _cfg["brainstorm_hint"]
-_turns_since_stim: int = 0
 
 # Quanto contesto GM inietta. Il punto del progetto è far RISPARMIARE token, e
 # fino a qui la quantità era un effetto collaterale: il blocco proattivo (bridge,
@@ -314,43 +321,6 @@ def _fit(budget: int, blocks: list[str]) -> tuple[str, int]:
         kept.append(b)
         used += len(b)
     return "\n\n".join(kept), dropped
-
-
-def _stim_seen(text: str) -> None:
-    """Un pulse/risposta che già porta stimoli (🧠/⚡) azzera il contatore."""
-    global _turns_since_stim
-    if "🧠" in text or "⚡" in text:
-        _turns_since_stim = 0
-
-
-async def _safety_net_note(tool_name: str, arguments: dict, result: str) -> str:
-    """Rete di sicurezza: '' quasi sempre; una riga 🧠 quando il piggyback tace
-    da STIM_SAFETY_GAP turni. Best-effort, mai bloccante, anti-recursione (parla
-    col worker Neuron direttamente, non ri-entra in call_tool)."""
-    global _turns_since_stim
-    if not STIM_SAFETY_NET:
-        return ""
-    if "🧠" in result or "⚡" in result:
-        _turns_since_stim = 0                     # lo stimolo è passato: riposa
-        return ""
-    _turns_since_stim += 1
-    if _turns_since_stim < STIM_SAFETY_GAP:
-        return ""
-    neuron = _registry.get_server("neuron")
-    if not neuron or not neuron.is_alive():
-        return ""
-    near = str(arguments.get("topic") or arguments.get("query") or "").strip()
-    try:
-        forgotten = (await _call_server_async(
-            "neuron", "forgotten",
-            {"threshold": 5, "near": near, "top_n": 1})).strip()
-    except Exception:  # noqa: BLE001
-        return ""
-    if not forgotten or forgotten.startswith("["):
-        return ""
-    _turns_since_stim = 0
-    _stats["flashes"] += 1
-    return f"\n\n🧠 (GM safety-net) {forgotten}"
 
 
 def _inject_neuron_mode(arguments: dict) -> None:
@@ -787,7 +757,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                          f"proactive_budget_chars <n>`)")
 
         # Cache + record the real-work latency (this was a miss).
-        _stim_seen(response)          # un pulse con stimoli ricarica il safety-net
         _ctx_cache.set(topic, response)
         _stats["pulse_ms_total"] += (time.monotonic() - _t0) * 1000
 
@@ -860,10 +829,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if is_pre and PROACTIVE_BUDGET > 0:
         flash, _c = await _maybe_flash(str(arguments.get("topic", "")))
         flash = f"\n\n{flash}" if flash else ""
-    # Rete di sicurezza stimoli: se il piggyback di Neuron non passa da troppi
-    # turni (LLM ha "dimenticato" i tool giusti), GM lo rilancia qui.
-    note = await _safety_net_note(name, arguments, (result or "") + flash)
-    return [TextContent(type="text", text=(result or "(empty)") + kb + bs + flash + note)]
+    return [TextContent(type="text", text=(result or "(empty)") + kb + bs + flash)]
 
 
 # Persistent workers: one long-lived subprocess per server (imported once, model
@@ -878,7 +844,10 @@ _neurag_links_built: bool = False  # auto-build links once when links=0 and node
 # loads the model (Neuron's fastembed) BEFORE the first real pulse, so that pulse
 # isn't the one paying the ~cold-start tax. Unknown servers get import-warm only.
 _WARM_TOOL = {
-    "neuron": ("status", {}),
+    # ADR-016 D6: load the model AND the recall vectors at startup, not at the
+    # first message (44 s on a cold cache, 2026-11-08). forgotten(facts) has no
+    # side effect; pre_turn would consume the staged stimulus.
+    "neuron": ("forgotten", {"facts": True, "near": "warmup", "top_n": 1}),
     "neurag": ("knowledge_query", {"query": "warmup", "top_n": 1}),
 }
 
@@ -1419,18 +1388,22 @@ async def _hook_recall(prompt: str, session: str) -> str:
         _call_server_async("neuron", "pre_turn", args),
         _maybe_flash(args["topic"], flashed),
         kb_task)
-    return (ctx or "") + kb + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
+    extra = kb + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
+    # The hook cuts at memhook.BUDGET from the END: three long facts filled it
+    # and the flash and the KB pointer, last, were cut away (live, 2026-11-08).
+    # Room for them first, then the memory context gets what is left.
+    from gray_matter.memhook import BUDGET
+    ctx, room = ctx or "", BUDGET - len(extra)
+    if len(ctx) > room:
+        ctx = ctx[:max(0, room - 1)].rstrip() + "…"
+    return ctx + extra
 
 
-def _first_concept(text: str) -> str:
-    # ponytail: parse the top keyword out of forgotten's text output (fragile; a
-    # structured return would be cleaner — deferred to the persistence refactor).
-    for line in text.splitlines():
-        s = line.strip()
-        if not s or s.endswith(":") or s.startswith(("Total:", "No ")):
-            continue
-        return s.split()[0]
-    return ""
+# One line of Neuron's forgotten(facts=True): `  [kind] text (concept) #id`.
+# Neuron picks what may flash; `fact` is a migrated fact (no kind before 6.10).
+# user/habit are never accepted here, whatever Neuron sends: they are personal.
+_FLASH_LINE = re.compile(r"\[(?P<kind>idea|decision|fix|fact)\] .* \((?P<concept>[^()]*)\) "
+                         r"#(?P<id>[0-9a-f]{8})\s*$", re.M)
 
 
 async def _maybe_flash(topic: str, flashed: "set | None" = None):
@@ -1449,18 +1422,22 @@ async def _maybe_flash(topic: str, flashed: "set | None" = None):
     neuron = _registry.get_server("neuron")
     if not neuron or not neuron.is_alive():
         return "", ""
-    forgotten = (await _call_server_async("neuron", "forgotten", {"threshold": 5, "near": topic, "top_n": 1})).strip()
-    if not forgotten or forgotten.startswith("["):   # skip empties / "[neuron] error: ..."
+    # ADR-016 D2: a dormant FACT near the topic, or nothing. It used to be a
+    # bare node name, from a band that starts under the model's noise and, when
+    # empty, from the oldest node of all: the carbonara got a flash.
+    out = await _call_server_async("neuron", "forgotten", {
+        "facts": True, "near": topic, "threshold": 5, "top_n": 1,
+        "exclude": sorted(flashed)})
+    m = _FLASH_LINE.search(out or "")
+    if not m:                                        # "No dormant fact", errors, old Neuron
         return "", ""
-    # The concept, not the text: the text opens with "related to '<topic>'", so
-    # keyed on it the same concept came back on every new topic.
-    key = _first_concept(forgotten) or forgotten[:80]
-    if key in flashed:                               # per-concept cooldown
+    fid = m.group("id")
+    if fid in flashed:                               # once per fact per session
         return "", ""
-    flashed.add(key)
+    flashed.add(fid)
     _calls_since_flash = 0
     _stats["flashes"] += 1
-    return f"⚡ Flashback: {forgotten}", _first_concept(forgotten)
+    return f"⚡ Flash: {m.group(0).strip()}", m.group("concept")
 
 
 # ---------------------------------------------------------------------------

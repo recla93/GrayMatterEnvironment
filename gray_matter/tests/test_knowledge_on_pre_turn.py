@@ -109,10 +109,6 @@ def test_pre_turn_passthrough_carries_the_hint(srv, monkeypatch):
         return await real(server, tool, args)
     monkeypatch.setattr(srv, "_call_server_async", routed)
 
-    async def no_net(*a, **k):
-        return ""
-    monkeypatch.setattr(srv, "_safety_net_note", no_net)
-
     out = asyncio.run(srv.call_tool("pre_turn", {"topic": "db", "keywords": ["turso"]}))
     text = out[0].text
     assert text.startswith("[neuron] ctx=ai turn=1")

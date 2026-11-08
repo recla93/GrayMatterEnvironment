@@ -82,8 +82,6 @@ Managed via `gray-matter config get|set|list`. Stored in `config.json` inside `G
 | Key | Default | Type | Purpose |
 |---|---|---|---|
 | `flash_min_gap` | `3` | int | Min pulses between flash events (anti-spam) |
-| `stimulus_safety_net` | `true` | bool | GM re-launches the stimulus when Neuron's piggyback goes silent (LLM forgot the tools) |
-| `stimulus_safety_gap` | `5` | int | Tool turns without 🧠/⚡ before the safety net fires |
 | `cache_ttl_seconds` | `60` | float | Base TTL for the context cache |
 | `cache_max_size` | `100` | int | LRU cap for the context cache |
 | `prewarm` | `true` | bool | Pre-warm persistent workers at start |

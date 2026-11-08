@@ -582,25 +582,43 @@ def _upsert_hook_group(cfg: dict, event: str, matcher: str | None,
     return True
 
 
-def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
-    """Copy BOTH claude-code hooks + register them in ~/.claude/settings.json.
+def _remove_hook_groups(cfg: dict, event: str, marker: str) -> bool:
+    """Drop OUR entries for `event` (matched on the script name, like
+    _upsert_hook_group). True when cfg changed. Other hooks are left alone."""
+    hooks = cfg.get("hooks")
+    groups = hooks.get(event) if isinstance(hooks, dict) else None
+    if not isinstance(groups, list):
+        return False
+    keep = [g for g in groups
+            if not (isinstance(g, dict)
+                    and any(marker in (h.get("command") or "")
+                            for h in (g.get("hooks") or []) if isinstance(h, dict)))]
+    if len(keep) == len(groups):
+        return False
+    if keep:
+        hooks[event] = keep
+    else:
+        del hooks[event]
+    return True
 
-    `src` is the SessionStart hook; the reminder sits next to it and travels
-    with it — deploying one without the other leaves the reminder importing a
-    module that is not there.
+
+def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
+    """Copy the SessionStart hook and the memhook + register them in
+    ~/.claude/settings.json.
+
+    The old reminder ("N turns since the last store_turn") is NOT deployed by
+    GM, and an entry left by an earlier install is removed: the memhook's Stop
+    check replaces it (ADR-015 fase 3, ADR-016 D7), and the reminder counted a
+    store_turn with keywords only as a save. Standalone Neuron, which has no
+    memhook, still deploys it.
     """
     dest = _claude_dir() / "hooks" / src.name
-    reminder_src = src.parent / _REMINDER_HOOK
-    reminder_dest = dest.parent / _REMINDER_HOOK
     memhook_dest = dest.parent / _MEMHOOK
-    deployed = [str(dest)] + ([str(reminder_dest)] if reminder_src.exists() else [])
-    deployed.append(str(memhook_dest))
+    deployed = [str(dest), str(memhook_dest)]
     if dry_run:
         return deployed, "hooks copied + SessionStart/UserPromptSubmit/Stop registered"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
-    if reminder_src.exists():
-        shutil.copy2(reminder_src, reminder_dest)
     shutil.copy2(Path(__file__).with_name("memhook.py"), memhook_dest)
     settings = _claude_dir() / "settings.json"
     try:
@@ -614,12 +632,10 @@ def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
         cfg, "SessionStart", "startup|resume|clear|compact",
         "neuron_sessionstart_hook", f'"{sys.executable}" "{dest}"')
     added = []
-    if reminder_src.exists():
-        for event, matcher in _REMINDER_EVENTS:
-            if _upsert_hook_group(cfg, event, matcher, _REMINDER_HOOK[:-3],
-                                  f'"{sys.executable}" "{reminder_dest}"'):
-                changed = True
-                added.append(event)
+    for event, _matcher in _REMINDER_EVENTS:
+        if _remove_hook_groups(cfg, event, _REMINDER_HOOK[:-3]):
+            changed = True
+            added.append(f"-{event}(old reminder)")
     for event, mode in _MEMHOOK_EVENTS:
         # -I: never import from the current folder (see memhook.py docstring).
         if _upsert_hook_group(cfg, event, None, _MEMHOOK[:-3],

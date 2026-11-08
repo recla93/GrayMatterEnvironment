@@ -19,8 +19,8 @@ from pathlib import Path
 
 DEFAULTS = {
     "flash_min_gap": 3,           # pulses between flashes (anti-spam)
-    "stimulus_safety_net": True,  # GM re-launches the stimulus if Neuron's piggyback goes silent
-    "stimulus_safety_gap": 5,     # tool turns without 🧠/⚡ before the safety net fires
+    # stimulus_safety_net / _gap: gone with the safety net (ADR-016 D3). A
+    # config.json that still names them loads fine: unknown keys are skipped.
     "brainstorm_hint": True,      # pre_turn on a problem/bug/decision → "call gray_matter_brainstorm"
     "cache_ttl_seconds": 60,      # context cache TTL
     "cache_max_size": 100,        # context cache LRU cap
@@ -52,10 +52,6 @@ DEFAULTS = {
 HELP = {
     "flash_min_gap": "Quante pulse passano fra due flash (richiami "
                      "serendipitosi). Più alto = meno interruzioni.",
-    "stimulus_safety_net": "Se Neuron smette di agganciare lo stimolo alle "
-                           "risposte, GM lo rilancia da sé.",
-    "stimulus_safety_gap": "Quanti turni di silenzio prima che la rete di "
-                           "sicurezza dello stimolo scatti.",
     "brainstorm_hint": "Se topic o keywords di pre_turn parlano di bug, errori, "
                        "dilemmi o decisioni, GM aggiunge una riga: chiama "
                        "gray_matter_brainstorm prima di rispondere.",

@@ -31,6 +31,9 @@ param([switch]$Force, [switch]$Clear, [string]$EmbedModel = "",
       [string]$Client = "")
 if ($Clear) { $Force = $true }
 $ErrorActionPreference = "Stop"
+# The apps whose MCP servers the install stops: named at the end, so the user
+# restarts those instead of guessing (their connection does not come back alone).
+$script:ClientApps = @()
 
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $Here
@@ -258,6 +261,10 @@ function Stop-VenvProcesses([string]$VenvPath) {
     if (-not (Test-Path $VenvPath)) { return }
     $pids = Get-VenvPids $VenvPath
     if ($pids.Count -eq 0) { return }
+    $script:ClientApps += @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $pids -contains $_.ProcessId } |
+        ForEach-Object { (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue).ProcessName } |
+        Where-Object { $_ -and $_ -notmatch '^(python|pythonw|powershell|pwsh|cmd|conhost|bash|sh)$' })
     Write-Host "Stopping $($pids.Count) running process(es) from this venv (they hold the files pip must replace)..."
     # One pass is not enough. The MCP client RESTARTS its stdio server within a
     # few hundred ms, and that server respawns the daemon and the workers: the
@@ -1173,7 +1180,22 @@ Write-Host "  [OK] INSTALL COMPLETE - Gray Matter $GmVer"
 Write-Host "  ============================================================"
 if ($NeuronDir) { Write-Host "  Neuron:  installed" }
 if ($NeuragDir) { Write-Host "  NeuRAG:  installed" }
-Write-Host "Done. Restart your AI apps to load the servers."
+# The install stopped every process of this venv, the daemon included: start
+# it again, so the memory hooks answer on the very next message instead of
+# after the first client that happens to spawn it. -I: never import from the
+# folder the installer runs in (the repo root would mean the SOURCE).
+# GM_NO_DAEMON_START=1 skips it (tests, sandboxes).
+if ($env:GM_NO_DAEMON_START -ne "1") {
+    $prevEap3 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    & $VPy -I -m gray_matter.cli start
+    $ErrorActionPreference = $prevEap3
+}
+$apps = @($script:ClientApps | Sort-Object -Unique)
+if ($apps.Count -gt 0) {
+    Write-Host "Done. Restart these apps, the install closed their Gray Matter connection: $($apps -join ', ')"
+} else {
+    Write-Host "Done. Restart your AI apps to load the servers."
+}
 Write-Host "Control center: double-click 'Gray Matter' on your Desktop"
 Write-Host "                (or run: $VPy -m gray_matter.cli gui)"
 # L'installer NON apre piu' il control center da solo. Lanciarlo qui lo apriva

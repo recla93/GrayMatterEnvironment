@@ -1,6 +1,45 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **I client avviano i server con `-I`.** Un client avvia il server MCP nella
+  cartella del progetto aperto, e `-m` mette quella cartella in testa a
+  `sys.path`: aperto nella radice del repo, GM importava `gray_matter` e
+  `neurag` dal sorgente invece che dal venv. Le registrazioni ora sono
+  `python -I -m …`; si aggiornano al prossimo install.
+- **Il daemon scalda modello e vettori di Neuron all'avvio (ADR-016, fase 4).**
+  Il riscaldamento chiamava `status`, che carica solo il grafo: modello e
+  vettori del richiamo arrivavano al primo messaggio. Ora chiama
+  `forgotten(facts=true)`, senza effetti collaterali.
+- **L'install riavvia il daemon e dice quali app riavviare.** Per sostituire i
+  file l'install chiude ogni processo del venv, compresi il daemon e i server
+  MCP dei client aperti: finiva con hook senza daemon e con un generico
+  «Restart your AI apps». Ora a fine install riparte il daemon
+  (`gray_matter.cli start`, con `-I`), così il richiamo risponde al messaggio
+  dopo, e il messaggio nomina le app che avevano il collegamento aperto.
+  `GM_NO_DAEMON_START=1` lo salta. Stesso riavvio in `install.sh`.
+- **Il daemon parte nella cartella di GM, non in quella di chi lo lancia.**
+  `-m` mette la cartella corrente in testa a `sys.path`: un daemon avviato dalla
+  radice del repo importava `gray_matter` e `neurag` dal sorgente, e i worker
+  la ereditavano.
+- **L'install di GM toglie il vecchio promemoria** («N turni dall'ultimo
+  store_turn»): lo sostituisce il controllo su `Stop` del memhook, e contava
+  come salvataggio anche uno `store_turn` con sole keyword (ADR-016 D7).
+  Neuron standalone, che il memhook non ce l'ha, lo installa ancora.
+- **Il flash è un fatto, o niente (ADR-016, fase 1).** Era il nome di un nodo
+  dormiente, preso da una fascia di somiglianza che parte sotto il rumore del
+  modello e, se vuota, dal nodo più vecchio: la carbonara prendeva un flash.
+  Ora è `⚡ Flash: [tipo] testo (concetto) #id`, un'idea, decisione o fix
+  dormiente vicina al topic sopra una soglia assoluta, una volta per fatto per
+  sessione. Sul bench: zero flash sui fuori tema. I fatti migrati (`[fact]`)
+  passano; `user` e `habit` mai.
+- **Il flash e il puntatore KB non vengono più tagliati dall'hook.** Il recall
+  taglia a 1200 caratteri dalla fine, e tre fatti lunghi riempivano tutto: il
+  flash arrivava come «…ARCHITETTURA.…», senza id. Ora lo spazio per KB,
+  brainstorm e flash è riservato prima, e si taglia il contesto di memoria.
+- **Via la rete di sicurezza 🧠.** Rilanciava `forgotten` ogni pochi turni
+  senza stimoli, quindi lo stesso rumore. Con l'hook il richiamo è costante.
+  Tolte `stimulus_safety_net` e `stimulus_safety_gap`: un `config.json` che le
+  contiene ancora si carica senza errori.
 - **Il gateway chiede fatti, non parole (ADR-015).** Le istruzioni MCP del
   gateway dicevano `store_turn(topic, keywords, links)`; ora dicono
   `store_turn(facts=[{kind, text, concepts}])` e cosa vale la pena salvare

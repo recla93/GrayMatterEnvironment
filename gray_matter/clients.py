@@ -40,10 +40,13 @@ def _env(key: str) -> str:
 
 # Server slug -> the args that follow the python executable to launch its MCP
 # stdio server. Verified against each project's __main__/console script.
+# -I: a client starts the server in the folder of the open project, and `-m`
+# puts that folder first on sys.path — opened in the repo root, the server
+# imported gray_matter and neurag from the SOURCE, not the venv (2026-11-08).
 SERVERS: dict[str, list[str]] = {
-    "neuron": ["-m", "neuron"],
-    "neurag": ["-m", "neurag.server"],
-    "gray-matter": ["-m", "gray_matter.server"],
+    "neuron": ["-I", "-m", "neuron"],
+    "neurag": ["-I", "-m", "neurag.server"],
+    "gray-matter": ["-I", "-m", "gray_matter.server"],
 }
 
 # Module used to detect whether a server is installed (importable).
