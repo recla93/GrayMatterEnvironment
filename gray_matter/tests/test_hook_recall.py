@@ -139,7 +139,7 @@ def test_a_long_memory_context_does_not_cut_the_flash(srv, monkeypatch):
             return "[neuron] " + "x" * 5000
         return await fake(server, tool, args)
     monkeypatch.setattr(srv, "_call_server_async", long_ctx)
-    out = asyncio.run(srv._hook_recall("parliamo ancora del flash di GM", "s1"))
+    out = asyncio.run(srv._hook_recall("parliamo ancora del flash di GM", "s1", profile=False))
     assert len(out) <= memhook.BUDGET, len(out)
     assert out.endswith("⚡ Flash: [idea] eventi in stile aspect per gli stimoli (around) #0a1b2c3d"), out[-120:]
     assert "📚 KB:" in out
@@ -305,3 +305,20 @@ def test_a_claude_code_gateway_leaves_the_profile_to_the_hook(srv, monkeypatch, 
         sent = _profile_spy(srv, monkeypatch)
         asyncio.run(srv.call_tool("pre_turn", {"topic": "flash"}))
         assert sent == [expect], (client, sent)
+
+
+def test_the_first_message_has_room_for_the_profile_too(srv, monkeypatch):
+    """Live 2026-11-08: a 600-char profile and the 1200-char hook budget left
+    out 2 of the 4 user/habit facts. The first message gets the profile's room
+    on top; later ones the usual budget."""
+    from gray_matter import memhook as mh
+    long_ctx = "[neuron] ...\nprofile: " + "p" * 900 + " | facts: " + "f" * 900
+
+    async def fake(server, tool, args):
+        return long_ctx if tool == "pre_turn" else ""
+    monkeypatch.setattr(srv, "_call_server_async", fake)
+    first = asyncio.run(srv._hook_recall("first message long enough", "s1", profile=True))
+    later = asyncio.run(srv._hook_recall("second message long enough", "s1", profile=False))
+    assert mh.BUDGET < len(first) <= mh.BUDGET + mh.PROFILE_BUDGET, len(first)
+    assert len(later) <= mh.BUDGET, len(later)
+    assert len(mh.fit("x" * 3000, mh.BUDGET + mh.PROFILE_BUDGET)) == mh.BUDGET + mh.PROFILE_BUDGET

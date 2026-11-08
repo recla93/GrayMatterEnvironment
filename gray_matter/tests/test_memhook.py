@@ -118,7 +118,7 @@ def test_recall_is_one_request_with_the_session(monkeypatch):
     monkeypatch.setattr(mh, "_ipc", lambda msg: sent.append(msg) or "x" * 5000)
     out = mh.recall({"prompt": "una domanda abbastanza lunga", "session_id": "s1"})
     assert [m["action"] for m in sent] == ["recall"] and sent[0]["session"] == "s1"
-    assert len(out) == mh.BUDGET
+    assert len(out) == mh.BUDGET + mh.PROFILE_BUDGET     # no profile in the transcript yet
 
 
 def test_no_daemon_no_output(monkeypatch):

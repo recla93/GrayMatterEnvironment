@@ -21,6 +21,7 @@ from pathlib import Path
 
 TIMEOUT = 2.5            # seconds for the IPC request
 BUDGET = 1200            # injected characters, ~300 tokens
+PROFILE_BUDGET = 1000    # on top, once per session: user/habit facts (= Neuron's cap)
 MIN_CHARS = 12
 ACKS = {"ok", "si", "sì", "no", "grazie", "va bene", "perfetto", "fallo", "vai", "procedi"}
 
@@ -39,9 +40,9 @@ def worth_recalling(prompt: str) -> bool:
     return p.lower().strip(" .!?") not in ACKS
 
 
-def fit(text: str) -> str:
+def fit(text: str, budget: int = BUDGET) -> str:
     text = text.strip()
-    return text if len(text) <= BUDGET else text[:BUDGET - 1] + "…"
+    return text if len(text) <= budget else text[:budget - 1] + "…"
 
 
 def session_memory(transcript: str) -> tuple[bool, list]:
@@ -76,7 +77,8 @@ def recall(payload: dict) -> str:
     # No ping first: without a daemon the connection is refused at once, and _ipc gives ''.
     return fit(_ipc({"action": "recall", "prompt": prompt[:300],
                      "session": str(payload.get("session_id") or ""),
-                     "profile": not profile_shown, "exclude": ids}))
+                     "profile": not profile_shown, "exclude": ids}),
+               BUDGET + (0 if profile_shown else PROFILE_BUDGET))
 
 
 # --- save: did the turn leave its facts? (ADR-015 phase 3) ------------------

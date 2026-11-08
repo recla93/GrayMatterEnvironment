@@ -1398,13 +1398,14 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
         _call_server_async("neuron", "pre_turn", args),
         _maybe_flash(args["topic"], flashed),
         kb_task)
-    from gray_matter.memhook import BUDGET
+    from gray_matter.memhook import BUDGET, PROFILE_BUDGET
     _note_facts(ctx, flashed)
     extra = kb + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
     # The hook cuts at memhook.BUDGET from the END: three long facts filled it
     # and the flash and the KB pointer, last, were cut away (live, 2026-11-08).
-    # Room for them first, then the memory context gets what is left.
-    ctx, room = ctx or "", BUDGET - len(extra)
+    # Room for them first, then the memory context gets what is left; the
+    # session's first message has the profile's room on top.
+    ctx, room = ctx or "", BUDGET + (PROFILE_BUDGET if first else 0) - len(extra)
     if len(ctx) > room:
         ctx = ctx[:max(0, room - 1)].rstrip() + "…"
     return ctx + extra
