@@ -1225,6 +1225,14 @@ class KnowledgeGraph:
                     # is not: its older nodes stay '' rather than get an
                     # invented author (ADR-013 4a).
                     self._conn.execute("UPDATE nodes SET space = ?", (vault_space(),))
+                if (table, column) == ("chunks", "doc_date"):
+                    # An old vault is dated at once from its sources, no re-ingest
+                    # (ADR-017 D1); a source gone from disk stays undated (neutral).
+                    for (src,) in self._conn.execute(
+                            "SELECT DISTINCT source FROM chunks WHERE source IS NOT NULL").fetchall():
+                        if src and Path(src).is_file():
+                            self._conn.execute("UPDATE chunks SET doc_date = ? WHERE source = ?",
+                                               (doc_date(Path(src)), src))
         self._conn.commit()
 
     def node_tag_names(self, node_id: int) -> list[str]:

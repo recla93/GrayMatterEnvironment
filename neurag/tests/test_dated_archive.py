@@ -70,3 +70,15 @@ def test_an_archived_node_leaves_the_default_search_and_comes_back_on_request(kg
     assert "2024-01-01" not in call({"query": "how to cut a release"})
     g.archive(ids["old"], restore=True)
     assert len({r["node_id"] for r in g.search("release", top_n=5, touch=False)}) == 2
+
+
+def test_an_old_vault_is_dated_from_its_sources_without_a_reingest(tmp_path):
+    src = tmp_path / "ADR-001-2026-10-01.md"
+    src.write_text("# a\ntext long enough to be a chunk of its own here\n", encoding="utf-8")
+    g = KnowledgeGraph(db_path=tmp_path / "k.db")
+    nid = g.add_node(name="Root", node_type="godnode")
+    g.index_into_node(src, nid)
+    g._conn.execute("ALTER TABLE chunks DROP COLUMN doc_date")    # as 1.7 left it
+    g._conn.commit()
+    g._ensure_columns()
+    assert {r[0] for r in g._conn.execute("SELECT doc_date FROM chunks")} == {"2026-10-01"}

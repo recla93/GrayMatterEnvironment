@@ -49,6 +49,11 @@ def main() -> None:
     mod = importlib.import_module(sys.argv[1])   # e.g. "neuron.server"
     app = mod.app
     reg = getattr(mod, "_g", None)               # graph registry (Neuron); NeuRAG has none
+    if reg is not None and hasattr(reg, "upgrade_all"):
+        try:                                     # graphs from older versions, once, before serving
+            reg.upgrade_all()
+        except Exception:  # noqa: BLE001 — an upgrade must never keep the worker from starting
+            pass
     loop = asyncio.new_event_loop()
     last_clear = 0.0
     for line in sys.stdin:
