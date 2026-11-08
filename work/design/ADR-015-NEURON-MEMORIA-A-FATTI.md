@@ -281,7 +281,7 @@ Queste cose non le decide questo ADR. Qui si fissa solo cosa Neuron offre agli a
 | **1** ✓ | Tabelle `facts`, la migrazione, il nuovo `store_turn` (con `episode` accettato come un fatto `fact`). Sfratto, merge e orfani non toccano più i fatti. | un test per ciascuno dei quattro casi del §1.3; la migrazione del grafo `ai` dà 149 fatti (§7.2) |
 | **2** ✓ | Lettura per fatti in `pre_turn` e in `_hook_recall`, con la soglia assoluta tarata sul set della fase 0 (§7.3) | sul set della fase 0: oltre il 45% di fatti trovati e oltre 10/20 messaggi completi, 0 fatti sui fuori tema |
 | **3** (codice ✓) | Hook `Stop` che controlla (lato GM), via il promemoria nella risposta, stop al `save` del memhook (§7.4) | una settimana d'uso: ogni turno sostanzioso ha almeno un fatto — **da verificare dal vivo** |
-| **4** (in parte) | `user` e `habit` sempre presenti (D7.1 ✓ `b453c08`, un fatto non torna nella sessione `dc54c19`), segnalazione dei doppioni (D6 ✓ `0392b5b`), conferma sul fatto (D8: aperta, serve una scelta di progetto) | una sessione nuova su un altro PC parte sapendo chi è l'utente |
+| **4** ✓ | `user` e `habit` sempre presenti (D7.1 ✓ `b453c08`, un fatto non torna nella sessione `dc54c19`), segnalazione dei doppioni (D6 ✓ `0392b5b`), conferma sul fatto (D8 ✓ `9d637b6`; la conferma implicita sui nodi resta finché `promote` non passa ai fatti) | una sessione nuova su un altro PC parte sapendo chi è l'utente |
 
 Prima della fase 0 non si tara niente. L'8/11 una misura su due campioni si è rivelata sbagliata
 un'ora dopo.
