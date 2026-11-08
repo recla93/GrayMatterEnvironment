@@ -282,6 +282,7 @@ NEURAG_TURSO_DATABASE_URL=libsql://... NEURAG_TURSO_AUTH_TOKEN=... python -m neu
 | Tool | Description |
 |---|---|
 | `knowledge_rename_node` / `knowledge_remove_node` | Rename a node (updates its path and its subtree's) · delete a node and its entire subtree |
+| `knowledge_archive` | Declare a node history: out of the default search, reachable with `knowledge_query(archive=true)`, never deleted (`--restore` brings it back) |
 | `knowledge_reindex` | Re-embed every chunk with the active embedding model (after changing `embed_model`) |
 | `knowledge_skill(name)` | Full text of a NeuRAG skill on demand (e.g. `usage`) |
 

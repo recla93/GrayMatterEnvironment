@@ -553,7 +553,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     section     TEXT,
     chunk_index INTEGER DEFAULT 0,
     embedding   BLOB,       -- 384-dim float32 vector (or NULL if not embedded)
-    created_at  TEXT    DEFAULT (datetime('now'))
+    created_at  TEXT    DEFAULT (datetime('now')),
+    doc_date    TEXT        -- the document's date, YYYY-MM-DD (ADR-017 D1)
 );
 
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
@@ -637,7 +638,45 @@ ADDED_COLUMNS = (
     # ADR-013 4a. '' = unknown; a LOCAL vault's existing nodes are then
     # stamped with its user by _ensure_columns (a default cannot be a name).
     ("nodes", "space", "TEXT DEFAULT ''"),
+    # ADR-017 D1: the date of the DOCUMENT (YYYY-MM-DD), not of the ingest.
+    # NULL on old rows = undated: neither favoured nor penalised.
+    ("chunks", "doc_date", "TEXT"),
 )
+
+# ADR-017 D1: at equal similarity the newer document wins. Multiplicative, so it
+# works on every score scale (cosine, bm25, rrf); at most +5%, halving yearly.
+RECENCY_BOOST = 0.05
+_DATE_IN_TEXT = re.compile(r"(20\d\d-[01]\d-[0-3]\d)")
+
+
+def doc_date(path: Path) -> str:
+    """The document's date: one in its name, else in its first lines
+    (`created: 2026-11-03`), else its last modification."""
+    m = _DATE_IN_TEXT.search(path.name)
+    if not m:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                m = _DATE_IN_TEXT.search("".join(fh.readline() for _ in range(15)))
+        except OSError:
+            m = None
+    if m:
+        return m.group(1)
+    try:
+        return time.strftime("%Y-%m-%d", time.localtime(path.stat().st_mtime))
+    except OSError:
+        return ""
+
+
+def recency(date: "str | None", today: "str | None" = None) -> float:
+    """1.0 for today, 0.5 a year ago, 0 for an undated chunk."""
+    if not date:
+        return 0.0
+    try:
+        t = time.mktime(time.strptime(date[:10], "%Y-%m-%d"))
+        now = time.mktime(time.strptime(today, "%Y-%m-%d")) if today else time.time()
+    except ValueError:
+        return 0.0
+    return 0.5 ** (max(0.0, now - t) / (365 * 86400))
 
 
 def vault_owner() -> str:
@@ -1480,6 +1519,10 @@ class KnowledgeGraph:
         symbols = list(dict.fromkeys(tag_pool))
         self.add_triggers(node_id, symbols)
         self.add_tags(node_id, symbols)   # tags drive build_tag_links; triggers drive lookup
+        if count:
+            self._conn.execute("UPDATE chunks SET doc_date = ? WHERE source = ?",
+                               (doc_date(Path(filepath)), source))
+            self._conn.commit()
         return count
 
     def index_directory_into_node(self, root: Path, node_id: int) -> int:
@@ -1983,6 +2026,18 @@ class KnowledgeGraph:
                         "idle_days": round(idle, 1), "max_link_weight": round(link, 3)})
         return out
 
+    def archive(self, node_id: int, restore: bool = False) -> int:
+        """ADR-017 D1: the user declares a node (and its subtree) history. It
+        moves to the dormant layer — out of the default scan, reachable with
+        recall / knowledge_query(archive=true), content untouched. Returns the
+        number of nodes moved."""
+        ids = self._scope_ids(node_id) or []
+        layer = self.LAYER_ACTIVE if restore else self.LAYER_DORMANT
+        self._conn.executemany("UPDATE nodes SET layer = ? WHERE id = ?",
+                               [(layer, i) for i in ids])
+        self._conn.commit()
+        return len(ids)
+
     def park(self, apply: bool = False) -> dict:
         """Move idle, weakly-linked nodes down a layer. DRY RUN by default.
 
@@ -2482,6 +2537,10 @@ class KnowledgeGraph:
         # it promised. Full numbers in the CHANGELOG.
         results = self._cut_irrelevant(
             self._retrieve(query, max(top_n * 4, 20), node_id=node_id, deep=deep))
+        # ADR-017 D1: a July document weighed what today's does; now the newer
+        # one wins a near tie (stable sort: undated rows keep their order).
+        results.sort(key=lambda r: -(r.get("score") or 0.0)
+                     * (1 + RECENCY_BOOST * recency(r.get("doc_date"))))
         if diversify and len(results) > top_n:
             results = self._mmr(query, results, top_n)
         final = [_without_vector(r) for r in results[:top_n]]
@@ -2578,7 +2637,7 @@ class KnowledgeGraph:
             where += f" AND node_id IN ({','.join('?' * len(scope))})"
         if getattr(self, "_vector_sql", False) and self._vector_sql_ok:
             try:
-                sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, "
+                sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, doc_date, "
                        "1.0 - vector_distance_cos(embedding, ?) AS score "
                        f"FROM chunks WHERE {where} ORDER BY score DESC LIMIT ?")
                 rows = self._conn.execute(

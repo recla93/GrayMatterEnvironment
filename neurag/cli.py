@@ -105,6 +105,10 @@ def build_parser() -> argparse.ArgumentParser:
     rem = sub.add_parser("remove-node", help="Delete a node and its whole subtree")
     rem.add_argument("name", help="Name of the node to delete")
 
+    arc = sub.add_parser("archive", help="Declare a node history: out of default search, never deleted")
+    arc.add_argument("name", help="Name of the node to archive")
+    arc.add_argument("--restore", action="store_true", help="Bring it back to the active layer")
+
     sub.add_parser("health", help="Structural audit of the vault (integrity check)")
 
     sub.add_parser("doctor", help="Environment + vault health snapshot (tier, embedder, gateway)")
@@ -190,7 +194,7 @@ COMMAND_GROUPS = {
     "chunk": "maintenance", "add-node": "maintenance",
     "add-chunks": "maintenance", "import": "maintenance",
     "ingest": "maintenance", "reindex": "maintenance", "rename-node": "maintenance",
-    "remove-node": "maintenance",
+    "remove-node": "maintenance", "archive": "maintenance",
     "config": "tuning", "repair": "lifecycle", "record-paths": "lifecycle",
     "register": "lifecycle", "deregister": "lifecycle", "uninstall": "lifecycle",
     "go-standalone": "lifecycle", "gui": "lifecycle",
@@ -869,6 +873,9 @@ def _dispatch() -> None:
     elif args.command == "remove-node":
         if _run_via_gm("knowledge_remove_node", {"name": args.name}):
             return
+    elif args.command == "archive":
+        if _run_via_gm("knowledge_archive", {"name": args.name, "restore": args.restore}):
+            return
 
     # Turso è il tier di default: KnowledgeGraph prova ad acquisirlo dalle
     # wheel (X tentativi). Le letture funzionano sempre (shared lock); le
@@ -1096,6 +1103,14 @@ def _dispatch() -> None:
             sys.exit(1)
         n = db.delete_node(node["id"])
         print(f"[ok] deleted {n} nodes (subtree included).")
+
+    elif args.command == "archive":
+        node = db.get_node_by_name(args.name)
+        if not node:
+            print(f"Node '{args.name}' not found.", file=sys.stderr)
+            sys.exit(1)
+        n = db.archive(node["id"], restore=args.restore)
+        print(f"[ok] {n} node(s) {'restored' if args.restore else 'archived'}.")
 
     elif args.command == "health":
         h = db.health()

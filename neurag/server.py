@@ -58,7 +58,8 @@ def _as_data(text: str) -> str:
 _ADMIN_TOOLS = frozenset({"knowledge_index", "knowledge_add_node", "knowledge_add_chunks",
                           "knowledge_health", "knowledge_link_graph", "knowledge_rebuild_links",
                           "knowledge_reindex", "knowledge_neighbors", "knowledge_related",
-                          "knowledge_remove_node", "knowledge_rename_node", "knowledge_import"})
+                          "knowledge_remove_node", "knowledge_rename_node", "knowledge_import",
+                          "knowledge_archive"})
 
 
 def _announced() -> list[Tool]:
@@ -239,6 +240,8 @@ def _tools() -> list[Tool]:
                         "type": "integer", "description": "Number of results (1-10, default 5; 2-3 is usually enough, each costs ~100 tokens)",
                         "default": 5, "minimum": 1, "maximum": 10,
                     },
+                    "archive": {"type": "boolean", "default": False,
+                                "description": "Also search what was declared history (how it was, not how it is)"},
                 },
                 "required": ["query"],
             },
@@ -326,6 +329,20 @@ def _tools() -> list[Tool]:
         Tool(
             name="knowledge_remove_node",
             description="Delete a node and its entire subtree (children, chunks, links). "
+        Tool(
+            name="knowledge_archive",
+            description="Declare a node (and its subtree) history: it leaves the default "
+                        "search and stays reachable with knowledge_query(archive=true). "
+                        "Nothing is deleted. restore=true brings it back (ADR-017 D1).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the node to archive"},
+                    "restore": {"type": "boolean", "default": False},
+                },
+                "required": ["name"],
+            },
+        ),
                         "Runs server-side on the single DB writer (the Gray-Matter worker "
                         "or the standalone CLI) — never a second process.",
             inputSchema={
@@ -594,7 +611,8 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "knowledge_query":
         query = arguments["query"]
         top_n = min(int(arguments.get("top_n", 5)), 10)
-        node = db.find_node_by_trigger(query)
+        archive = bool(arguments.get("archive"))
+        node = None if archive else db.find_node_by_trigger(query)
         if node:
             # The trigger match was the only path that never recorded usage:
             # the most consulted nodes accumulated zero touches and became
@@ -616,14 +634,18 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
                 lines.append(_as_data("\n".join(body)))
             return [TextContent(type="text", text="\n".join(lines))]
         # Fallback: semantic (embedder on) or lexical TF-IDF ranking
-        top = db.search(query, top_n)
+        top = db.search(query, top_n, deep=archive)
         if not top:
             return [TextContent(type="text", text="No results found.")]
         body = []
         for i, c in enumerate(top):
             # cos is the absolute relevance (0-1); the order is the fused rank.
             rel = f"  (cos {c['cos']:.2f})" if c.get("cos") is not None else ""
-            body.append(f"  [{i+1}] {c['source']} :: {c['section'] or ''}{rel}")
+            # ADR-017 D1: how old the knowledge is, and whether it is history.
+            when = f" [{c['doc_date']}]" if c.get("doc_date") else ""
+            if archive and ((db.get_node(c["node_id"]) or {}).get("layer") or 2) > db.LAYER_ACTIVE:
+                when += " [archive]"
+            body.append(f"  [{i+1}] {c['source']} :: {c['section'] or ''}{when}{rel}")
             body.append(f"       {c['text'][:200]}...")
             body.append("")
         return [TextContent(type="text", text="\n".join(
@@ -670,6 +692,14 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "knowledge_rename_node":
         name = arguments["name"]
         new_name = arguments["new_name"]
+    if name == "knowledge_archive":
+        node = db.get_node_by_name(arguments["name"])
+        if not node:
+            return [TextContent(type="text", text=f"Node '{arguments['name']}' not found.")]
+        n = db.archive(node["id"], restore=bool(arguments.get("restore")))
+        verb = "restored to the active layer" if arguments.get("restore") else "archived"
+        return [TextContent(type="text", text=f"[ok] {n} node(s) {verb}.")]
+
         node = db.get_node_by_name(name)
         if not node:
             return [TextContent(type="text", text=f"Nodo '{name}' non trovato.")]

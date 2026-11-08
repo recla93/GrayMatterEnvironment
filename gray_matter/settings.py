@@ -30,7 +30,7 @@ DEFAULTS = {
     # -- quanto contesto GM inietta -------------------------------------------
     # Il punto di tutto il progetto è FAR RISPARMIARE token, quindi la quantità
     # iniettata è un budget, non un effetto collaterale.
-    "knowledge_top_n": 5,          # chunk di vault per pulse (1-10)
+    "knowledge_top_n": 3,          # vault chunks per pulse (1-10); ~100 tokens each (ADR-017 D6)
     # Memoria (Neuron): `get_context` applica già un budget in caratteri da
     # `max_tokens`, ma GM non glielo passava, quindi la voce più antica della
     # pulse era l'unica che l'utente non poteva toccare. Il default è lo stesso

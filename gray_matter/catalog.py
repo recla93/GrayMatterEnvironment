@@ -491,6 +491,12 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
         "Deletes a node and its whole subtree, chunks included.",
         "Destructive and cannot be undone: check with 'tree' first.",
     ),
+    ("neurag", "archive"): (
+        "Dichiara storia un nodo: esce dalla ricerca normale, resta raggiungibile, non si cancella.",
+        "Per documenti vecchi che rispondono ancora al posto di quelli attuali. --restore lo riporta.",
+        "Declares a node history: out of the default search, still reachable, never deleted.",
+        "For old documents that keep answering instead of the current ones. --restore brings it back.",
+    ),
     ("neuron", "config"): (
         "Configurazione Neuron: quanti concetti tiene ogni grafo prima di archiviarne.",
         "Alzalo se la memoria dimentica concetti che ti servono; vale dal prossimo avvio. Parti da action=list.",
