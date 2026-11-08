@@ -15,6 +15,7 @@ than a blocked message.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -43,13 +44,39 @@ def fit(text: str) -> str:
     return text if len(text) <= BUDGET else text[:BUDGET - 1] + "…"
 
 
+def session_memory(transcript: str) -> tuple[bool, list]:
+    """What this hook already injected in the session, read from the transcript:
+    (a profile was shown, the fact ids shown). The transcript, not the daemon,
+    is the record: the daemon forgets on restart, and a cold recall the hook gave
+    up on (live 2026-11-08) showed nothing, so it must not count."""
+    shown, ids = False, set()
+    try:
+        lines = Path(transcript).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False, []
+    for ln in lines:
+        if '"hook_additional_context"' not in ln:
+            continue
+        try:
+            a = json.loads(ln).get("attachment") or {}
+        except ValueError:
+            continue
+        for c in a.get("content") or []:
+            c = str(c)
+            shown = shown or "profile: [" in c
+            ids.update(re.findall(r"#([0-9a-f]{8})\b", c))
+    return shown, sorted(ids)
+
+
 def recall(payload: dict) -> str:
     prompt = str(payload.get("prompt") or "")
     if not worth_recalling(prompt):
         return ""
+    profile_shown, ids = session_memory(str(payload.get("transcript_path") or ""))
     # No ping first: without a daemon the connection is refused at once, and _ipc gives ''.
     return fit(_ipc({"action": "recall", "prompt": prompt[:300],
-                     "session": str(payload.get("session_id") or "")}))
+                     "session": str(payload.get("session_id") or ""),
+                     "profile": not profile_shown, "exclude": ids}))
 
 
 # --- save: did the turn leave its facts? (ADR-015 phase 3) ------------------

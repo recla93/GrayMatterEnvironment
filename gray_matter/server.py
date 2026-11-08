@@ -819,11 +819,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # ADR-015 D7.1 for clients without the hook: a stdio gateway lives as long
     # as its client's session, so its first pre_turn carries the profile.
     global _PROFILE_SENT
-    if server.name == "neuron" and name == "pre_turn" and not _PROFILE_SENT:
-        arguments = {**arguments, "profile": True}
+    if server.name == "neuron" and name == "pre_turn":
+        arguments = {**arguments, "exclude": sorted(_flashed), "profile": not _PROFILE_SENT}
         _PROFILE_SENT = True
 
     result = await _call_server_async(server.name, name, arguments)
+    if server.name == "neuron" and name == "pre_turn":
+        _note_facts(result, _flashed)
     # The KB travels on the call the model really makes (see _knowledge_hint).
     is_pre = server.name == "neuron" and name == "pre_turn"
     kb = (await _knowledge_hint(arguments) if is_pre else "")
@@ -1334,7 +1336,14 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
-_HOOK_SEEN: dict = {}            # session -> (kb pointers shown, concepts flashed)
+_HOOK_SEEN: dict = {}            # session -> (kb pointers shown, fact ids shown: recalled or flashed)
+_FACT_ID = re.compile(r"#([0-9a-f]{8})\b")
+
+
+def _note_facts(text: str, seen: set) -> None:
+    """ADR-015 D7: remember the fact ids a pre_turn showed, so neither the next
+    pre_turn nor a flash brings them back in the same session."""
+    seen.update(_FACT_ID.findall(text or ""))
 _PROFILE_SENT = False            # this gateway process already served the user/habit facts
 _HOOK_SESSIONS_MAX = 50          # ponytail: clear-all when full; LRU if sessions ever overlap that much
 # ponytail: threshold tuned on 5 real messages (2026-11-05): the 2 useful ones
@@ -1371,7 +1380,8 @@ async def _kb_vector_pointer(text: str, shown: set) -> str:
     return f'\n\n📚 KB: "{label}" (cos {m.group(2)}) → knowledge_query for the detail'
 
 
-async def _hook_recall(prompt: str, session: str) -> str:
+async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
+                       exclude: "list | None" = None) -> str:
     """ADR-014: what the UserPromptSubmit hook injects, composed in ONE IPC call.
 
     Context, KB pointer, brainstorm hint, plus the flash. The KB search needs only
@@ -1380,8 +1390,11 @@ async def _hook_recall(prompt: str, session: str) -> str:
     stays a courier: start, one request, print."""
     if session not in _HOOK_SEEN and len(_HOOK_SEEN) >= _HOOK_SESSIONS_MAX:
         _HOOK_SEEN.clear()
-    first = session not in _HOOK_SEEN
+    # The hook reads both from the transcript (memhook.session_memory); an older
+    # hook sends neither, and the daemon's own per-session record stands in.
+    first = (session not in _HOOK_SEEN) if profile is None else bool(profile)
     shown, flashed = _HOOK_SEEN.setdefault(session, (set(), set()))
+    flashed.update(str(i) for i in (exclude or []))
     q = " ".join(prompt.split())[:300]
     kb_task = asyncio.ensure_future(_kb_vector_pointer(q, shown))
     # The whole message is the topic, no extracted keywords: pre_turn searches
@@ -1390,17 +1403,19 @@ async def _hook_recall(prompt: str, session: str) -> str:
     # 2026-11-06: extracted topic -> wasapi/endpoint-audio, message -> release/
     # installer/daemon. ponytail: no keywords at all; graph-filtered ones only
     # if the dry-run log shows recall missing concepts the message names.
-    args = {"topic": q, "profile": first}     # ADR-015 D7.1: user/habit once per session
+    args = {"topic": q, "profile": first,      # ADR-015 D7.1: user/habit once per session
+            "exclude": sorted(flashed)}
     _inject_neuron_mode(args)
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
         _maybe_flash(args["topic"], flashed),
         kb_task)
+    from gray_matter.memhook import BUDGET
+    _note_facts(ctx, flashed)
     extra = kb + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
     # The hook cuts at memhook.BUDGET from the END: three long facts filled it
     # and the flash and the KB pointer, last, were cut away (live, 2026-11-08).
     # Room for them first, then the memory context gets what is left.
-    from gray_matter.memhook import BUDGET
     ctx, room = ctx or "", BUDGET - len(extra)
     if len(ctx) > room:
         ctx = ctx[:max(0, room - 1)].rstrip() + "…"
@@ -1657,7 +1672,8 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     _last_call_time = time.time()
                     try:
                         response = {"result": await _hook_recall(
-                            str(msg.get("prompt") or ""), str(msg.get("session") or ""))}
+                            str(msg.get("prompt") or ""), str(msg.get("session") or ""),
+                            msg.get("profile"), msg.get("exclude"))}
                     except Exception as e:
                         response = {"error": str(e)}
                 elif action == "schemas":
