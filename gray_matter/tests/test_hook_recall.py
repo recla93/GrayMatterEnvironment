@@ -59,6 +59,24 @@ def test_one_request_brings_context_and_flash(srv):
     assert '📚 KB: "INSTALL.md :: Install > Long paths" (cos 0.61)' in out, out
 
 
+def test_recall_searches_the_message_not_the_extracted_words(srv, monkeypatch):
+    """extract lasciava passare saluti e verbi (`ciao`, `visto`), e pre_turn
+    cerca ogni parola chiave come una chiave a se': ognuna rubava un posto nel
+    contesto. Il messaggio intero e' una chiave sola, col significato dentro."""
+    seen = {}
+    fake = srv._call_server_async
+
+    async def spy(server, tool, args):
+        if tool == "pre_turn":
+            seen.update(args)
+        return await fake(server, tool, args)
+    monkeypatch.setattr(srv, "_call_server_async", spy)
+    msg = "Ciao! Ho visto che ieri hai pushato. Come va la suite?"
+    asyncio.run(srv._hook_recall(msg, "s1"))
+    assert seen["topic"] == msg and not seen.get("keywords"), seen
+    assert "extract" not in srv._calls
+
+
 def test_each_session_has_its_own_cooldown(srv):
     a1 = asyncio.run(srv._hook_recall("primo messaggio abbastanza lungo", "s1"))
     a2 = asyncio.run(srv._hook_recall("secondo messaggio su altro tema", "s1"))

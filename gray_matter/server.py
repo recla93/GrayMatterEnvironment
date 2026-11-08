@@ -512,10 +512,11 @@ GM_INSTRUCTIONS = (
     "Gray-Matter gateway: Neuron (persistent semantic memory) + NeuRAG (knowledge "
     "base) behind one proxy — their tools are served here pass-through.\n"
     "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying (fold "
-    "the returned context in silently), then store_turn(topic, keywords, links) "
-    "AFTER, to persist what is new. gray_matter_pulse(topic) merges memory + "
-    "knowledge + flash in one call.\n"
-    "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a "
+    "the returned context in silently), then store_turn(facts=[{kind, text, "
+    "concepts}]) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits. "
+    "gray_matter_pulse(topic) merges memory + knowledge + flash in one call.\n"
+    "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
+    "supersedes=<#id>; links typed, never a "
     "self-link; before minting a concept check find_candidates; never store "
     "secrets or tokens. Skip on procedural turns (ack/thanks/yes-no)."
 )
@@ -1406,12 +1407,13 @@ async def _hook_recall(prompt: str, session: str) -> str:
     shown, flashed = _HOOK_SEEN.setdefault(session, (set(), set()))
     q = " ".join(prompt.split())[:300]
     kb_task = asyncio.ensure_future(_kb_vector_pointer(q, shown))
-    try:
-        ex = json.loads(await _call_server_async("neuron", "extract", {"text": q}) or "{}")
-    except (ValueError, TypeError):
-        ex = {}
-    args = {"topic": str(ex.get("topic") or q[:120]),
-            "keywords": [str(k) for k in (ex.get("keywords") or [])][:5]}
+    # The whole message is the topic, no extracted keywords: pre_turn searches
+    # each keyword as its own key, and extract (a closed stopword list) handed
+    # it `ciao`, `visto`, `dovremmo` — each one taking a context slot. Measured
+    # 2026-11-06: extracted topic -> wasapi/endpoint-audio, message -> release/
+    # installer/daemon. ponytail: no keywords at all; graph-filtered ones only
+    # if the dry-run log shows recall missing concepts the message names.
+    args = {"topic": q}
     _inject_neuron_mode(args)
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),

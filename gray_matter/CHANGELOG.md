@@ -1,6 +1,24 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **Il gateway chiede fatti, non parole (ADR-015).** Le istruzioni MCP del
+  gateway dicevano `store_turn(topic, keywords, links)`; ora dicono
+  `store_turn(facts=[{kind, text, concepts}])` e cosa vale la pena salvare
+  (avanzamenti, decisioni, fix, dettagli, idee, l'utente e le sue abitudini),
+  come gli hook e Neuron stesso.
+- **L'hook `Stop` controlla che il turno abbia salvato un fatto (ADR-015,
+  fase 3).** `memhook.py save` non estrae più parole dal messaggio (la prova
+  dell'ADR-014 teneva solo quelle già nodi, e 4 messaggi su 5 non salvavano
+  niente). Legge il transcript: se il turno ha lavorato o ha risposto a lungo e
+  nessun `store_turn` porta `facts`, rimanda il modello una volta con
+  `decision: block`; al secondo `Stop` (`stop_hook_active`) lascia chiudere.
+  Funziona anche a daemon spento.
+- **Il richiamo dell'hook manda il messaggio intero.** `_hook_recall` passava
+  a `pre_turn` le parole di `neuron extract`, una lista chiusa di stopword che
+  lasciava passare `ciao`, `visto`, `dovremmo`. Ora passa il messaggio come
+  topic, e toglie una chiamata IPC. Con la lettura per fatti di Neuron (ADR-015
+  fase 2) sul bench: fatti trovati 52% contro 39%, zero fatti sui fuori tema
+  contro 4. La lista di parole somigliava al fatto che parla di stopword.
 - **L'install aggancia il memhook (ADR-014, fase 2).** Il deploy degli hook di
   Claude Code copia `memhook.py` in `~/.claude/hooks/gm_memhook.py` e lo
   registra: `recall` su `UserPromptSubmit`, `save` (ancora dry-run) su `Stop`,

@@ -1,7 +1,7 @@
 """Il loop di memoria come hook di Claude Code (ADR-014, mock).
 
     python -I <percorso>/memhook.py recall   # UserPromptSubmit: contesto prima della risposta
-    python -I <percorso>/memhook.py save     # Stop: cosa registrerebbe a fine turno (dry-run)
+    python -I <percorso>/memhook.py save     # Stop: il turno ha salvato i suoi fatti? (ADR-015)
 
 `-I` e il percorso del file, non `-m`: `-m` mette la cartella corrente in testa a
 `sys.path`, e dalla radice del repo importerebbe il sorgente invece del venv.
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from pathlib import Path
 
 TIMEOUT = 2.5            # secondi per la richiesta IPC
@@ -32,23 +31,11 @@ def _ipc(msg: dict) -> str:
     return "" if not isinstance(r, dict) or "error" in r else str(r.get("result") or "")
 
 
-def _call(server: str, tool: str, args: dict) -> str:
-    return _ipc({"action": "call", "server": server, "tool": tool, "args": args})
-
-
 def worth_recalling(prompt: str) -> bool:
     p = prompt.strip()
     if len(p) < MIN_CHARS or p.startswith("/"):
         return False
     return p.lower().strip(" .!?") not in ACKS
-
-
-def _keywords(prompt: str) -> tuple[str, list]:
-    try:
-        d = json.loads(_call("neuron", "extract", {"text": prompt}) or "{}")
-    except ValueError:
-        return "", []
-    return str(d.get("topic", "")), list(d.get("keywords", []))[:5]
 
 
 def fit(text: str) -> str:
@@ -65,7 +52,19 @@ def recall(payload: dict) -> str:
                      "session": str(payload.get("session_id") or "")}))
 
 
-# --- save (dry-run) ----------------------------------------------------------
+# --- save: il turno ha lasciato i suoi fatti? (ADR-015 fase 3) ---------------
+#
+# Il fatto lo scrive il modello; l'hook controlla che ci sia. Non estrae niente
+# dal messaggio: la versione di prova (ADR-014 D4) teneva solo le parole gia'
+# nodi, e 4 messaggi su 5 non avrebbero salvato niente. Legge solo il
+# transcript, quindi funziona anche a daemon spento.
+
+SUBSTANTIVE_CHARS = 600   # una risposta piu' lunga di cosi' e' un turno di sostanza
+REMIND = ("[memoria] Questo turno non ha salvato nessun fatto. Se c'e' qualcosa da non "
+          "dover ripetere (avanzamenti, decisioni, fix, dettagli, idee, l'utente e le sue "
+          "abitudini), chiama store_turn(facts=[{kind, text, concepts}]) e poi chiudi. "
+          "Se non c'e' niente, chiudi senza aggiungere altro.")
+
 
 def _entries(transcript: str) -> list:
     try:
@@ -94,48 +93,55 @@ def _is_user_turn(e: dict) -> bool:
     return not any(b.get("type") == "tool_result" for b in _blocks(e))
 
 
-def last_turn(entries: list) -> tuple[str, bool]:
-    """(testo dell'ultimo messaggio vero dell'utente, store_turn chiamato dopo?)"""
-    prompt, saved = "", False
+def _is_memory_tool(name: str) -> bool:
+    return "gray-matter" in name or "neuron" in name.lower()
+
+
+def _wrote_fact(b: dict) -> bool:
+    """A store_turn that carries a fact: `facts` with an entry, or the legacy
+    `episode`. One with only keywords saves words, which is what ADR-015 ends."""
+    if b.get("type") != "tool_use" or not str(b.get("name", "")).endswith("store_turn"):
+        return False
+    a = b.get("input") if isinstance(b.get("input"), dict) else {}
+    return bool(a.get("facts")) or bool(str(a.get("episode") or "").strip())
+
+
+def last_turn(entries: list) -> tuple[str, bool, int, int]:
+    """For the last real user message: (its text, a fact was saved after it,
+    tool calls that did work — memory tools excluded —, characters answered)."""
+    prompt, wrote, work, chars = "", False, 0, 0
     for e in entries:
         if _is_user_turn(e):
             c = (e.get("message") or {}).get("content")
             prompt = c if isinstance(c, str) else " ".join(
                 b.get("text", "") for b in _blocks(e) if b.get("type") == "text")
-            saved = False
-        elif any(b.get("type") == "tool_use" and str(b.get("name", "")).endswith("store_turn")
-                 for b in _blocks(e)):
-            saved = True
-    return prompt, saved
-
-
-def existing(keywords: list) -> list:
-    """Le parole che sono già nomi di nodi: le altre non diventano concetti."""
-    if not keywords:
-        return []
-    out = _call("neuron", "find_candidates", {"keywords": keywords, "top_n": 20})
-    names = {ln.split()[0] for ln in out.splitlines() if "sim=" in ln}
-    return [k for k in keywords if k in names]
+            wrote, work, chars = False, 0, 0
+            continue
+        if e.get("type") != "assistant":
+            continue
+        for b in _blocks(e):
+            if _wrote_fact(b):
+                wrote = True
+            elif b.get("type") == "tool_use" and not _is_memory_tool(str(b.get("name", ""))):
+                work += 1
+            elif b.get("type") == "text":
+                chars += len(str(b.get("text") or ""))
+    return prompt, wrote, work, chars
 
 
 def save(payload: dict) -> str:
-    prompt, saved = last_turn(_entries(str(payload.get("transcript_path") or "")))
-    if saved or not worth_recalling(prompt):
+    """The reason to send the model back to work once, or "" to let it stop.
+    Only for a real message (not an ack or a command) whose turn did work or
+    answered at length, and only the first time: `stop_hook_active` means this
+    Stop already follows our own block, and a second one would loop."""
+    if payload.get("stop_hook_active"):
         return ""
-    topic, kws = _keywords(prompt[:600])
-    if not topic and not kws:                   # daemon assente o estrazione vuota
+    prompt, wrote, work, chars = last_turn(_entries(str(payload.get("transcript_path") or "")))
+    if wrote or not worth_recalling(prompt):
         return ""
-    keep = existing(kws)
-    from gray_matter.paths import logs_dir
-    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "session": payload.get("session_id"),
-           "topic": topic, "extracted": kws, "would_store": keep, "prompt": prompt[:200]}
-    try:
-        logs_dir().mkdir(parents=True, exist_ok=True)
-        with open(logs_dir() / "memhook-save.jsonl", "a", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-    return ""                                   # dry-run: niente nel contesto
+    if work == 0 and chars < SUBSTANTIVE_CHARS:
+        return ""
+    return REMIND
 
 
 def main(argv: list) -> None:
@@ -147,10 +153,12 @@ def main(argv: list) -> None:
         text = recall(payload) if mode == "recall" else save(payload)
     except Exception:  # noqa: BLE001 — un hook non rompe mai il messaggio dell'utente
         return
-    if text:
-        out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                      "additionalContext": text}}
-        sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+    if not text:
+        return
+    out = ({"decision": "block", "reason": text} if mode == "save" else
+           {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                   "additionalContext": text}})
+    sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
 
 
 if __name__ == "__main__":

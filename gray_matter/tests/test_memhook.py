@@ -15,21 +15,81 @@ def test_acks_commands_and_short_text_are_not_recalled():
 
 
 
-def test_save_sees_a_store_turn_after_the_last_prompt(tmp_path):
-    user = {"type": "user", "message": {"role": "user", "content": "una domanda vera"}}
-    call = {"type": "assistant", "message": {"content": [
-        {"type": "tool_use", "name": "mcp__gray-matter__store_turn", "input": {}}]}}
-    result = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
-    assert mh.last_turn([user, call, result]) == ("una domanda vera", True)
-    assert mh.last_turn([call, user]) == ("una domanda vera", False)
+# --- Stop (ADR-015 fase 3): il modello scrive il fatto, l'hook controlla ------
+
+USER = {"type": "user", "message": {"role": "user", "content": "sistema il test che fallisce"}}
+RESULT = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
 
 
-def test_save_keeps_only_words_that_are_already_nodes(monkeypatch):
-    fc = ("Candidates for [...]:\n"
-          "  flash                 sim=0.55  links: ...\n"
-          "  pulse                 sim=0.56  links: ...\n")
-    monkeypatch.setattr(mh, "_call", lambda *a: fc)
-    assert mh.existing(["pulse", "parliamo", "flash", "qualcosa"]) == ["pulse", "flash"]
+def _assistant(*blocks):
+    return {"type": "assistant", "message": {"content": list(blocks)}}
+
+
+def _tool(name, **inp):
+    return {"type": "tool_use", "name": name, "input": inp}
+
+
+def _stop(tmp_path, *entries, **payload):
+    t = tmp_path / "t.jsonl"
+    t.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8", newline="\n")
+    return mh.save({"transcript_path": str(t), **payload})
+
+
+def test_a_working_turn_without_a_fact_is_sent_back_once(tmp_path):
+    turn = (USER, _assistant(_tool("Edit", file_path="x.py")), RESULT,
+            _assistant({"type": "text", "text": "fatto"}))
+    assert _stop(tmp_path, *turn) == mh.REMIND
+    assert _stop(tmp_path, *turn, stop_hook_active=True) == "", "the second Stop must pass: no loop"
+
+
+def test_a_fact_saved_after_the_prompt_lets_the_turn_end(tmp_path):
+    fact = _tool("mcp__gray-matter__store_turn",
+                 facts=[{"kind": "fix", "text": "x", "concepts": ["test"]}])
+    assert _stop(tmp_path, USER, _assistant(_tool("Bash", command="pytest")), RESULT,
+                 _assistant(fact), RESULT) == ""
+    legacy = _tool("mcp__neuron__store_turn", topic="t", keywords=["k"], episode="un fatto")
+    assert _stop(tmp_path, USER, _assistant(_tool("Bash")), RESULT, _assistant(legacy)) == ""
+
+
+def test_keywords_alone_are_not_a_fact(tmp_path):
+    words = _tool("mcp__gray-matter__store_turn", topic="t", keywords=["k"])
+    assert _stop(tmp_path, USER, _assistant(_tool("Edit")), RESULT,
+                 _assistant(words), RESULT) == mh.REMIND
+
+
+def test_a_fact_of_an_earlier_turn_does_not_count(tmp_path):
+    fact = _tool("mcp__gray-matter__store_turn", facts=[{"kind": "fact", "text": "x", "concepts": ["a"]}])
+    assert _stop(tmp_path, USER, _assistant(fact), RESULT,
+                 USER, _assistant(_tool("Edit")), RESULT) == mh.REMIND
+
+
+def test_chatter_and_acks_are_let_through(tmp_path):
+    short = _assistant({"type": "text", "text": "Si', e' cosi'."})
+    assert _stop(tmp_path, USER, short) == "", "a short answer with no work is not a turn of substance"
+    memory_only = _assistant(_tool("mcp__gray-matter__pre_turn", topic="x"),
+                             {"type": "text", "text": "ok"})
+    assert _stop(tmp_path, USER, memory_only, RESULT) == "", "memory tools are not work"
+    ack = {"type": "user", "message": {"content": "grazie"}}
+    assert _stop(tmp_path, ack, _assistant(_tool("Edit")), RESULT) == ""
+    long = _assistant({"type": "text", "text": "x" * mh.SUBSTANTIVE_CHARS})
+    assert _stop(tmp_path, USER, long) == mh.REMIND, "a long answer is a turn of substance"
+
+
+def test_no_transcript_no_block(tmp_path):
+    assert mh.save({"transcript_path": str(tmp_path / "missing.jsonl")}) == ""
+
+
+def test_the_stop_output_is_the_block_shape(monkeypatch):
+    import io
+    import sys
+    monkeypatch.setattr(mh, "save", lambda p: "torna al lavoro")
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b'{}')))
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="utf-8"))
+    mh.main(["memhook", "save"])
+    sys.stdout.flush()
+    assert json.loads(buf.getvalue().decode("utf-8")) == {"decision": "block",
+                                                           "reason": "torna al lavoro"}
 
 
 def test_main_never_raises_on_garbage(monkeypatch, capsys):
