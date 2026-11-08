@@ -44,7 +44,7 @@ def test_wiring_reports_a_hook_entry_that_cannot_run(env):
     `doctor` usciva subito con "not running" perche' chiedeva a un server che
     per l'appunto non partiva."""
     home = env / "home"
-    (home / ".claude.json").write_text("{}")   # Claude Code c'e': gli hook sono attesi
+    (home / ".claude.json").write_text("{}")   # Claude Code is there: hooks are expected
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     dead = str(env / "venv-sparito" / "python.exe")
     (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": [
@@ -62,7 +62,7 @@ def test_wiring_reports_a_deployed_hook_older_than_the_source(env):
     """Un deploy vecchio resta li' per sempre: l'hook stantio che parlava di
     `mcp__neuron5__*` e' vissuto per mesi cosi'."""
     home = env / "home"
-    (home / ".claude.json").write_text("{}")   # Claude Code c'e': gli hook sono attesi
+    (home / ".claude.json").write_text("{}")   # Claude Code is there: hooks are expected
     dst = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text("# una copia vecchia\n", encoding="utf-8")
@@ -92,7 +92,7 @@ class _FakeDist:
 
 
 class _InstalledDist(_FakeDist):
-    """Un dist con posizione su disco, come lo vede importlib.metadata."""
+    """A dist with a location on disk, as importlib.metadata sees it."""
     def __init__(self, name, version, site, editable=False):
         super().__init__(name, version)
         self._site, self._editable = site, editable
@@ -107,9 +107,9 @@ class _InstalledDist(_FakeDist):
 
 
 def test_wiring_says_when_the_code_comes_from_the_current_folder(env, monkeypatch, tmp_path):
-    """Lanciato dalla radice del repo, il python del venv importa il sorgente.
-    Il doctor dava "dist-info 1.5.3, codice 1.6.0" su un'installazione sana, e
-    suggeriva una reinstallazione inutile (2026-11-03)."""
+    """Launched from the repo root, the venv's python imports the source.
+    The doctor said "dist-info 1.5.3, codice 1.6.0" on a healthy install, and
+    suggested a useless reinstall (2026-11-03)."""
     import importlib.metadata as md
     import neuron
     site = tmp_path / "venv" / "site-packages"
@@ -400,7 +400,7 @@ def test_wiring_does_not_tell_you_to_delete_a_newer_deployed_hook(env):
     significa che il DEPLOY e' avanti, e il rimedio e' l'inverso del repair.
     """
     home = env / "home"
-    (home / ".claude.json").write_text("{}")   # Claude Code c'e': gli hook sono attesi
+    (home / ".claude.json").write_text("{}")   # Claude Code is there: hooks are expected
     dst = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
     dst.parent.mkdir(parents=True, exist_ok=True)
     src = ASSETS / "claude-code-hook" / "neuron_sessionstart_hook.py"
@@ -456,10 +456,10 @@ def test_wiring_flags_a_daemon_older_than_the_code(env, monkeypatch, tmp_path):
 
 
 def test_wiring_sees_the_stale_desktop_config_outside_the_package(env, monkeypatch):
-    r"""2026-11-05, sul vivo: l'installer aveva riscritto %APPDATA%\Claude, ma
-    l'app (MSIX con i dati fuori dal pacchetto) legge Claude-Data\claude_<id>,
-    rimasto col venv vecchio. Popup "comando non trovato", e doctor verde:
-    guardava un file solo, e non quello."""
+    r"""2026-11-05, live: the installer had rewritten %APPDATA%\Claude, but
+    the app (MSIX with its data outside the package) reads Claude-Data\claude_<id>,
+    still on the old venv. A "command not found" popup, and a green doctor:
+    it looked at one file only, and not that one."""
     monkeypatch.setenv("APPDATA", str(env / "Roaming"))
     monkeypatch.setenv("LOCALAPPDATA", str(env / "Local"))
     alive = env / "venv" / "python.exe"
@@ -471,7 +471,7 @@ def test_wiring_sees_the_stale_desktop_config_outside_the_package(env, monkeypat
         p.parent.mkdir(parents=True)
         p.write_text(json.dumps({"mcpServers": {"gray-matter": {
             "command": str(exe), "args": ["-m", "gray_matter.server"]}}}), encoding="utf-8")
-    os.utime(stale, (1, 1))          # il vecchio meccanismo guardava solo il piu' recente
+    os.utime(stale, (1, 1))          # the old mechanism looked only at the newest
 
     r = _wiring(env)["mcp_entries"]
     assert r["ok"] is False
@@ -479,17 +479,17 @@ def test_wiring_sees_the_stale_desktop_config_outside_the_package(env, monkeypat
 
 
 def test_without_claude_code_no_hook_is_expected(env):
-    """Installazione isolata del 2026-11-05: solo l'app desktop, nessun Claude
-    Code. L'installer non mette gli hook, e il doctor dava due [!!] con
-    "repair --reinstall": un'installazione sana dichiarata rotta."""
+    """Isolated install of 2026-11-05: desktop app only, no Claude Code. The
+    installer puts no hooks, and the doctor gave two [!!] with
+    "repair --reinstall": a healthy install declared broken."""
     w = _wiring(env)
     assert w["hook_entry"]["ok"] and w["hook_file"]["ok"], w
     assert "non rilevato" in w["hook_entry"]["detail"]
 
 
 def test_uninstall_takes_the_desktop_shortcut_and_the_icon_with_it(env, monkeypatch):
-    """Installazione isolata del 2026-11-05: dopo l'uninstall restavano l'icona
-    sul Desktop (che lancia un venv cancellato) e gray-matter.ico in graymatter/."""
+    """Isolated install of 2026-11-05: after the uninstall the Desktop icon
+    (launching a deleted venv) and gray-matter.ico in graymatter/ were left."""
     from gray_matter import executor, paths, shortcut
     monkeypatch.setattr(shortcut, "_windows_desktop", lambda: str(env / "Desktop"))
     lnk = shortcut._shortcut_files("Gray Matter")[0]     # .lnk, .desktop o .command

@@ -1,4 +1,4 @@
-"""ADR-014: il daemon compone in una richiesta quello che l'hook di memoria inietta."""
+"""ADR-014: the daemon builds in one request what the memory hook injects."""
 import asyncio
 import json
 from types import SimpleNamespace
@@ -51,7 +51,7 @@ def test_the_flash_is_a_fact_once_per_session(srv):
     again, _ = asyncio.run(srv._maybe_flash("secondo argomento", flashed))
     assert first == "⚡ Flash: [idea] eventi in stile aspect per gli stimoli (around) #0a1b2c3d", first
     assert concept == "around"
-    assert again == "", "lo stesso fatto non torna solo perche' il topic e' cambiato"
+    assert again == "", "the same fact does not come back just because the topic changed"
 
 
 def test_no_dormant_fact_no_flash(srv):
@@ -66,15 +66,15 @@ def test_one_request_brings_context_and_flash(srv):
     out = asyncio.run(srv._hook_recall("parliamo ancora del flash di GM", "s1"))
     assert out.startswith("[neuron] CTX")
     assert "⚡ Flash: [idea]" in out and "around" in out
-    # Il puntatore KB e' vettoriale: la ricerca per nome indicava cartelle intere.
+    # The KB pointer is by vector: the search by name pointed at whole folders.
     assert "knowledge_query" in srv._calls and "knowledge_neighbors" not in srv._calls
     assert '📚 KB: "INSTALL.md :: Install > Long paths" (cos 0.61)' in out, out
 
 
 def test_recall_searches_the_message_not_the_extracted_words(srv, monkeypatch):
-    """extract lasciava passare saluti e verbi (`ciao`, `visto`), e pre_turn
-    cerca ogni parola chiave come una chiave a se': ognuna rubava un posto nel
-    contesto. Il messaggio intero e' una chiave sola, col significato dentro."""
+    """extract let greetings and verbs through (`ciao`, `visto`), and pre_turn
+    searches each keyword as a key of its own: each one stole a place in the
+    context. The whole message is one key, with the meaning inside."""
     seen = {}
     fake = srv._call_server_async
 
@@ -97,7 +97,7 @@ def test_each_session_has_its_own_cooldown(srv):
 
 
 def test_a_gateway_pre_turn_carries_the_flash_too(srv, monkeypatch):
-    """Fase 4: i client senza hook ricevono il flash su pre_turn, senza pulse."""
+    """Phase 4: clients without the hook get the flash on pre_turn, without pulse."""
     from gray_matter.registry import ServerEntry
     neuron = ServerEntry(name="neuron", tool_names=["pre_turn"], socket_path="", pid=0)
     monkeypatch.setattr(srv._registry, "find_server_by_tool",
@@ -111,7 +111,7 @@ def test_a_gateway_pre_turn_carries_the_flash_too(srv, monkeypatch):
 def test_a_weak_kb_match_gives_no_pointer(srv):
     srv._kq_reply = "Top 1 results:\n  [1] D:\\repo\\A.md :: Titolo (1/2)  (cos 0.46)\n"
     out = asyncio.run(srv._hook_recall("dove salva le credenziali Turso per il cloud?", "s1"))
-    assert "📚" not in out, "sotto soglia il vettoriale sbagliava: meglio niente"
+    assert "📚" not in out, "below the threshold the vector hit was wrong: better nothing"
 
 
 def test_the_same_kb_section_is_pointed_at_once_per_session(srv):
@@ -125,7 +125,7 @@ def test_the_vector_pointer_mints_no_bridge(srv, monkeypatch):
     minted = []
     monkeypatch.setattr(bridges, "add_bridge", lambda *a, **k: minted.append(a) or True)
     asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s1"))
-    assert minted == [], "un puntatore e' un suggerimento, un bridge e' un'affermazione"
+    assert minted == [], "a pointer is a suggestion, a bridge is a claim"
 
 
 def test_a_long_memory_context_does_not_cut_the_flash(srv, monkeypatch):

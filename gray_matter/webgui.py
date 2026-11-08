@@ -479,11 +479,11 @@ class Api:
 
     # -- config knobs (settings card) -------------------------------------
     def config_knobs(self, args: str = "") -> dict:
-        """Knob correnti di un ambiente (key, value, type, default, help, suggest).
+        """An environment's current knobs (key, value, type, default, help, suggest).
 
-        Via CLI: ``<tool> config list --json`` — i metadati dei knob vivono nel
-        tool che li possiede (SSOT), la GUI non importa più `settings`. Un tool
-        senza il comando config → il pannello non compare.
+        Via CLI: ``<tool> config list --json`` — knob metadata lives in the tool
+        that owns it (SSOT), the GUI no longer imports `settings`. A tool
+        without the config command → no panel.
         """
         req = _req(args)
         tool = req.get("tool", "")

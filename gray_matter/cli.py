@@ -239,9 +239,9 @@ def cmd_doctor() -> None:
     _report_wiring()
     r = _send_ipc({"action": "doctor"})
     if "error" in r:
-        # Un errore di socket grezzo ("WinError 10061 ...") su un'installazione
-        # appena fatta sembra un guasto, ed e' lo stato normale: il daemon parte
-        # quando un'app AI apre GM. Dirlo, e dire come avviarlo.
+        # A raw socket error ("WinError 10061 ...") on a fresh install looks
+        # like a fault, and it is the normal state: the daemon starts when an
+        # AI app opens GM. Say so, and say how to start it.
         print("Gray-Matter daemon: not running.")
         print("  Normal right after install: it starts when an AI app opens Gray Matter.")
         print("  To start it now: gray-matter start")

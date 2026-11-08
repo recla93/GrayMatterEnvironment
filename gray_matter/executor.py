@@ -101,14 +101,14 @@ def detect_state() -> dict:
 # --------------------------------------------------------------------------
 
 def _shadowed_by(dist, mod) -> str:
-    """La cartella da cui arriva `mod`, se non e' quella della sua installazione.
+    """The folder `mod` comes from, when it is not its installation's.
 
-    `python -m` mette la cartella corrente in testa a sys.path, e la radice del
-    repo ha `gray_matter/` e `neurag/`: lanciato da li', il python del venv
-    importa il sorgente al posto del pacchetto installato. Il doctor allora
-    confrontava l'etichetta del venv col codice del repo e chiamava "mista"
-    un'installazione sana (2026-11-03). Un editable vive fuori per scelta.
-    Senza posizione o senza file (un dist finto, un namespace) non si giudica."""
+    `python -m` puts the current folder first on sys.path, and the repo root
+    holds `gray_matter/` and `neurag/`: launched from there, the venv's python
+    imports the source instead of the installed package. The doctor then
+    compared the venv's label with the repo's code and called a healthy
+    install "mixed" (2026-11-03). An editable lives elsewhere by choice.
+    No location or no file (a fake dist, a namespace): no verdict."""
     try:
         direct = json.loads(dist.read_text("direct_url.json") or "{}")
         if direct.get("dir_info", {}).get("editable"):
@@ -162,20 +162,20 @@ def check_wiring() -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         rec("registry", False, f"non leggibile: {exc}")
 
-    # Gli hook si deployano solo dove Claude Code c'e' (detect_state lo rileva da
-    # ~/.claude.json). Senza, i due controlli sotto davano [!!] e "repair" a chi
-    # usa solo l'app desktop: un'installazione sana dichiarata rotta.
+    # Hooks are deployed only where Claude Code is (detect_state finds it from
+    # ~/.claude.json). Without it, the two checks below gave [!!] and "repair" to
+    # desktop-app-only users: a healthy install declared broken.
     try:
         from gray_matter import clients as _cl
         has_cc = any(os.path.exists(p) for p in _cl.CLIENTS["claude-code"]["paths"]())
-    except Exception:  # noqa: BLE001 — nel dubbio, controlla
+    except Exception:  # noqa: BLE001 — when in doubt, check
         has_cc = True
     if not has_cc:
         rec("hook_entry", True, "Claude Code non rilevato: nessun hook atteso")
         rec("hook_file", True, "Claude Code non rilevato: nessun hook atteso")
     else:
-        # 2. La entry SessionStart deve poter GIRARE: dopo la migrazione il venv ha
-        #    cambiato posto e il comando registrato puntava a un interprete sparito.
+        # 2. The SessionStart entry must be able to RUN: after the migration the
+        #    venv moved and the registered command pointed at a vanished interpreter.
         settings = _claude_dir() / "settings.json"
         try:
             cfg = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
@@ -197,19 +197,19 @@ def check_wiring() -> list[dict]:
         except (json.JSONDecodeError, OSError) as exc:
             rec("hook_entry", False, f"{settings} non leggibile: {exc}")
 
-        # 3. L'hook deployato deve essere il sorgente: un deploy vecchio resta li'
-        #    per sempre, e un hook stantio parla di tool che non esistono piu'.
+        # 3. The deployed hook must be the source: an old deploy stays there
+        #    forever, and a stale hook talks about tools that no longer exist.
         try:
             src = _find_clients_root() / "claude-code-hook" / "neuron_sessionstart_hook.py"
             dst = _claude_dir() / "hooks" / "neuron_sessionstart_hook.py"
             if not dst.exists():
                 rec("hook_file", False, f"non deployato: {dst}", "gray-matter repair --reinstall")
             elif src.exists() and src.read_bytes() != dst.read_bytes():
-                # "Diverso" non vuol dire STANTIO. Il deployato puo' essere piu'
-                # AVANTI del sorgente: modificato in loco e mai portato nel repo.
-                # Nei due casi il rimedio e' opposto, e mandarli allo stesso
-                # consiglio significa proporre di cancellare l'unica copia di un
-                # lavoro (vedi _hook_drift).
+                # "Different" does not mean STALE. The deployed copy can be
+                # AHEAD of the source: edited in place and never brought back.
+                # The two cases need opposite remedies, and one advice for both
+                # means proposing to delete the only copy of some work
+                # (see _hook_drift).
                 added, removed = _hook_drift(src, dst)
                 if added and not removed:
                     rec("hook_file", False,
@@ -303,8 +303,8 @@ def check_wiring() -> list[dict]:
             if body and declared and body != declared:
                 problems.append(f"{dist}: dist-info {declared}, codice {body}")
         if shadowed:
-            # Prima del confronto: con il codice preso dalla cartella corrente
-            # quel confronto e' falso, e il rimedio che suggerirebbe e' sbagliato.
+            # Before the comparison: with code taken from the current folder
+            # that comparison is false, and the remedy it would suggest is wrong.
             rec("versions", False, "; ".join(shadowed),
                 "rilancia da una cartella fuori dal repo: `python -m` importa dalla cartella corrente")
         elif problems:

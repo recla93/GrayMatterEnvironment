@@ -246,7 +246,7 @@ async def _do_promote(apply: bool = False) -> dict:
         raw = await _call_server_async("neuron", "export", {})
         export = _json.loads(raw)
     except Exception as exc:  # noqa: BLE001
-        return {"error": f"Neuron non raggiungibile o export illeggibile: {exc}"}
+        return {"error": f"Neuron unreachable or export unreadable: {exc}"}
 
     cands = _promote.candidates(export)
     written, skipped, already, chunks_written = [], [], [], 0
@@ -260,7 +260,7 @@ async def _do_promote(apply: bool = False) -> dict:
                 "name": _promote.PROMOTE_PARENT, "node_type": "godnode",
                 "triggers": ["memoria", "promosso", "promote", "neuron"]})
         except Exception as exc:  # noqa: BLE001 — "already exists" arrives as text, not as an error
-            return {"error": f"godnode '{_promote.PROMOTE_PARENT}' non creabile: {exc}"}
+            return {"error": f"godnode '{_promote.PROMOTE_PARENT}' could not be created: {exc}"}
         for c in cands:
             try:
                 # The tags it already shares travel with it — that is what makes
@@ -450,20 +450,20 @@ async def _tool_brainstorm(args: dict) -> list[TextContent]:
     n = min(max(int(args.get("n", 5) or 5), 1), 10)
     if not seed:
         return [TextContent(type="text", text=(
-            "gray_matter_brainstorm: serve un 'seed' non vuoto — il problema, il "
-            "dilemma o la decisione. Torna il vicinato non ovvio in memoria (con i "
-            "fatti e le ragioni) e i documenti piu' vicini."))]
-    parts = [f"Spunti attorno a '{seed}'"]
+            "gray_matter_brainstorm: needs a non-empty 'seed' — the problem, the "
+            "dilemma or the decision. Returns the non-obvious neighbourhood in memory "
+            "(with its facts and reasons) and the nearest documents."))]
+    parts = [f"Leads around '{seed}'"]
     try:
         parts.append(await _call_server_async("neuron", "around", {"topic": seed, "n": n}))
-    except Exception as exc:  # noqa: BLE001 — neuron assente: resta la conoscenza
-        parts.append(f"memoria: non disponibile ({exc})")
+    except Exception as exc:  # noqa: BLE001 — no neuron: knowledge remains
+        parts.append(f"memory: unavailable ({exc})")
     try:
         parts.append(await _call_server_async("neurag", "knowledge_query",
                                               {"query": seed, "top_n": min(n, 3)}))
-    except Exception as exc:  # noqa: BLE001 — neurag assente: resta la memoria
-        parts.append(f"conoscenza: non disponibile ({exc})")
-    parts.append("Dormant → confirm(keywords) per rialzarlo; archiviato → recall(keyword).")
+    except Exception as exc:  # noqa: BLE001 — no neurag: memory remains
+        parts.append(f"knowledge: unavailable ({exc})")
+    parts.append("Dormant → confirm(keywords) to raise it; archived → recall(keyword).")
     return [TextContent(type="text", text="\n\n".join(parts))]
 
 
@@ -818,13 +818,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _inject_neuron_mode(arguments)
 
     result = await _call_server_async(server.name, name, arguments)
-    # La KB viaggia sulla call che il modello fa davvero (vedi _knowledge_hint).
+    # The KB travels on the call the model really makes (see _knowledge_hint).
     is_pre = server.name == "neuron" and name == "pre_turn"
     kb = (await _knowledge_hint(arguments) if is_pre else "")
     bs = _brainstorm_hint(arguments) if is_pre else ""
-    # Il flash viaggia sulla stessa call (ADR-014 fase 4): il modello chiama
-    # pre_turn, non pulse, e un ricordo spontaneo non puo' aspettare una
-    # chiamata che nessuno fa. Per i client con l'hook lo da' gia' "recall".
+    # The flash travels on the same call (ADR-014 phase 4): the model calls
+    # pre_turn, not pulse, and a spontaneous recall cannot wait for a call
+    # nobody makes. For clients with the hook, "recall" already gives it.
     flash = ""
     if is_pre and PROACTIVE_BUDGET > 0:
         flash, _c = await _maybe_flash(str(arguments.get("topic", "")))
@@ -1330,8 +1330,8 @@ def _norm(s: str) -> str:
 
 _HOOK_SEEN: dict = {}            # session -> (kb pointers shown, concepts flashed)
 _HOOK_SESSIONS_MAX = 50          # ponytail: clear-all when full; LRU if sessions ever overlap that much
-# ponytail: soglia tarata su 5 messaggi veri (2026-11-05): i 2 utili stavano a
-# 0,55, i 2 sbagliati a 0,45-0,46. Rifarla sul log quando ci sono piu' turni.
+# ponytail: threshold tuned on 5 real messages (2026-11-05): the 2 useful ones
+# scored 0.55, the 2 wrong ones 0.45-0.46. Redo it on the log once there are more turns.
 KB_VECTOR_MIN_COS = 0.55
 _KB_HIT = re.compile(r"\[1\]\s+(.+?)\s+\(cos ([0-9.]+)\)")
 

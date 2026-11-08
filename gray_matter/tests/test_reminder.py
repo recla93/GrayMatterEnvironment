@@ -118,7 +118,7 @@ def test_il_messaggio_nomina_il_tool_giusto(mod):
 def test_meta_non_conta(mod, tmp_path):
     """L'output di un hook rientra come riga role=user: contarlo = auto-conteggio."""
     meta = _line(type="user", isSidechain=False, isMeta=True,
-                 message={"role": "user", "content": "[neuron] 8 turni dall'ultimo..."})
+                 message={"role": "user", "content": "[neuron] 8 turns since the last..."})
     t = _transcript(tmp_path, _prompt(), meta, _prompt())
     assert mod.unsaved_prompts(t) == 2
 

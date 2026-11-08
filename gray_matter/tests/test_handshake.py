@@ -520,10 +520,10 @@ def test_the_gm_install_removes_the_old_reminder(monkeypatch, tmp_path):
 
 
 def test_the_install_wires_the_memory_hook(monkeypatch, tmp_path):
-    """ADR-014 fase 2: il memhook arrivava solo a mano, e a mano non e' mai
-    arrivato — il loop restava affidato al modello, che lo salta. recall su
-    UserPromptSubmit, save su Stop, con -I perche' dalla radice del repo il
-    python del venv importerebbe il sorgente. Due deploy, una entry sola."""
+    """ADR-014 phase 2: the memhook was only wired by hand, and by hand it never
+    was — the loop was left to the model, which skips it. recall on
+    UserPromptSubmit, save on Stop, with -I because from the repo root the
+    venv's python would import the source. Two deploys, one entry."""
     import json
     from gray_matter import executor
 
@@ -534,7 +534,7 @@ def test_the_install_wires_the_memory_hook(monkeypatch, tmp_path):
     deployed, _ = executor._deploy_claude_code(src, dry_run=False)
 
     hook = home / ".claude" / "hooks" / "gm_memhook.py"
-    assert hook.exists() and str(hook) in deployed     # l'uninstall lo cancella
+    assert hook.exists() and str(hook) in deployed     # the uninstall deletes it
     body = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8-sig"))
     for event, mode in (("UserPromptSubmit", "recall"), ("Stop", "save")):
         ours = [c for c in _cmds(body, event) if "gm_memhook" in c]

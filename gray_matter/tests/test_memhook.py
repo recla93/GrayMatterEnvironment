@@ -1,4 +1,4 @@
-"""ADR-014: l'hook porta il contesto da solo, e non rompe mai il messaggio."""
+"""ADR-014: the hook brings the context on its own, and never breaks the message."""
 import json
 
 from gray_matter import memhook as mh
@@ -15,7 +15,7 @@ def test_acks_commands_and_short_text_are_not_recalled():
 
 
 
-# --- Stop (ADR-015 fase 3): il modello scrive il fatto, l'hook controlla ------
+# --- Stop (ADR-015 phase 3): the model writes the fact, the hook checks ------
 
 USER = {"type": "user", "message": {"role": "user", "content": "sistema il test che fallisce"}}
 RESULT = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
@@ -128,12 +128,12 @@ def test_no_daemon_no_output(monkeypatch):
 
 
 def test_a_down_daemon_costs_the_hook_half_a_second_not_two(monkeypatch):
-    """Su Windows una connessione rifiutata a localhost viene ritentata per ~2 s.
-    L'hook gira a ogni messaggio: con il daemon spento deve fallire in fretta."""
+    """On Windows a refused connection to localhost is retried for ~2 s.
+    The hook runs on every message: with the daemon down it must fail fast."""
     import socket
     import time
     import gray_matter.cli as cli
-    with socket.socket() as s:                   # una porta libera, poi chiusa
+    with socket.socket() as s:                   # a free port, then closed
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     monkeypatch.setattr(cli, "resolve_port", lambda: port)

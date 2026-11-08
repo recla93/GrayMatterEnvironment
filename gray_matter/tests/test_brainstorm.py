@@ -62,7 +62,7 @@ def test_one_missing_worker_does_not_empty_the_answer(srv, monkeypatch):
         return "Query: lock\n  [1] docs/DATA.md :: Neuron > Backup"
     monkeypatch.setattr(S, "_call_server_async", half)
     out = _run(srv, seed="lock")
-    assert "memoria: non disponibile" in out and "docs/DATA.md" in out
+    assert "memory: unavailable" in out and "docs/DATA.md" in out
 
 
 def test_an_empty_seed_says_what_to_pass(srv):

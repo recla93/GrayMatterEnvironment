@@ -1,16 +1,16 @@
-"""Il loop di memoria come hook di Claude Code (ADR-014, mock).
+"""The memory loop as a Claude Code hook (ADR-014, mock).
 
-    python -I <percorso>/memhook.py recall   # UserPromptSubmit: contesto prima della risposta
-    python -I <percorso>/memhook.py save     # Stop: il turno ha salvato i suoi fatti? (ADR-015)
+    python -I <path>/memhook.py recall   # UserPromptSubmit: context before the answer
+    python -I <path>/memhook.py save     # Stop: did the turn save its facts? (ADR-015)
 
-`-I` e il percorso del file, non `-m`: `-m` mette la cartella corrente in testa a
-`sys.path`, e dalla radice del repo importerebbe il sorgente invece del venv.
+`-I` and the file path, not `-m`: `-m` puts the current folder first on
+`sys.path`, and from the repo root it would import the source instead of the venv.
 
-Parla solo col daemon, via lo stesso IPC autenticato di CLI e GUI. `recall` e' UNA
-richiesta: il daemon compone contesto, puntatore KB e flash con le funzioni del
-gateway (`server._hook_recall`), gia' caldo. Daemon assente, timeout o qualunque
-errore: l'hook esce senza scrivere niente. Un ricordo mancato costa meno di un
-messaggio bloccato.
+Talks only to the daemon, over the same authenticated IPC as the CLI and GUI.
+`recall` is ONE request: the daemon builds context, KB pointer and flash with the
+gateway's functions (`server._hook_recall`), already warm. No daemon, a timeout
+or any error: the hook exits without writing anything. A missed recall costs less
+than a blocked message.
 """
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ import json
 import sys
 from pathlib import Path
 
-TIMEOUT = 2.5            # secondi per la richiesta IPC
-BUDGET = 1200            # caratteri iniettati, ~300 token
+TIMEOUT = 2.5            # seconds for the IPC request
+BUDGET = 1200            # injected characters, ~300 tokens
 MIN_CHARS = 12
 ACKS = {"ok", "si", "sì", "no", "grazie", "va bene", "perfetto", "fallo", "vai", "procedi"}
 
 
 def _ipc(msg: dict) -> str:
     from gray_matter.cli import FAST_CONNECT, _send_ipc
-    # Daemon spento = niente ricordo, in 0,5 s invece dei ~2 s di Windows.
+    # Daemon down = no recall, in 0.5 s instead of Windows' ~2 s.
     r = _send_ipc(msg, TIMEOUT, connect_timeout=FAST_CONNECT)
     return "" if not isinstance(r, dict) or "error" in r else str(r.get("result") or "")
 
@@ -47,23 +47,23 @@ def recall(payload: dict) -> str:
     prompt = str(payload.get("prompt") or "")
     if not worth_recalling(prompt):
         return ""
-    # Nessun ping prima: senza daemon la connessione e' rifiutata subito, e _ipc da' ''.
+    # No ping first: without a daemon the connection is refused at once, and _ipc gives ''.
     return fit(_ipc({"action": "recall", "prompt": prompt[:300],
                      "session": str(payload.get("session_id") or "")}))
 
 
-# --- save: il turno ha lasciato i suoi fatti? (ADR-015 fase 3) ---------------
+# --- save: did the turn leave its facts? (ADR-015 phase 3) ------------------
 #
-# Il fatto lo scrive il modello; l'hook controlla che ci sia. Non estrae niente
-# dal messaggio: la versione di prova (ADR-014 D4) teneva solo le parole gia'
-# nodi, e 4 messaggi su 5 non avrebbero salvato niente. Legge solo il
-# transcript, quindi funziona anche a daemon spento.
+# The model writes the fact; the hook checks it is there. It extracts nothing
+# from the message: the trial version (ADR-014 D4) kept only words that were
+# already nodes, and 4 messages out of 5 would have saved nothing. It reads only
+# the transcript, so it works with the daemon down too.
 
-SUBSTANTIVE_CHARS = 600   # una risposta piu' lunga di cosi' e' un turno di sostanza
-REMIND = ("[memoria] Questo turno non ha salvato nessun fatto. Se c'e' qualcosa da non "
-          "dover ripetere (avanzamenti, decisioni, fix, dettagli, idee, l'utente e le sue "
-          "abitudini), chiama store_turn(facts=[{kind, text, concepts}]) e poi chiudi. "
-          "Se non c'e' niente, chiudi senza aggiungere altro.")
+SUBSTANTIVE_CHARS = 600   # an answer longer than this is a turn of substance
+REMIND = ("[memory] This turn saved no fact. If there is something worth not "
+          "repeating (progress, decisions, fixes, details, ideas, the user and their "
+          "habits), call store_turn(facts=[{kind, text, concepts}]) and then stop. "
+          "If there is nothing, stop without adding anything.")
 
 
 def _entries(transcript: str) -> list:
@@ -151,7 +151,7 @@ def main(argv: list) -> None:
         if not isinstance(payload, dict) or mode not in ("recall", "save"):
             return
         text = recall(payload) if mode == "recall" else save(payload)
-    except Exception:  # noqa: BLE001 — un hook non rompe mai il messaggio dell'utente
+    except Exception:  # noqa: BLE001 — a hook never breaks the user's message
         return
     if not text:
         return
