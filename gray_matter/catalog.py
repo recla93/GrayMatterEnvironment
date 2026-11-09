@@ -567,14 +567,235 @@ def doc_for(key: "tuple[str, str]", lang: str = "it") -> "tuple[str, str]":
     return (what_en, when_en) if lang == "en" else (what_it, when_it)
 
 
+# ── Control center sections ─────────────────────────────────────────────
+# The GUI is organised by what you are doing, and inside each section by tool:
+#   ops      = everyday use (start, look, search, add knowledge)
+#   graph    = graph maintenance (clean, archive, migrate, back up)
+#   tools    = tool maintenance (install, repair, diagnose, clients)
+#   settings = settings and connections (knobs, modes, cloud, tunnel)
+SECTIONS = (
+    ("ops",      "Comandi operativi", "Everyday commands"),
+    ("graph",    "Manutenzione grafo", "Graph maintenance"),
+    ("tools",    "Manutenzione tool", "Tool maintenance"),
+    ("settings", "Impostazioni", "Settings"),
+)
+# A command not listed here still shows up: its CLI group decides.
+_SECTION_OF_GROUP = {"lifecycle": "tools", "maintenance": "graph",
+                     "inspect": "ops", "tuning": "settings", "other": "ops"}
+SECTION_OF: "dict[tuple[str, str], str]" = {
+    ("gray-matter", "start"): "ops", ("gray-matter", "stop"): "ops",
+    ("gray-matter", "bridge"): "settings", ("gray-matter", "doctor"): "tools",
+    ("gray-matter", "logs"): "tools", ("gray-matter", "ping"): "tools",
+    ("gray-matter", "bridges"): "graph", ("gray-matter", "promote"): "graph",
+    ("gray-matter", "reap"): "tools",
+    ("neuron", "start"): "ops", ("neuron", "stop"): "ops",
+    ("neuron", "bridge"): "settings", ("neuron", "tunnel"): "settings",
+    ("neuron", "doctor"): "tools",
+    ("neurag", "start"): "ops", ("neurag", "stop"): "ops",
+    ("neurag", "doctor"): "tools", ("neurag", "health"): "tools",
+    ("neurag", "ingest"): "ops", ("neurag", "add-node"): "ops",
+    ("neurag", "add-chunks"): "ops", ("neurag", "chunk"): "ops",
+    ("neurag", "import"): "ops", ("neurag", "confirm"): "ops",
+    ("neurag", "decay"): "graph", ("neurag", "park"): "graph",
+    ("neurag", "unpark"): "graph",
+}
+
+
+def section_of(tool: str, command: str, group: str) -> str:
+    return SECTION_OF.get((tool, command)) or _SECTION_OF_GROUP.get(group, "ops")
+
+
+# Arguments the form never shows: machine output for the control center itself.
+GUI_HIDDEN_ARGS = {"json"}
+
+# What each argument means, for someone who does not write code: (it, en).
+# Key: (tool, command, dest) for a specific argument, or the bare dest for one
+# that means the same everywhere. The argparse help stays the fallback.
+ARG_DOCS: "dict[object, tuple[str, str]]" = {
+    "dry_run": ("Prova generale: mostra cosa farebbe, senza cambiare niente.",
+                "Rehearsal: shows what it would do, changes nothing."),
+    "yes": ("Risponde 'sì' a ogni domanda: nessuna conferma richiesta.",
+            "Answers 'yes' to every question: no confirmation asked."),
+    "apply": ("Esegue davvero. Senza questa casella mostra solo il resoconto.",
+              "Actually does it. Without this box it only reports."),
+    "top_n": ("Quanti risultati mostrare. Vuoto = 5.",
+              "How many results to show. Empty = 5."),
+    "deep": ("Cerca anche fra i nodi parcheggiati (dormienti, non usati da tempo).",
+             "Also searches parked nodes (dormant, unused for a while)."),
+    ("gray-matter", "bridge", "host"): (
+        "Indirizzo di rete su cui ascoltare. Vuoto = solo questo computer (127.0.0.1).",
+        "Network address to listen on. Empty = this computer only (127.0.0.1)."),
+    ("gray-matter", "bridge", "bind"): (
+        "Scorciatoia: 'local' = solo questo computer, 'all' = visibile da tutta la rete.",
+        "Shortcut: 'local' = this computer only, 'all' = visible to the whole network."),
+    ("gray-matter", "bridge", "port"): (
+        "Numero di porta. Vuoto = 8002.", "Port number. Empty = 8002."),
+    ("gray-matter", "bridge", "port_range"): (
+        "Se la porta è occupata, quante successive provare. Vuoto = 10.",
+        "If the port is busy, how many following ones to try. Empty = 10."),
+    ("gray-matter", "bridge", "tunnel"): (
+        "Apre anche un tunnel pubblico (HTTPS) verso il bridge.",
+        "Also opens a public tunnel (HTTPS) to the bridge."),
+    ("gray-matter", "bridge", "no_check"): (
+        "Salta i controlli iniziali. Solo se sai perché falliscono.",
+        "Skips the initial checks. Only if you know why they fail."),
+    ("gray-matter", "deregister", "tool"): (
+        "Quale tool togliere dal gateway: neuron, neurag o all (tutti). Vuoto = all.",
+        "Which tool to take off the gateway: neuron, neurag or all. Empty = all."),
+    ("gray-matter", "install", "client"): (
+        "Dove registrare Gray Matter: 'all' (tutti), 'detected' (solo i client trovati) o il nome di un client.",
+        "Where to register Gray Matter: 'all', 'detected' (only clients found) or a client name."),
+    ("gray-matter", "register", "client"): (
+        "In quali client AI: 'all', 'detected' (solo quelli trovati) o il nome di un client.",
+        "Which AI clients: 'all', 'detected' (only those found) or a client name."),
+    ("gray-matter", "register", "gateway"): (
+        "Registra SOLO Gray Matter e toglie Neuron e NeuRAG diretti: tutto passa dal gateway.",
+        "Registers ONLY Gray Matter and removes direct Neuron and NeuRAG: everything goes through the gateway."),
+    ("gray-matter", "backup", "force"): (
+        "Rifà la copia di oggi anche se esiste già.", "Redoes today's copy even if it already exists."),
+    ("gray-matter", "bridges-transfer", "direction"): (
+        "'to-cloud' copia i bridge locali nel cloud, 'from-cloud' il contrario. Aggiunge, non cancella.",
+        "'to-cloud' copies local bridges to the cloud, 'from-cloud' the other way. Adds, never deletes."),
+    ("gray-matter", "knowledge", "subcmd"): (
+        "'status' = quanti nodi e collegamenti; 'rebuild-links' = ricalcola tutti i collegamenti; 'link-graph' = mostra il grafo.",
+        "'status' = how many nodes and links; 'rebuild-links' = recompute every link; 'link-graph' = show the graph."),
+    ("gray-matter", "reap", "reap_all"): (
+        "Ferma TUTTI i processi seguiti, non solo quelli rimasti orfani.",
+        "Stops EVERY tracked process, not just the orphaned ones."),
+    ("gray-matter", "gm-neurag", "tool"): (
+        "Nome dello strumento NeuRAG da chiamare, per esempio knowledge_query.",
+        "Name of the NeuRAG tool to call, for example knowledge_query."),
+    ("gray-matter", "gm-neurag", "args"): (
+        'Parametri in JSON, per esempio {"query": "spring boot"}. Vuoto = nessuno.',
+        'Parameters as JSON, for example {"query": "spring boot"}. Empty = none.'),
+    ("gray-matter", "gm-neuron", "tool"): (
+        "Nome dello strumento Neuron da chiamare, per esempio status o get_context.",
+        "Name of the Neuron tool to call, for example status or get_context."),
+    ("gray-matter", "gm-neuron", "args"): (
+        'Parametri in JSON, per esempio {"topic": "caffè"}. Vuoto = nessuno.',
+        'Parameters as JSON, for example {"topic": "coffee"}. Empty = none.'),
+    ("gray-matter", "logs", "follow"): (
+        "Continua a mostrare le righe nuove finché non premi Ferma.",
+        "Keeps showing new lines until you press Stop."),
+    ("gray-matter", "logs", "lines"): (
+        "Quante righe finali mostrare. Vuoto = 50.", "How many last lines to show. Empty = 50."),
+    ("gray-matter", "cloud", "subcmd"): (
+        "'setup' crea i database, 'wire' collega database esistenti, 'status' mostra lo stato, 'teardown' torna al solo locale.",
+        "'setup' creates the databases, 'wire' connects existing ones, 'status' shows the state, 'teardown' goes back to local only."),
+    ("gray-matter", "cloud", "group"): (
+        "Nome del gruppo Turso. Vuoto = graymatter.", "Turso group name. Empty = graymatter."),
+    ("gray-matter", "cloud", "components"): (
+        "Per 'setup': quali parti mettere in cloud, fra neuron, neurag, gm (separate da virgola). Vuoto = tutte.",
+        "For 'setup': which parts go to the cloud, among neuron, neurag, gm (comma separated). Empty = all."),
+    ("gray-matter", "cloud", "neuron_url"): (
+        "Per 'wire': indirizzo del database di Neuron (libsql://…).",
+        "For 'wire': address of Neuron's database (libsql://…)."),
+    ("gray-matter", "cloud", "neurag_url"): (
+        "Per 'wire': indirizzo del database di NeuRAG, diverso da quello di Neuron.",
+        "For 'wire': address of NeuRAG's database, separate from Neuron's."),
+    ("gray-matter", "cloud", "gm_url"): (
+        "Per 'wire': indirizzo del database dei bridge di Gray Matter, separato dagli altri.",
+        "For 'wire': address of Gray Matter's bridge database, separate from the others."),
+    ("gray-matter", "cloud", "token"): (
+        "Per 'wire': il token di accesso. Meglio lasciarlo vuoto: verrà chiesto senza mostrarlo.",
+        "For 'wire': the access token. Better left empty: it will be asked without echoing."),
+    ("gray-matter", "cloud", "env_file"): (
+        "File .env dove salvare le impostazioni. Vuoto = quello di Gray Matter.",
+        "The .env file to save settings in. Empty = Gray Matter's own."),
+    ("gray-matter", "cloud", "no_cli_install"): (
+        "Non proporre di installare il programma 'turso'.",
+        "Never offer to install the 'turso' program."),
+    ("gray-matter", "cloud", "yes"): (
+        "Risponde 'sì' alla proposta di installare il programma 'turso'.",
+        "Answers 'yes' to the offer to install the 'turso' program."),
+    ("gray-matter", "collaborate", "name"): (
+        "Quale tool: neuron o neurag.", "Which tool: neuron or neurag."),
+    ("gray-matter", "isolate", "name"): (
+        "Quale tool: neuron o neurag.", "Which tool: neuron or neurag."),
+    ("gray-matter", "mode", "mode"): (
+        "'collaborate' = i tool si scambiano contesto; 'separate' = ognuno per conto suo.",
+        "'collaborate' = the tools share context; 'separate' = each on its own."),
+    ("gray-matter", "promote", "apply"): (
+        "Crea davvero i nodi in NeuRAG. Senza questa casella mostra solo cosa creerebbe.",
+        "Actually creates the nodes in NeuRAG. Without this box it only shows what it would create."),
+    ("neurag", "deregister", "client"): (
+        "Da quale client AI: claude-desktop, claude-code, cursor, vscode, opencode o all. Vuoto = all.",
+        "From which AI client: claude-desktop, claude-code, cursor, vscode, opencode or all. Empty = all."),
+    ("neurag", "register", "client"): (
+        "In quale client AI: claude-desktop, claude-code, cursor, vscode, opencode o all. Vuoto = all.",
+        "In which AI client: claude-desktop, claude-code, cursor, vscode, opencode or all. Empty = all."),
+    ("neurag", "register", "python_exe"): (
+        "Quale Python usare per il server. Vuoto = quello installato (consigliato).",
+        "Which Python runs the server. Empty = the installed one (recommended)."),
+    ("neurag", "register", "force"): (
+        "Registra NeuRAG direttamente anche se lo gestisce già Gray Matter (comparirà due volte).",
+        "Registers NeuRAG directly even though Gray Matter already manages it (it will appear twice)."),
+    ("neurag", "add-chunks", "node"): (
+        "Il nodo a cui aggiungere i pezzi di testo.", "The node the text pieces are added to."),
+    ("neurag", "add-chunks", "file"): (
+        "File JSON con l'elenco dei pezzi di testo.", "JSON file with the list of text pieces."),
+    ("neurag", "add-node", "name"): ("Nome del nuovo nodo.", "Name of the new node."),
+    ("neurag", "add-node", "type"): (
+        "'godnode' = argomento principale, 'fundamental' = sotto-argomento, 'specialization' = dettaglio.",
+        "'godnode' = main topic, 'fundamental' = sub-topic, 'specialization' = detail."),
+    ("neurag", "add-node", "parent"): (
+        "Il nodo sotto cui metterlo. Vuoto = in cima.", "The node to put it under. Empty = at the top."),
+    ("neurag", "add-node", "triggers"): (
+        "Parole chiave che richiamano questo nodo.", "Keywords that bring this node up."),
+    ("neurag", "archive", "name"): ("Il nodo da archiviare.", "The node to archive."),
+    ("neurag", "archive", "restore"): (
+        "Al contrario: riporta il nodo fra quelli attivi.", "The opposite: brings the node back to the active ones."),
+    ("neurag", "chunk", "path"): (
+        "Cartella o file da spezzare in pezzi di testo.", "Folder or file to split into text pieces."),
+    ("neurag", "import", "mapping"): (
+        "Percorso del file YAML che descrive nodi e documenti.",
+        "Path of the YAML file describing nodes and documents."),
+    ("neurag", "ingest", "path"): (
+        "La cartella (o il singolo documento) da indicizzare.",
+        "The folder (or single document) to index."),
+    ("neurag", "ingest", "godnode"): (
+        "Il nodo principale sotto cui metterla. Vuoto = il nome della cartella.",
+        "The main node to put it under. Empty = the folder name."),
+    ("neurag", "ingest", "code"): (
+        "Indicizza anche i file di codice, non solo i documenti (.md .txt .pdf .docx).",
+        "Also indexes source code files, not only documents (.md .txt .pdf .docx)."),
+    ("neurag", "remove-node", "name"): (
+        "Il nodo da cancellare (definitivo).", "The node to delete (permanent)."),
+    ("neurag", "rename-node", "name"): ("Il nome attuale del nodo.", "The node's current name."),
+    ("neurag", "rename-node", "new_name"): ("Il nuovo nome.", "The new name."),
+    ("neurag", "query", "query"): (
+        "L'argomento da cercare, in parole normali.", "The topic to search for, in plain words."),
+    ("neurag", "recall", "query"): (
+        "L'argomento da cercare, in parole normali.", "The topic to search for, in plain words."),
+    ("neurag", "confirm", "names"): (
+        "Due o più nomi di nodi, separati da spazio: il loro legame si rafforza.",
+        "Two or more node names, separated by spaces: their link gets stronger."),
+    ("neurag", "related", "name"): ("Il nodo di partenza.", "The starting node."),
+    ("neurag", "related", "hops"): (
+        "Quanti passi di distanza seguire. Vuoto = 2.", "How many steps away to follow. Empty = 2."),
+    ("neurag", "related", "limit"): (
+        "Quanti risultati al massimo. Vuoto = 10.", "At most how many results. Empty = 10."),
+    ("neurag", "unpark", "name"): (
+        "Il nodo parcheggiato da riattivare.", "The parked node to wake up."),
+}
+
+
+def arg_doc(tool: str, command: str, dest: str, lang: str = "it") -> str:
+    """The plain-language meaning of an argument, or "" when nobody wrote one."""
+    entry = ARG_DOCS.get((tool, command, dest)) or ARG_DOCS.get(dest)
+    return (entry[1] if lang == "en" else entry[0]) if entry else ""
+
+
 
 # I tre ambienti. `module` è ciò che si importa per sapere se il tool c'è.
 ENVIRONMENTS = (
     {"key": "gray-matter", "label": "Gray Matter", "subtitle": "orchestratore",
+     "subtitle_en": "orchestrator",
      "module": "gray_matter", "cli": "gray_matter.cli", "kind": "parser"},
     {"key": "neuron", "label": "Neuron", "subtitle": "memoria semantica",
+     "subtitle_en": "semantic memory",
      "module": "neuron", "cli": "neuron.__main__", "kind": "commands"},
-    {"key": "neurag", "label": "NeuRAG", "subtitle": "knowledge vault",
+    {"key": "neurag", "label": "NeuRAG", "subtitle": "knowledge vault", "subtitle_en": "knowledge vault",
      "module": "neurag", "cli": "neurag.cli", "kind": "parser"},
 )
 
@@ -723,6 +944,10 @@ def environments(lang: str = "it") -> list[dict]:
             c["help"] = what or c["help"]
             c["when"] = when
             c["interactive"] = key in INTERACTIVE
+            c["section"] = section_of(env["key"], c["name"], c["group"])
+            c["args"] = [a for a in c["args"] if a["dest"] not in GUI_HIDDEN_ARGS]
+            for a in c["args"]:
+                a["doc"] = arg_doc(env["key"], c["name"], a["dest"], lang) or a["help"]
         
         # Versione: prima il CODICE, il registro solo come ripiego.
         #
@@ -747,7 +972,8 @@ def environments(lang: str = "it") -> list[dict]:
             version = gme["version"]
         
         out.append({
-            "key": env["key"], "label": env["label"], "subtitle": env["subtitle"],
+            "key": env["key"], "label": env["label"],
+            "subtitle": env["subtitle_en"] if lang == "en" else env["subtitle"],
             "installed": present, "version": version,
             "venv": gme.get("venv") if gme else None,
             "python": python_path,

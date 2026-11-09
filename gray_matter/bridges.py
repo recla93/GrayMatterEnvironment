@@ -520,6 +520,52 @@ def decay(amount: float = 1.0, max_idle_seconds: float = 7 * 24 * 3600,
     return before - after
 
 
+def update_bridge(neuron_concept: str, neurag_node: str, *,
+                  rationale: "str | None" = None, weight: "float | None" = None) -> bool:
+    """Hand edit from the control center: new rationale and/or weight.
+    False when the bridge does not exist or the weight is out of (0, cap]."""
+    sets, params = [], []
+    if rationale is not None:
+        sets.append("rationale=?")
+        params.append(_clean(rationale, cap=500))
+    if weight is not None:
+        weight = float(weight)
+        if not 0 < weight <= _WEIGHT_CAP:
+            return False
+        sets.append("weight=?")
+        params.append(weight)
+    if not sets:
+        return False
+    key = (_clean(neuron_concept).lower(), _clean(neurag_node).lower())
+    conn = _connect()
+    try:
+        # no rowcount: the cloud cursor does not have one
+        if conn.execute("SELECT 1 FROM bridges WHERE neuron_key=? AND neurag_key=?",
+                        key).fetchone() is None:
+            return False
+        conn.execute(f"UPDATE bridges SET {', '.join(sets)} "
+                     "WHERE neuron_key=? AND neurag_key=?", (*params, *key))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def remove_bridge(neuron_concept: str, neurag_node: str) -> bool:
+    """Delete one bridge. True when a row went away."""
+    key = (_clean(neuron_concept).lower(), _clean(neurag_node).lower())
+    conn = _connect()
+    try:
+        if conn.execute("SELECT 1 FROM bridges WHERE neuron_key=? AND neurag_key=?",
+                        key).fetchone() is None:
+            return False
+        conn.execute("DELETE FROM bridges WHERE neuron_key=? AND neurag_key=?", key)
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 def all_bridges() -> list[dict]:
     conn = _connect()
     try:

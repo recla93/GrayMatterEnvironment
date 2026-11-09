@@ -5,18 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gray Matter — Control Center</title>
 <style>
-  /* tokyo-night, la stessa palette del Control Center di Neuron */
+  /* tokyo-night, the same palette as Neuron's old control center */
   :root{
     --bg:#1a1b26; --panel:#1f2335; --panel2:#24283b; --line:#2f3450;
     --fg:#c0caf5; --dim:#7f88b0; --accent:#7aa2f7; --ok:#9ece6a;
     --warn:#e0af68; --err:#f7768e;
+    --c-gm:#7dcfff; --c-neuron:#7aa2f7; --c-neurag:#bb9af7;
     --mono:"Cascadia Code","Consolas",ui-monospace,monospace;
     --sans:"Segoe UI",system-ui,-apple-system,sans-serif;
   }
   *{box-sizing:border-box}
   body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;
        background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans)}
-  header{display:flex;align-items:center;gap:10px;padding:10px 16px;
+  button{font:inherit}
+
+  /* --- header: one row, tool status included --- */
+  header{display:flex;align-items:center;gap:10px;padding:8px 16px;flex-wrap:wrap;
          border-bottom:1px solid var(--line);background:var(--panel)}
   header h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.2px}
   /* Served by the local http server (see _build_server): the page is not a
@@ -24,94 +28,185 @@
   header .logo{height:26px;width:auto;display:block;flex:0 0 auto}
   header .sub{color:var(--dim);font-size:12px}
   header .spacer{flex:1}
-  #lang-select{background:var(--bg);border:1px solid var(--line);border-radius:4px;
+  #lang-select{width:auto;background:var(--bg);border:1px solid var(--line);border-radius:4px;
                color:var(--dim);padding:2px 6px;font-size:11px;cursor:pointer}
   #lang-select:focus{outline:none;border-color:var(--accent)}
+
+  /* --- health pills (in the header) --- */
+  .health-bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim)}
+  .health-item{display:flex;align-items:center;gap:5px;padding:2px 4px 2px 8px;border-radius:12px;
+               background:var(--bg);border:1px solid var(--line)}
+  .health-item .dot{width:7px;height:7px;border-radius:50%;margin:0}
+  .health-item .val{color:var(--fg);font-family:var(--mono);font-size:11px}
+  .health-item.running .dot{background:var(--ok)}
+  .health-item.stopped .dot,.health-item.unknown .dot{background:var(--dim)}
+  .health-item.error .dot{background:var(--err)}
+  .hb{width:20px;height:20px;border:none;border-radius:50%;cursor:pointer;font-size:10px;line-height:1;
+      display:flex;align-items:center;justify-content:center;background:var(--panel2);color:var(--dim)}
+  .hb:hover{background:var(--accent);color:var(--bg)}
+  .running .hb{color:var(--err)} .stopped .hb,.unknown .hb{color:var(--ok)}
+  .stop-all{padding:2px 10px;border:1px solid var(--err);border-radius:12px;background:transparent;
+            color:var(--err);cursor:pointer;font-size:11px}
+  .stop-all:hover{background:var(--err);color:var(--bg)}
+
   main{flex:1;display:flex;min-height:0}
 
-  /* --- sidebar: gli ambienti installati --- */
+  /* --- sidebar: the sections --- */
   nav{width:236px;flex-shrink:0;border-right:1px solid var(--line);
-      background:var(--panel);overflow-y:auto;padding:10px 0}
-  nav h2{margin:6px 14px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+      background:var(--panel);overflow-y:auto;padding:10px 0;display:flex;flex-direction:column}
+  nav h2{margin:12px 14px 4px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
          color:var(--dim);font-weight:600}
-  .env{display:block;width:100%;text-align:left;background:none;border:0;cursor:pointer;
-       color:var(--fg);padding:9px 14px;border-left:3px solid transparent;font:inherit}
-  .env:hover{background:var(--panel2)}
-  .env[aria-current="true"]{background:var(--panel2);border-left-color:var(--accent)}
-  .env .name{font-weight:600}
-  .env .meta{font-size:11px;color:var(--dim)}
-  .env.off{opacity:.62}
-  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;
-       background:var(--ok);vertical-align:middle}
-  .dot.off{background:var(--dim)}
-  .install{margin:2px 14px 8px;font-size:12px;padding:5px 10px;border-radius:6px;
-           border:1px solid var(--accent);background:none;color:var(--accent);cursor:pointer}
-  .install:hover{background:var(--accent);color:var(--bg)}
+  .nv{display:grid;grid-template-columns:22px 1fr;column-gap:6px;width:100%;text-align:left;
+      background:none;border:0;cursor:pointer;color:var(--fg);padding:7px 14px;
+      border-left:3px solid transparent}
+  .nv:hover{background:var(--panel2)}
+  .nv[aria-current="true"]{background:var(--panel2);border-left-color:var(--accent)}
+  .nv .ic{color:var(--dim);text-align:center;grid-row:span 2}
+  .nv[aria-current="true"] .ic{color:var(--accent)}
+  .nv .name{font-weight:600;font-size:13px}
+  .nv .meta{font-size:11px;color:var(--dim);line-height:1.3}
+  #cmd-filter{margin:10px 14px 0;width:auto;padding:5px 9px;border-radius:7px}
 
-  /* --- corpo: gruppi, dal più grande al più piccolo --- */
-  section{flex:1;overflow-y:auto;padding:16px 20px;min-width:0}
-  .grp{margin-bottom:18px}
-  /* Titolo di gruppo = interruttore: stesso caret e stessa regola delle
-     infra-card (stato in localStorage), cosi' le sezioni che non servono
-     oggi si mettono da parte e restano da parte. */
-  .grp h3{margin:0 0 9px;font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+  /* --- body --- */
+  section{flex:1;overflow-y:auto;padding:16px 22px;min-width:0}
+  .intro{color:var(--dim);font-size:13px;margin:0 0 14px;max-width:900px}
+  .intro b{color:var(--fg)}
+  .grp{margin-bottom:16px}
+  /* Group title = a toggle: the state lives in localStorage, so what you put
+     away stays put away. */
+  .grp > h3{margin:0 0 9px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;
           color:var(--dim);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:5px;
-          cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
-  .grp h3:hover{color:var(--fg)}
-  .grp h3::before{content:"▾";font-size:9px;transition:transform .12s;opacity:.7}
-  .grp.collapsed h3::before{transform:rotate(-90deg)}
-  .grp.collapsed h3{margin-bottom:0}
+          cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px}
+  .grp > h3:hover{color:var(--fg)}
+  .grp > h3::before{content:"\25BE";font-size:9px;transition:transform .12s;opacity:.7}
+  .grp.collapsed > h3::before{transform:rotate(-90deg)}
+  .grp.collapsed > h3{margin-bottom:0}
   .grp.collapsed > *:not(h3){display:none}
-  /* Lista verticale, una card per riga: nome a sinistra a larghezza fissa,
-     descrizione accanto. La griglia a colonne mescolava 27 comandi in un
-     mosaico senza ordine di lettura. */
+  .grp > h3 .tsub{text-transform:none;letter-spacing:0;font-weight:400;font-size:12px}
+  .grp > h3 .tver{text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:11px;margin-left:auto}
+  .tdot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .sub-h{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:12px 0 6px}
+
+  /* one command per row: name on the left, what it does beside it */
   .cmds{display:flex;flex-direction:column;gap:6px}
   .cmd{background:var(--panel);border:1px solid var(--line);border-radius:8px;
        padding:8px 12px;cursor:pointer;transition:border-color .12s;
-       display:grid;grid-template-columns:150px 1fr;column-gap:12px;align-items:baseline}
+       display:grid;grid-template-columns:170px 1fr;column-gap:12px;align-items:baseline}
   .cmd:hover{border-color:var(--accent)}
-  .cmd[aria-expanded="true"]{border-color:var(--accent)}
-  .cmd .n{font-family:var(--mono);font-size:13px;color:var(--accent)}
-  .cmd .h{font-size:12px;color:var(--dim)}
-  .cmd .when,.cmd .form{grid-column:1/-1}
-  @media (max-width:640px){.cmd{grid-template-columns:1fr}}
-  /* "Quando serve": staccato dalla descrizione da una barra laterale, perche'
-     risponde a una domanda diversa (non "cosa fa" ma "e' questo che mi serve
-     adesso") e non deve leggersi come la continuazione della riga sopra. */
-  .cmd .when{font-size:12px;color:var(--dim);margin-top:7px;padding-left:9px;
-             border-left:2px solid var(--line);line-height:1.45;cursor:default}
+  .cmd[aria-expanded="true"]{border-color:var(--accent);cursor:default}
+  .cmd .n{font-family:var(--mono);font-size:13px;color:var(--accent);cursor:pointer}
+  .cmd .h{font-size:12.5px;color:var(--fg);opacity:.85}
+  .cmd .when,.cmd .form,.cmd .syn{grid-column:1/-1}
+  .badge{font-size:10px;letter-spacing:.04em;border:1px solid var(--line);border-radius:10px;
+         padding:0 7px;margin-left:6px;color:var(--dim);white-space:nowrap;font-family:var(--sans)}
+  .badge.ask{color:var(--warn);border-color:var(--warn)}
+  @media (max-width:700px){.cmd{grid-template-columns:1fr}}
+  /* "When to use it": a side bar sets it apart from the description, since it
+     answers a different question ("is this the one I need right now?"). */
+  .cmd .when{font-size:12.5px;color:var(--dim);margin-top:7px;padding-left:9px;
+             border-left:2px solid var(--line);line-height:1.45}
   .cmd .when-k{color:var(--accent);font-weight:600}
-  .form{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);
-        display:grid;gap:8px;cursor:default}
-  .row{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center}
-  .row label{font-size:12px;color:var(--dim);font-family:var(--mono);overflow-wrap:anywhere}
+  .form{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:grid;gap:10px}
+  .row{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:start}
+  .row label{font-size:12px;color:var(--fg);font-family:var(--mono);overflow-wrap:anywhere;padding-top:6px}
   .row .req{color:var(--err)}
+  .row .doc{font-size:12px;color:var(--dim);margin-top:3px}
+  .row .doc code{font-family:var(--mono);font-size:11px}
   input,select{background:var(--bg);border:1px solid var(--line);border-radius:6px;
                color:var(--fg);padding:6px 9px;font:13px var(--mono);width:100%}
   input:focus,select:focus{outline:none;border-color:var(--accent)}
-  input[type=checkbox]{width:auto}
-  .knobs{display:grid;gap:10px}
+  input[type=checkbox]{width:auto;margin:7px 0 0}
+  .knobs{display:grid;gap:12px}
   .pill{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);
-        border:1px solid var(--warn);border-radius:10px;padding:1px 7px;vertical-align:middle}
+        border:1px solid var(--warn);border-radius:10px;padding:1px 7px;vertical-align:middle;font-family:var(--sans)}
   .kstat{margin-left:6px}
+  /* the exact command the GUI will run, copyable into a terminal */
+  .cline{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);
+         border-radius:6px;padding:6px 6px 6px 10px;font:12.5px var(--mono);color:var(--ok);overflow-x:auto}
+  .cline .pr{color:var(--dim);user-select:none}
+  .cline code{flex:1;white-space:pre}
+  .cline button,.ghost{background:none;border:1px solid var(--line);border-radius:6px;color:var(--dim);
+         padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .cline button:hover,.ghost:hover{color:var(--fg);border-color:var(--accent)}
+  .actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .go{justify-self:start;background:var(--accent);color:var(--bg);border:0;border-radius:6px;
       padding:7px 18px;font-weight:600;cursor:pointer;font-size:13px}
   .go:hover{filter:brightness(1.1)}
-  .hint{font-size:11px;color:var(--dim)}
-  /* Riga di risposta sotto la console: compare solo mentre un comando gira. */
-  #stdin-bar{border-top:1px solid var(--line);gap:8px}
-  #stdin-bar[hidden]{display:none}
-  #stdin-input{flex:1;font:13px var(--mono)}
-  #btn-send{white-space:nowrap}
+  .go:disabled{opacity:.5;cursor:default}
+  .go.small{padding:3px 10px;font-size:11px}
+  .go.danger{background:var(--err)}
+  .hint{font-size:12px;color:var(--dim)}
   details{border:1px dashed var(--line);border-radius:6px;padding:6px 10px}
   details[open]{display:grid;gap:8px}
   summary{cursor:pointer;user-select:none}
   summary:hover{color:var(--fg)}
   .empty{color:var(--dim);font-size:13px;padding:22px 0}
 
+  /* --- legend and glossary --- */
+  .legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px 18px;font-size:12.5px}
+  .legend div{display:grid;grid-template-columns:110px 1fr;gap:8px;align-items:baseline}
+  .legend .sym{font-family:var(--mono);color:var(--accent);text-align:right}
+  .legend .sym.w{font-family:var(--sans);font-weight:600;color:var(--fg)}
+
+  /* --- cards (overview, connections) --- */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .card h4{margin:0 0 8px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .card h4 .sp{flex:1}
+  .infra-row{display:flex;align-items:center;gap:8px;padding:2px 0;font-size:12px;flex-wrap:wrap}
+  .infra-row .label{color:var(--dim);min-width:96px}
+  .infra-row .value{color:var(--fg);font-family:var(--mono);word-break:break-all}
+  .infra-row .value.ok{color:var(--ok)} .infra-row .value.warn{color:var(--warn)}
+  .infra-row .value.err{color:var(--err)}
+  .infra-tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:.04em}
+  .infra-tag.on{background:rgba(158,206,106,.15);color:var(--ok)}
+  .infra-tag.off{background:rgba(127,136,176,.15);color:var(--dim)}
+
+  /* --- MCP clients --- */
+  .clients-grid{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .client-item{display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:6px;
+               border:1px solid var(--line);background:var(--bg);cursor:pointer;font-size:13px}
+  .client-item input{margin:0}
+  .client-item.absent{opacity:.55}
+  .client-item.bad{border-color:var(--warn)}
+  .client-item .dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+  .client-item .dot.on{background:var(--ok)}
+  .client-item .dot.warn{background:var(--warn)}
+  .client-problems{margin:6px 0 8px;padding:7px 10px;border-left:3px solid var(--warn);
+                   background:var(--bg);border-radius:4px;font-size:12px;color:var(--dim)}
+  .client-problems b{color:var(--warn)}
+  .client-problems div{margin:2px 0;font-family:var(--mono)}
+
+  /* --- bridges table --- */
+  table.bt{width:100%;border-collapse:collapse;font-size:12.5px}
+  .bt th{text-align:left;color:var(--dim);font-weight:600;font-size:11px;letter-spacing:.06em;
+         text-transform:uppercase;border-bottom:1px solid var(--line);padding:6px 8px}
+  .bt td{border-bottom:1px solid var(--line);padding:6px 8px;vertical-align:top}
+  .bt td.m{font-family:var(--mono)}
+  .bt td.n{white-space:nowrap;text-align:right;font-family:var(--mono)}
+  .bt td.a{white-space:nowrap;text-align:right}
+  .bt input{padding:3px 6px;font-size:12px}
+  .bt tr:hover td{background:var(--panel)}
+  .bform{display:grid;grid-template-columns:1fr 1fr 2fr auto;gap:8px;align-items:end}
+  .bform label{font-size:11px;color:var(--dim);display:block;margin-bottom:3px}
+  @media (max-width:800px){.bform{grid-template-columns:1fr}}
+
+  /* --- migration banner --- */
+  .migration-banner{display:none;padding:8px 16px;border-bottom:1px solid var(--warn);
+                    background:var(--panel2);font-size:13px;color:var(--fg)}
+  .migration-banner.show{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .migration-banner .icon{color:var(--warn);font-size:16px}
+  .migration-banner .msg{flex:1;min-width:200px}
+  .migration-banner .msg b{color:var(--warn)}
+  .migration-banner .tool-list{display:flex;gap:6px;flex-wrap:wrap}
+  .migration-banner .tool-pill{display:flex;align-items:center;gap:5px;padding:3px 8px;
+                               border-radius:6px;background:var(--panel);border:1px solid var(--line);font-size:12px}
+  .migration-banner .tool-pill .path{color:var(--dim);font-family:var(--mono);font-size:11px}
+  .migration-banner button{background:var(--warn);color:var(--bg);border:0;border-radius:6px;
+                           padding:5px 14px;font-weight:600;cursor:pointer;font-size:12px}
+  .migration-banner .dismiss{background:none;border:1px solid var(--line);color:var(--dim)}
+
   /* --- Graphs view: Neuron, NeuRAG and the bridges between them --- */
-  /* the graph needs the height: the status cards above step aside while it is open */
-  body.gview #infra-panels, body.gview #clients-panel, body.gview #health-bar{display:none}
   .graphs{display:flex;flex-direction:column;gap:8px;height:100%;min-height:460px}
   .gbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:12px;color:var(--dim)}
   .gbar label{display:flex;align-items:center;gap:5px;cursor:pointer}
@@ -130,120 +225,66 @@
   .gfact{border-left:2px solid var(--line);padding:2px 8px;margin:6px 0;word-break:break-word}
   .gfact .gk{margin:0}
 
-   /* --- console --- */
-  footer{height:238px;flex-shrink:0;border-top:1px solid var(--line);
+  /* --- graph tools --- */
+  .gbtn{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--dim);
+        padding:4px 11px;font-size:12px;cursor:pointer;transition:all .15s}
+  .gbtn:hover,.gbtn.on{color:var(--fg);border-color:var(--accent)}
+  .gbtn.on{background:rgba(122,162,247,.15)}
+  .gphys{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;font-size:12px;color:var(--dim);
+         background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+  .gphys[hidden],.gbanner[hidden]{display:none}
+  .gphys label{display:flex;align-items:center;gap:7px}
+  .gphys input[type=range]{width:110px;padding:0;accent-color:var(--accent)}
+  .gphys input[type=checkbox]{margin:0}
+  .gval{font-family:var(--mono);color:var(--fg);min-width:26px}
+  .gbanner{background:rgba(158,206,106,.12);border:1px solid var(--ok);border-radius:8px;
+           padding:6px 12px;font-size:12.5px;display:flex;align-items:center;gap:8px}
+  #gside input{margin:2px 0 6px}
+  /* --- toasts --- */
+  #toasts{position:fixed;right:18px;bottom:60px;display:flex;flex-direction:column;gap:8px;z-index:50}
+  .toast{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);
+         border-radius:8px;padding:8px 14px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.35);
+         animation:tin .18s ease-out;transition:opacity .4s,transform .4s;max-width:380px}
+  .toast.ok{border-left-color:var(--ok)} .toast.err{border-left-color:var(--err)} .toast.warn{border-left-color:var(--warn)}
+  .toast.out{opacity:0;transform:translateX(20px)}
+  @keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  /* --- a lighter, more modern feel --- */
+  .nv{transition:background .15s,border-color .15s}
+  .cmd{transition:border-color .15s,box-shadow .15s,transform .15s}
+  .cmd:not([aria-expanded="true"]):hover{transform:translateX(2px);box-shadow:0 2px 12px rgba(0,0,0,.25)}
+  .cmd[aria-expanded="true"]{box-shadow:0 4px 22px rgba(0,0,0,.3)}
+  .card{transition:border-color .15s;box-shadow:0 1px 0 rgba(255,255,255,.02) inset}
+  .card:hover{border-color:#3b4261}
+  .go{transition:filter .15s,transform .1s} .go:active{transform:scale(.97)}
+  section::-webkit-scrollbar,nav::-webkit-scrollbar,pre::-webkit-scrollbar,#gside::-webkit-scrollbar{width:9px}
+  section::-webkit-scrollbar-thumb,nav::-webkit-scrollbar-thumb,pre::-webkit-scrollbar-thumb,#gside::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+
+  /* --- console --- */
+  footer{height:220px;flex-shrink:0;border-top:1px solid var(--line);
          background:var(--panel2);display:flex;flex-direction:column}
-  .bar{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--line)}
+  .bar{display:flex;align-items:center;gap:8px;padding:5px 12px;border-bottom:1px solid var(--line)}
   .bar .t{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);font-weight:600}
   .bar .spacer{flex:1}
   .bar button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--dim);
-              padding:4px 11px;font-size:12px;cursor:pointer}
+              padding:3px 11px;font-size:12px;cursor:pointer}
   .bar button:hover{color:var(--fg);border-color:var(--accent)}
   .run{font-size:11px;color:var(--warn);font-family:var(--mono)}
   pre{flex:1;margin:0;overflow-y:auto;padding:9px 12px;font:12px/1.55 var(--mono);
       white-space:pre-wrap;word-break:break-word}
   .l-cmd{color:var(--accent)} .l-ok{color:var(--ok)} .l-warn{color:var(--warn)}
   .l-err{color:var(--err)}
-
-  /* --- health bar --- */
-  .health-bar{display:flex;gap:8px;padding:6px 16px;border-bottom:1px solid var(--line);
-              background:var(--panel2);font-size:12px;color:var(--dim);align-items:center}
-  .health-item{display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;
-               background:var(--panel);border:1px solid var(--line)}
-  .health-item .dot{width:6px;height:6px;border-radius:50%}
-  .health-item .val{color:var(--fg);font-family:var(--mono);font-size:11px}
-  .health-item.running .dot{background:var(--ok)}
-  .health-item.stopped .dot{background:var(--dim)}
-  .health-item.error .dot{background:var(--err)}
-  .health-item .hb{width:20px;height:20px;border:none;border-radius:4px;cursor:pointer;
-                   font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;
-                   background:var(--panel);color:var(--dim);transition:background .15s,color .15s}
-  .health-item .hb:hover{background:var(--accent);color:#fff}
-  .health-item.running .hb{color:var(--err)}
-  .health-item.stopped .hb{color:var(--ok)}
-  .health-bar .stop-all{margin-left:auto;padding:3px 10px;border:1px solid var(--err);
-                        border-radius:6px;background:transparent;color:var(--err);cursor:pointer;
-                        font-size:11px;transition:background .15s}
-  .health-bar .stop-all:hover{background:var(--err);color:#fff}
-
-  /* --- migration banner --- */
-  .migration-banner{display:none;padding:8px 16px;border-bottom:1px solid var(--warn);
-                    background:var(--panel2);font-size:13px;color:var(--fg)}
-  .migration-banner.show{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  .migration-banner .icon{color:var(--warn);font-size:16px}
-  .migration-banner .msg{flex:1;min-width:200px}
-  .migration-banner .msg b{color:var(--warn)}
-  .migration-banner .tool-list{display:flex;gap:6px;flex-wrap:wrap}
-  .migration-banner .tool-pill{display:flex;align-items:center;gap:5px;padding:3px 8px;
-                               border-radius:6px;background:var(--panel);border:1px solid var(--line);
-                               font-size:12px}
-  .migration-banner .tool-pill .name{color:var(--fg)}
-  .migration-banner .tool-pill .path{color:var(--dim);font-family:var(--mono);font-size:11px}
-  .migration-banner button{background:var(--warn);color:var(--bg);border:0;border-radius:6px;
-                           padding:5px 14px;font-weight:600;cursor:pointer;font-size:12px}
-  .migration-banner button:hover{filter:brightness(1.1)}
-  .migration-banner .dismiss{background:none;border:1px solid var(--line);color:var(--dim)}
-  .migration-banner .dismiss:hover{color:var(--fg);border-color:var(--accent)}
-  /* MCP clients panel — detect + verify + merge */
-  .clients-panel{display:none;padding:10px 16px;border-bottom:1px solid var(--line);
-                 background:var(--panel)}
-  .clients-panel.show{display:block}
-  .clients-panel .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
-  .clients-panel .head .title{font-weight:600;cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
-  .clients-panel .head .title::before{content:"BE";font-size:9px;transition:transform .12s;opacity:.7}
-  .clients-panel.collapsed .head .title::before{transform:rotate(-90deg)}
-  .clients-panel.collapsed .head{margin-bottom:0}
-  .clients-panel.collapsed > *:not(.head){display:none}
-  .clients-panel .head .sub{color:var(--dim);font-size:12px;flex:1;min-width:180px}
-  .clients-grid{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
-  .client-item{display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:6px;
-               border:1px solid var(--line);background:var(--bg);cursor:pointer;font-size:13px}
-  .client-item.absent{opacity:.55}
-  .client-item.bad{border-color:var(--warn)}
-  .client-item .dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
-  .client-item .dot.on{background:var(--ok,#7ee787)}
-  .client-item .dot.warn{background:var(--warn)}
-  .client-problems{margin:6px 0 8px;padding:7px 10px;border-left:3px solid var(--warn);
-                   background:var(--bg);border-radius:4px;font-size:12px;color:var(--dim)}
-  .client-problems b{color:var(--warn)}
-  .client-problems div{margin:2px 0;font-family:var(--mono)}
-  .clients-panel .actions{display:flex;gap:8px;flex-wrap:wrap}
-  .clients-panel button{background:var(--accent);color:var(--bg);border:0;border-radius:6px;
-                        padding:5px 12px;font-size:12px;cursor:pointer}
-  .clients-panel button.ghost{background:none;border:1px solid var(--line);color:var(--dim)}
-  .clients-panel button.ghost:hover{color:var(--fg);border-color:var(--accent)}
-
-  /* --- infrastructure panels --- */
-  .infra{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-bottom:18px}
-  .infra-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
-  .infra-card h4{margin:0 0 8px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);font-weight:600;
-                 cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
-  .infra-card h4:hover{color:var(--fg)}
-  /* Il caret ruota, il corpo sparisce. Niente altezze animate: la card cambia
-     contenuto a ogni refresh e un'animazione su altezza calcolata sfarfalla. */
-  .infra-card h4::before{content:"\25BE";font-size:9px;transition:transform .12s;opacity:.7}
-  .infra-card.collapsed h4::before{transform:rotate(-90deg)}
-  .infra-card.collapsed h4{margin-bottom:0}
-  .infra-card.collapsed > *:not(h4){display:none}
-  /* Console collassabile: si nasconde il log, la barra dei comandi resta —
-     serve poter fermare/avviare anche con la console chiusa. */
-  /* The footer height is FIXED (238px): hiding #log left a band of the same
-     height behind, so "collapse the console" collapsed nothing — the section
-     stayed open, just without text in it. The line below is what actually
-     collapses it: without it, everything else here is decoration. */
+  /* Reply row under the console: shown only while a command runs. */
+  #stdin-bar{border-top:1px solid var(--line);gap:8px}
+  #stdin-bar[hidden]{display:none}
+  #stdin-input{flex:1;font:13px var(--mono)}
+  #btn-send{white-space:nowrap}
+  /* The footer height is FIXED: hiding #log alone left a band of the same
+     height behind, so "collapse the console" collapsed nothing. The line
+     below is what actually collapses it. */
   footer.collapsed{height:auto}
   footer.collapsed #log{display:none}
   footer.collapsed #stdin-bar{display:none}
   #btn-console-toggle{min-width:26px}
-  .infra-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px}
-  .infra-row .label{color:var(--dim);min-width:80px;font-family:var(--mono)}
-  .infra-row .value{color:var(--fg);font-family:var(--mono);word-break:break-all}
-  .infra-row .value.ok{color:var(--ok)}
-  .infra-row .value.warn{color:var(--warn)}
-  .infra-row .value.err{color:var(--err)}
-  .infra-tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:.04em}
-  .infra-tag.on{background:rgba(158,206,106,.15);color:var(--ok)}
-  .infra-tag.off{background:rgba(127,136,176,.15);color:var(--dim)}
 </style>
 </head>
 <body>
@@ -252,30 +293,15 @@
   <img class="logo" src="__GM_API_BASE__/logo.png" alt="Gray Matter"
        onerror="this.style.display='none'">
   <h1>Gray Matter</h1>
-  <span class="sub">Control Center</span>
+  <span class="sub" id="hdr-sub">Control Center</span>
   <span class="spacer"></span>
+  <div class="health-bar" id="health-bar"></div>
   <select id="lang-select" title="Language / Lingua">
     <option value="it">IT</option>
     <option value="en">EN</option>
   </select>
-  <span class="sub" id="pyv"></span>
 </header>
 
-<div class="health-bar" id="health-bar"></div>
-
-<div class="clients-panel" id="clients-panel">
-  <div class="head">
-    <span class="title" id="clients-title"></span>
-    <span class="sub" id="clients-sub"></span>
-    <button class="ghost" id="btn-clients-refresh"></button>
-  </div>
-  <div class="clients-grid" id="clients-grid"></div>
-  <div class="client-problems" id="clients-problems" style="display:none"></div>
-  <div class="actions">
-    <button id="btn-clients-register"></button>
-    <button class="ghost" id="btn-clients-hide"></button>
-  </div>
-</div>
 <div class="migration-banner" id="migration-banner">
   <span class="icon">&#9888;</span>
   <span class="msg" id="migration-msg"></span>
@@ -284,14 +310,10 @@
   <button id="btn-migrate-dismiss" class="dismiss"></button>
 </div>
 
-<div class="infra" id="infra-panels"></div>
-
 <main>
   <nav>
-    <h2 id="nav-title"></h2>
-    <div id="envs"></div>
-    <input id="cmd-filter" type="search" autocomplete="off"
-           style="margin-top:10px;padding:5px 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg-2,var(--bg));color:inherit;width:100%;box-sizing:border-box">
+    <div id="views"></div>
+    <input id="cmd-filter" type="search" autocomplete="off">
   </nav>
   <section id="body"><div class="empty" id="loading-msg"></div></section>
 </main>
@@ -308,9 +330,8 @@
     <button id="btn-clear"></button>
   </div>
   <pre id="log"></pre>
-  <!-- Riga di risposta: i comandi che fanno domande (setup, connect, cloud,
-       repair) si rispondono qui. Prima venivano dirottati su una finestra
-       `cmd` esterna — la finestra nera che spuntava dalla GUI. -->
+  <!-- Reply row: commands that ask questions (setup, connect, cloud, repair)
+       are answered here, not in an external console window. -->
   <div class="bar" id="stdin-bar" hidden>
     <span class="t" id="stdin-label"></span>
     <input id="stdin-input" type="text" autocomplete="off" spellcheck="false">
@@ -320,19 +341,20 @@
 
 <script>
 const API = "__GM_API_BASE__";
-// Capability token: ogni pagina servita dal server lo porta incorporato e lo
-// rispedisce su ogni POST. Un sito qualsiasi aperto nel browser può SEMPRE
-// inviare richieste a 127.0.0.1 (il CORS non blocca la sending), ma senza il
-// token la richiesta è rifiutata prima di toccare l'Api.
+// Capability token: every page the server serves embeds it and sends it back
+// on each POST. Any site open in the browser CAN send requests to 127.0.0.1
+// (CORS does not block sending), but without the token they are refused
+// before they reach the Api.
 const TOKEN = "__GM_TOKEN__";
-let CATALOG = [], current = null, openCmd = null;
+let CATALOG = [], SECTIONS = [], openCmd = null;
+let view = localStorage.getItem("gm_view") || "overview";
 
 // ── i18n ─────────────────────────────────────────────────────────
 let LANG = localStorage.getItem("gm_lang") || "it";
 const STRINGS = {
   it: {
-    loading_catalog: "Carico il catalogo\u2026",
-    envs_title: "Ambienti",
+    loading_catalog: "Carico il catalogo…",
+    envs_title: "Strumenti",
     not_installed: "non installato",
     console_title: "Console",
     console_collapse: "Chiudi la console",
@@ -349,9 +371,104 @@ const STRINGS = {
     copied: "Copiato!",
     copy_fail: "Copia fallita",
     no_backend: "Non raggiungo il backend",
-    views_title: "Viste",
-    graphs_nav: "Grafi",
-    graphs_sub: "Neuron · NeuRAG · bridge",
+    retrying: "— riprovo…",
+    nav_status: "Stato",
+    nav_cmds: "Comandi",
+    nav_adv: "Avanzato",
+    nav_help: "Aiuto",
+    view_overview: "Panoramica",
+    view_overview_sub: "stato dei tool e della memoria",
+    view_graphs: "Grafi",
+    view_graphs_sub: "Neuron · NeuRAG · bridge",
+    view_ops_sub: "usare la suite ogni giorno",
+    view_graph_sub: "pulire, archiviare, salvare",
+    view_tools_sub: "installare, riparare, diagnosticare",
+    view_settings_sub: "parametri, modalità, connessioni",
+    view_bridges: "Bridge",
+    view_bridges_sub: "per esperti: memoria ↔ conoscenza",
+    view_guide: "Guida e legenda",
+    view_guide_sub: "simboli e parole usate qui",
+    intro_overview: "Lo stato della suite a colpo d'occhio. <b>Gray Matter</b> è il gateway che i client AI vedono; dietro ci sono <b>Neuron</b> (la memoria delle conversazioni) e <b>NeuRAG</b> (la conoscenza dai documenti).",
+    intro_ops: "I comandi di tutti i giorni: avviare e fermare i tool, cercare nella conoscenza, aggiungere documenti. Clicca un comando per vedere cosa fa, cosa chiede e il comando esatto che verrà eseguito.",
+    intro_graph: "Tenere in ordine i grafi: unire doppioni, archiviare, rinominare, fare copie di sicurezza. Molti comandi hanno una <b>prova generale</b>: usala prima di quelli che cancellano.",
+    intro_tools: "Installare, registrare nei client AI, riparare e diagnosticare i tool. Se qualcosa non va, parti da <b>doctor</b> del tool interessato.",
+    intro_settings: "Ogni tool ha i suoi parametri, separati: una modifica si salva subito e vale solo per quel tool. In fondo, le connessioni che riguardano tutta la suite (tunnel, bridge HTTP, cloud).",
+    intro_bridges: "Un <b>bridge</b> collega un concetto della memoria (Neuron) a un nodo della conoscenza (NeuRAG): quando parli di uno, Gray Matter ti ricorda l'altro. Nascono da soli; qui puoi crearli, correggerli o toglierli a mano. Il peso dice quanto è forte: cresce quando il bridge viene riconfermato, cala se resta inutilizzato.",
+    intro_guide: "Come si legge il control center, e cosa vogliono dire le parole che usa.",
+    filter_placeholder: "Cerca un comando…",
+    search_title: "Comandi che corrispondono a ",
+    search_none: "Nessun comando trovato.",
+    no_cmds_here: "Nessun comando di questo tool in questa sezione.",
+    processes_title: "Comandi lanciati da qui",
+    not_installed_detail: " non è installato.",
+    no_commands: " è installato ma non espone nessun comando: quasi sempre è una versione vecchia nel venv. Rilancia l’installer (install.ps1) e riapri.",
+    settings_params: "Parametri",
+    settings_other: "Modalità e servizi",
+    settings_hint: "Ogni modifica si salva subito e resta. ↺ riporta il valore di fabbrica.",
+    conn_title: "Connessioni (tutta la suite)",
+    clients_block: "Client AI collegati (MCP)",
+    repair_hint: "Reinstall pulito. Di default NON cancella nulla: le caselle partono spente. Spunta SOLO ciò che vuoi rimuovere — tutto il resto viene tenuto. Poi reinstalla forzato (bypassa il check versione).",
+    uninstall_hint: "Disinstalla questo componente. I dati vengono rimossi solo se selezionati. Conferma a due click — la verifica finale accerta che sia davvero rimosso.",
+    link_hint: "Ri-aggancia al gateway i tool che erano usciti come standalone. GM torna a gestirli — l’entry MCP diretta del tool sparisce dai client.",
+    expert_args: "Per esperti: argomenti extra",
+    extra_placeholder: "argomenti in più, scritti come nel terminale",
+    no_params_hint: "Non chiede niente: premi Esegui e guarda la console qui sotto.",
+    cmd_line_hint: "Il comando esatto che verrà eseguito (puoi copiarlo in un terminale):",
+    btn_run: "Esegui",
+    badge_ask: "fa domande",
+    interactive_hint: "Questo comando fa domande: rispondi nella riga che compare sotto la console.",
+    leave_empty: "— (lascia vuoto)",
+    required: "obbligatorio",
+    optional: "facoltativo",
+    knob_changed: "modificato",
+    knob_saving: " salvo…",
+    knob_reset: "Riporta al valore di fabbrica",
+    confirm_reinstall_wipe: "Conferma: cancella ",
+    confirm_reinstall_clean: "Conferma reinstall (nessuna cancellazione)",
+    btn_repair: "Ripara",
+    btn_uninstall: "Disinstalla",
+    btn_link: "Ricollega al gateway",
+    btn_confirm: "Conferma: ",
+    btn_stop_all: "Ferma tutti",
+    hb_stop_all: "Ferma tutto",
+    no_processes: "Nessun comando in corso lanciato da qui.",
+    no_tools: "Nessun tool installato.",
+    status_not_installed: "non installato",
+    status_standalone: "standalone — ricollegabile",
+    status_managed: "già gestito da GM",
+    verified_ok: "✓ Disinstallato e verificato.",
+    verify_failed: "✗ Verifica fallita: ",
+    no_standalone: "Nessun tool standalone da ricollegare.",
+    linked_ok: "✓ Ricollegati: ",
+    restart_hint: ". Riavvia le app AI.",
+    none_linked: "Nessun tool ricollegato",
+    loading: "carico…",
+    no_config: "config non disponibile",
+    no_repair: "repair non disponibile",
+    no_uninstall: "uninstall non disponibile",
+    no_link: "stato non disponibile",
+    migrating: "In corso…",
+    ov_running: "attivo",
+    ov_stopped: "fermo",
+    ov_unknown: "stato sconosciuto",
+    ov_via_gateway: "attivo dentro il gateway Gray Matter",
+    ov_install: "Installa ",
+    ov_open: "Comandi",
+    ov_mem: "Memoria e conoscenza",
+    ov_activity: "Dati e attività",
+    clients_sub: "Scegli dove registrare Gray Matter. Nulla viene sovrascritto: le voci esistenti vengono unite, con backup e verifica.",
+    clients_refresh: "Ricontrolla",
+    clients_register: "Registra nei selezionati",
+    repair_will_close: "L'installer chiuderà questo control center per liberare i file. La riparazione CONTINUA: riapri il control center per vedere com'è andata.",
+    last_op_running: "Ultima operazione interrotta (il control center è stato chiuso). Ecco cosa era arrivato:",
+    last_op_done: "Ultima operazione conclusa, uscita",
+    clients_none: "Seleziona almeno un client.",
+    clients_problems: "Problemi rilevati:",
+    clients_ok: "Registrazione completata",
+    clients_absent: "non rilevato",
+    migrate_title: " tool installati ma non nel registro GME:",
+    btn_migrate_all: "Migra tutti",
+    btn_ignore: "Ignora",
     graphs_neuron: "Concetti (Neuron)",
     graphs_neurag: "Nodi KB (NeuRAG)",
     graphs_bridges: "Bridge",
@@ -369,95 +486,81 @@ const STRINGS = {
     graphs_kb_nodes: "nodi KB",
     graphs_bridge_n: "bridge",
     graphs_lib_fail: "Libreria del grafo non caricata",
-    retrying: "\u2014 riprovo\u2026",
-    memoria_title: "Memoria",
     mem_offline: "offline (daemon non attivo)",
     mem_ctx: "Contesto",
     mem_turns: "Turni",
-    mem_nodes: "Nodi",
-    mem_links: "Link attivi",
+    mem_nodes: "Concetti",
+    mem_links: "Legami attivi",
     mem_engine: "Motore",
-    mem_loop: "Loop pre/store",
-    mem_chunks: "Chunks",
-    mem_topics: "Argomenti",
+    mem_loop: "Richiami/salvataggi",
+    mem_chunks: "Pezzi di testo",
+    mem_topics: "Nodi",
     mem_embedder: "Embedding",
-    filter_placeholder: "Filtra comandi\u2026",
-    processes_title: "Processi dei comandi",
-    not_installed_detail: " non \u00e8 installato \u2014 usa il pulsante nella barra a sinistra.",
-    no_commands: " \u00e8 installato ma non espone nessun comando: quasi sempre \u00e8 una versione vecchia nel venv. Rilancia l\u2019installer (install.ps1) e riapri.",
-    settings_hint: "Impostazioni \u2014 ogni modifica si salva subito (persistente).",
-    repair_hint: "Reinstall pulito. Di default NON cancella nulla: le caselle partono spente. Spunta SOLO ci\u00f2 che vuoi rimuovere \u2014 tutto il resto viene tenuto. Poi reinstalla forzato (bypassa il check versione).",
-    uninstall_hint: "Disinstalla questo componente. I dati vengono rimossi solo se selezionati. Conferma a due click \u2014 la verifica finale accerta che sia davvero rimosso.",
-    link_hint: "Ri-aggancia al gateway i tool che erano usciti come standalone. GM torna a gestirli \u2014 l\u2019entry MCP diretta del tool sparisce dai client.",
-    advanced_opts: "Opzioni avanzate (facoltative)",
-    no_params_hint: "Nessun parametro necessario: premi Esegui e guarda la console qui sotto.",
-    btn_run: "Esegui",
-    confirm_reinstall_wipe: "Conferma: cancella ",
-    confirm_reinstall_clean: "Conferma reinstall (nessuna cancellazione)",
-    btn_repair: "Ripara",
-    btn_uninstall: "Disinstalla",
-    btn_link: "Ricollega al gateway",
-    btn_confirm: "Conferma: ",
-    btn_stop_all: "Ferma tutti",
-    hb_stop_all: "Ferma tutto",
-    no_processes: "Nessun processo attivo per ",
-    no_tools: "Nessun tool installato.",
-    status_not_installed: "non installato",
-    status_standalone: "standalone \u2014 ricollegabile",
-    status_managed: "gi\u00e0 gestito da GM",
-    verified_ok: "\u2713 Disinstallato e verificato.",
-    verify_failed: "\u2717 Verifica fallita: ",
-    no_standalone: "Nessun tool standalone da ricollegare.",
-    linked_ok: "\u2713 Ricollegati: ",
-    restart_hint: ". Riavvia le app AI.",
-    none_linked: "Nessun tool ricollegato",
-    loading: "carico\u2026",
-    no_config: "config non disponibile",
-    no_repair: "repair non disponibile",
-    no_uninstall: "uninstall non disponibile",
-    no_link: "stato non disponibile",
-    interactive_hint: "\u23c9 Questo comando fa domande: si aprir\u00e0 in una finestra di terminale.",
-    migrating: "Migrazione in corso\u2026",
-    clients_title: "Client MCP",
-    clients_sub: "Scegli dove registrare Gray Matter. Nulla viene sovrascritto: le voci esistenti vengono unite, con backup e verifica.",
-    clients_refresh: "Ricontrolla",
-    clients_register: "Registra nei selezionati",
-    repair_will_close: "L'installer chiudera questo control center per liberare i file. La riparazione CONTINUA: riapri il control center per vedere com'e andata.",
-    last_op_running: "Ultima operazione interrotta (il control center e stato chiuso). Ecco cosa era arrivato:",
-    last_op_done: "Ultima operazione conclusa, uscita",
-    clients_hide: "Chiudi",
-    clients_none: "Seleziona almeno un client.",
-    clients_problems: "Problemi rilevati:",
-    clients_ok: "Registrazione completata",
-    clients_absent: "non rilevato",
-    migrate_title: " tool installati ma non nel registro GME:",
-    btn_migrate_all: "Migra Tutti",
-    btn_ignore: "Ignora",
-    infra_title: "Infrastruttura",
-    tunnel_title: "Tunnel",
-    tunnel_backend: "Backend",
+    tunnel_title: "Tunnel (accesso da fuori)",
+    tunnel_backend: "Programma",
     tunnel_cloudflare_creds: "Credenziali Cloudflare",
     tunnel_config: "Configurazione",
-    tunnel_none: "Nessun backend trovato \u2014 installa cloudflared o neuron[tunnel]",
-    bridge_title: "Bridge HTTP",
+    tunnel_none: "Nessun programma per il tunnel: installa cloudflared o neuron[tunnel]",
+    bridge_title: "Bridge HTTP (connettori remoti)",
     bridge_server: "Server",
-    bridge_port: "Porta",
-    bridge_escalation: "Escalation",
     bridge_active: "Attivo",
     bridge_inactive: "Non attivo",
-    bridge_full_suite: "Full suite",
+    bridge_full_suite: "Suite completa",
     bridge_standalone: "Standalone",
-    cloud_title: "Cloud Turso",
-    cloud_database: "Database",
-    cloud_status: "Stato",
+    cloud_title: "Cloud Turso (database online)",
     cloud_configured: "Configurato",
     cloud_local: "Solo locale",
-    cloud_env_var: "Variabile",
     cloud_url: "URL",
+    br_add_title: "Nuovo bridge",
+    br_neuron: "Concetto Neuron (o #id di un fatto)",
+    br_neurag: "Nodo NeuRAG (nome esatto)",
+    br_rationale: "Perché sono collegati",
+    br_add: "Aggiungi",
+    br_list: "Bridge salvati",
+    br_filter: "Filtra i bridge…",
+    br_weight: "Peso",
+    br_last: "Ultimo uso",
+    br_edit: "Modifica",
+    br_save: "Salva",
+    br_cancel: "Annulla",
+    br_delete: "Elimina",
+    br_confirm_delete: "Sicuro?",
+    br_none: "Nessun bridge.",
+    br_suggest: "Intendevi: ",
+    br_transfer: "Trasferimento locale ↔ cloud",
+    graphs_link: "Collega",
+    graphs_link_hint: "Trascina da un concetto (o fatto) di Neuron a un nodo di NeuRAG, o viceversa: nasce un bridge.",
+    graphs_link_pick: "ora clicca il nodo da collegare.",
+    graphs_link_kb: "Collega a un nodo KB",
+    graphs_link_neuron: "Collega a un concetto Neuron",
+    graphs_link_bad: "Un bridge unisce un concetto o fatto di Neuron a un nodo di NeuRAG.",
+    graphs_new_bridge: "Nuovo bridge",
+    graphs_physics: "Fisica",
+    graphs_fit: "Centra",
+    ph_repulsion: "Repulsione",
+    ph_central: "Gravità al centro",
+    ph_spring: "Lunghezza legami",
+    ph_stiff: "Rigidità legami",
+    ph_live: "Movimento continuo",
+    ph_relayout: "Riorganizza",
+    ph_reset: "Valori iniziali",
+    gr_archive: "Archivia",
+    gr_restore: "Ripristina",
+    gr_rename: "Rinomina",
+    gr_rename_ph: "nuovo nome",
+    gr_done_reload: "comando avviato, il grafo si ricarica tra poco",
+    intro_bridges_short: "Il motivo spiega perché i due sono legati; il peso quanto il legame è forte.",
+    br_saved: "Bridge aggiornato",
+    br_removed: "Bridge eliminato",
+    br_created: "Bridge creato",
+    br_reinforced: "Esisteva già: rinforzato",
+    br_pick_hint: "I campi suggeriscono i nomi veri mentre scrivi. Puoi anche crearli dal Grafo con ⇄ Collega.",
+    legend_title: "Legenda: come si legge una scheda",
+    gloss_title: "Glossario",
   },
   en: {
-    loading_catalog: "Loading catalog\u2026",
-    envs_title: "Environments",
+    loading_catalog: "Loading catalog…",
+    envs_title: "Tools",
     not_installed: "not installed",
     console_title: "Console",
     console_collapse: "Collapse the console",
@@ -474,9 +577,104 @@ const STRINGS = {
     copied: "Copied!",
     copy_fail: "Copy failed",
     no_backend: "Cannot reach backend",
-    views_title: "Views",
-    graphs_nav: "Graphs",
-    graphs_sub: "Neuron · NeuRAG · bridges",
+    retrying: "— retrying…",
+    nav_status: "Status",
+    nav_cmds: "Commands",
+    nav_adv: "Advanced",
+    nav_help: "Help",
+    view_overview: "Overview",
+    view_overview_sub: "tools and memory status",
+    view_graphs: "Graphs",
+    view_graphs_sub: "Neuron · NeuRAG · bridges",
+    view_ops_sub: "using the suite every day",
+    view_graph_sub: "clean, archive, back up",
+    view_tools_sub: "install, repair, diagnose",
+    view_settings_sub: "parameters, modes, connections",
+    view_bridges: "Bridges",
+    view_bridges_sub: "advanced: memory ↔ knowledge",
+    view_guide: "Guide and legend",
+    view_guide_sub: "symbols and words used here",
+    intro_overview: "The suite at a glance. <b>Gray Matter</b> is the gateway your AI clients see; behind it are <b>Neuron</b> (the memory of your conversations) and <b>NeuRAG</b> (knowledge from your documents).",
+    intro_ops: "Everyday commands: start and stop the tools, search the knowledge, add documents. Click a command to see what it does, what it asks for and the exact command that will run.",
+    intro_graph: "Keeping the graphs tidy: merge duplicates, archive, rename, back up. Many commands have a <b>rehearsal</b>: use it before the ones that delete.",
+    intro_tools: "Install, register in your AI clients, repair and diagnose the tools. If something is wrong, start from the tool's <b>doctor</b>.",
+    intro_settings: "Each tool has its own parameters, kept apart: a change is saved at once and applies to that tool only. At the bottom, the connections that concern the whole suite (tunnel, HTTP bridge, cloud).",
+    intro_bridges: "A <b>bridge</b> links a memory concept (Neuron) to a knowledge node (NeuRAG): when you talk about one, Gray Matter reminds you of the other. They are born on their own; here you can create, correct or remove them by hand. The weight says how strong it is: it grows when the bridge is re-affirmed and fades when it goes unused.",
+    intro_guide: "How to read the control center, and what its words mean.",
+    filter_placeholder: "Find a command…",
+    search_title: "Commands matching ",
+    search_none: "No command found.",
+    no_cmds_here: "No command of this tool in this section.",
+    processes_title: "Commands started from here",
+    not_installed_detail: " is not installed.",
+    no_commands: " is installed but exposes no commands: usually an outdated venv. Re-run the installer (install.ps1) and reopen.",
+    settings_params: "Parameters",
+    settings_other: "Modes and services",
+    settings_hint: "Every change is saved at once and kept. ↺ restores the factory value.",
+    conn_title: "Connections (whole suite)",
+    clients_block: "Connected AI clients (MCP)",
+    repair_hint: "Clean reinstall. By default NOTHING is deleted: checkboxes start unchecked. Check ONLY what you want removed — everything else is kept. Then force reinstall (bypass version check).",
+    uninstall_hint: "Uninstall this component. Data is removed only when selected. Two-click confirm — final verification ensures it’s actually removed.",
+    link_hint: "Re-attach tools that went standalone back to the gateway. GM manages them again — the tool’s direct MCP entry disappears from clients.",
+    expert_args: "For experts: extra arguments",
+    extra_placeholder: "more arguments, written as in a terminal",
+    no_params_hint: "It asks for nothing: press Run and watch the console below.",
+    cmd_line_hint: "The exact command that will run (you can copy it into a terminal):",
+    btn_run: "Run",
+    badge_ask: "asks questions",
+    interactive_hint: "This command asks questions: answer in the row that appears under the console.",
+    leave_empty: "— (leave empty)",
+    required: "required",
+    optional: "optional",
+    knob_changed: "changed",
+    knob_saving: " saving…",
+    knob_reset: "Back to the factory value",
+    confirm_reinstall_wipe: "Confirm: delete ",
+    confirm_reinstall_clean: "Confirm reinstall (no deletion)",
+    btn_repair: "Repair",
+    btn_uninstall: "Uninstall",
+    btn_link: "Re-link to gateway",
+    btn_confirm: "Confirm: ",
+    btn_stop_all: "Stop all",
+    hb_stop_all: "Stop all",
+    no_processes: "No command started from here is running.",
+    no_tools: "No tools installed.",
+    status_not_installed: "not installed",
+    status_standalone: "standalone — re-linkable",
+    status_managed: "already managed by GM",
+    verified_ok: "✓ Uninstalled and verified.",
+    verify_failed: "✗ Verification failed: ",
+    no_standalone: "No standalone tools to re-link.",
+    linked_ok: "✓ Re-linked: ",
+    restart_hint: ". Restart AI apps.",
+    none_linked: "No tools re-linked",
+    loading: "loading…",
+    no_config: "config unavailable",
+    no_repair: "repair unavailable",
+    no_uninstall: "uninstall unavailable",
+    no_link: "state unavailable",
+    migrating: "Working…",
+    ov_running: "running",
+    ov_stopped: "stopped",
+    ov_unknown: "unknown state",
+    ov_via_gateway: "running inside the Gray Matter gateway",
+    ov_install: "Install ",
+    ov_open: "Commands",
+    ov_mem: "Memory and knowledge",
+    ov_activity: "Data and activity",
+    clients_sub: "Choose where to register Gray Matter. Nothing is overwritten: existing entries are merged, with backup and verification.",
+    clients_refresh: "Re-check",
+    clients_register: "Register in selected",
+    repair_will_close: "The installer will close this control center to release the files. The repair KEEPS RUNNING: reopen the control center to see how it went.",
+    last_op_running: "Last operation interrupted (the control center was closed). Here is what had arrived:",
+    last_op_done: "Last operation finished, exit",
+    clients_none: "Select at least one client.",
+    clients_problems: "Problems found:",
+    clients_ok: "Registration complete",
+    clients_absent: "not detected",
+    migrate_title: " tools installed but not in GME registry:",
+    btn_migrate_all: "Migrate all",
+    btn_ignore: "Ignore",
     graphs_neuron: "Concepts (Neuron)",
     graphs_neurag: "KB nodes (NeuRAG)",
     graphs_bridges: "Bridges",
@@ -494,98 +692,114 @@ const STRINGS = {
     graphs_kb_nodes: "KB nodes",
     graphs_bridge_n: "bridges",
     graphs_lib_fail: "Graph library not loaded",
-    retrying: "\u2014 retrying\u2026",
-    memoria_title: "Memory",
     mem_offline: "offline (daemon not running)",
     mem_ctx: "Context",
     mem_turns: "Turns",
-    mem_nodes: "Nodes",
+    mem_nodes: "Concepts",
     mem_links: "Active links",
     mem_engine: "Engine",
-    mem_loop: "pre/store loop",
-    mem_chunks: "Chunks",
-    mem_topics: "Topics",
+    mem_loop: "Recalls/saves",
+    mem_chunks: "Text pieces",
+    mem_topics: "Nodes",
     mem_embedder: "Embedding",
-    filter_placeholder: "Filter commands\u2026",
-    processes_title: "Command processes",
-    not_installed_detail: " is not installed \u2014 use the button in the left panel.",
-    no_commands: " is installed but exposes no commands: usually an outdated venv. Re-run the installer (install.ps1) and reopen.",
-    settings_hint: "Settings \u2014 every change is saved immediately (persistent).",
-    repair_hint: "Clean reinstall. By default NOTHING is deleted: checkboxes start unchecked. Check ONLY what you want removed \u2014 everything else is kept. Then force reinstall (bypass version check).",
-    uninstall_hint: "Uninstall this component. Data is removed only when selected. Two-click confirm \u2014 final verification ensures it\u2019s actually removed.",
-    link_hint: "Re-attach tools that went standalone back to the gateway. GM manages them again \u2014 the tool\u2019s direct MCP entry disappears from clients.",
-    advanced_opts: "Advanced options (optional)",
-    no_params_hint: "No parameters required: press Run and watch the console below.",
-    btn_run: "Run",
-    confirm_reinstall_wipe: "Confirm: delete ",
-    confirm_reinstall_clean: "Confirm reinstall (no deletion)",
-    btn_repair: "Repair",
-    btn_uninstall: "Uninstall",
-    btn_link: "Re-link to gateway",
-    btn_confirm: "Confirm: ",
-    btn_stop_all: "Stop all",
-    hb_stop_all: "Stop all",
-    no_processes: "No active processes for ",
-    no_tools: "No tools installed.",
-    status_not_installed: "not installed",
-    status_standalone: "standalone \u2014 re-linkable",
-    status_managed: "already managed by GM",
-    verified_ok: "\u2713 Uninstalled and verified.",
-    verify_failed: "\u2717 Verification failed: ",
-    no_standalone: "No standalone tools to re-link.",
-    linked_ok: "\u2713 Re-linked: ",
-    restart_hint: ". Restart AI apps.",
-    none_linked: "No tools re-linked",
-    loading: "loading\u2026",
-    no_config: "config unavailable",
-    no_repair: "repair unavailable",
-    no_uninstall: "uninstall unavailable",
-    no_link: "state unavailable",
-    interactive_hint: "\u23c9 This command asks questions: it will open in a terminal window.",
-    migrating: "Migrating\u2026",
-    clients_title: "MCP clients",
-    clients_sub: "Choose where to register Gray Matter. Nothing is overwritten: existing entries are merged, with backup and verification.",
-    clients_refresh: "Re-check",
-    clients_register: "Register in selected",
-    repair_will_close: "The installer will close this control center to release the files. The repair KEEPS RUNNING: reopen the control center to see how it went.",
-    last_op_running: "Last operation interrupted (the control center was closed). Here is what had arrived:",
-    last_op_done: "Last operation finished, exit",
-    clients_hide: "Close",
-    clients_none: "Select at least one client.",
-    clients_problems: "Problems found:",
-    clients_ok: "Registration complete",
-    clients_absent: "not detected",
-    migrate_title: " tools installed but not in GME registry:",
-    btn_migrate_all: "Migrate All",
-    btn_ignore: "Ignore",
-    infra_title: "Infrastructure",
-    tunnel_title: "Tunnel",
-    tunnel_backend: "Backend",
-    tunnel_cloudflare_creds: "Cloudflare Credentials",
+    tunnel_title: "Tunnel (access from outside)",
+    tunnel_backend: "Program",
+    tunnel_cloudflare_creds: "Cloudflare credentials",
     tunnel_config: "Configuration",
-    tunnel_none: "No backend found \u2014 install cloudflared or neuron[tunnel]",
-    bridge_title: "HTTP Bridge",
+    tunnel_none: "No tunnel program found: install cloudflared or neuron[tunnel]",
+    bridge_title: "HTTP bridge (remote connectors)",
     bridge_server: "Server",
-    bridge_port: "Port",
-    bridge_escalation: "Escalation",
     bridge_active: "Active",
     bridge_inactive: "Inactive",
     bridge_full_suite: "Full suite",
     bridge_standalone: "Standalone",
-    cloud_title: "Cloud Turso",
-    cloud_database: "Database",
-    cloud_status: "Status",
+    cloud_title: "Turso cloud (online databases)",
     cloud_configured: "Configured",
     cloud_local: "Local only",
-    cloud_env_var: "Variable",
     cloud_url: "URL",
+    br_add_title: "New bridge",
+    br_neuron: "Neuron concept (or #id of a fact)",
+    br_neurag: "NeuRAG node (exact name)",
+    br_rationale: "Why they are linked",
+    br_add: "Add",
+    br_list: "Saved bridges",
+    br_filter: "Filter bridges…",
+    br_weight: "Weight",
+    br_last: "Last used",
+    br_edit: "Edit",
+    br_save: "Save",
+    br_cancel: "Cancel",
+    br_delete: "Delete",
+    br_confirm_delete: "Sure?",
+    br_none: "No bridges.",
+    br_suggest: "Did you mean: ",
+    br_transfer: "Local ↔ cloud transfer",
+    graphs_link: "Link",
+    graphs_link_hint: "Drag from a Neuron concept (or fact) to a NeuRAG node, or the other way round: a bridge is born.",
+    graphs_link_pick: "now click the node to link.",
+    graphs_link_kb: "Link to a KB node",
+    graphs_link_neuron: "Link to a Neuron concept",
+    graphs_link_bad: "A bridge joins a Neuron concept or fact to a NeuRAG node.",
+    graphs_new_bridge: "New bridge",
+    graphs_physics: "Physics",
+    graphs_fit: "Fit",
+    ph_repulsion: "Repulsion",
+    ph_central: "Center gravity",
+    ph_spring: "Link length",
+    ph_stiff: "Link stiffness",
+    ph_live: "Keep moving",
+    ph_relayout: "Re-layout",
+    ph_reset: "Defaults",
+    gr_archive: "Archive",
+    gr_restore: "Restore",
+    gr_rename: "Rename",
+    gr_rename_ph: "new name",
+    gr_done_reload: "command started, the graph reloads shortly",
+    intro_bridges_short: "The rationale says why the two are linked; the weight how strong the link is.",
+    br_saved: "Bridge updated",
+    br_removed: "Bridge deleted",
+    br_created: "Bridge created",
+    br_reinforced: "It already existed: reinforced",
+    br_pick_hint: "The fields suggest real names as you type. You can also create them from the Graph with ⇄ Link.",
+    legend_title: "Legend: how to read a command",
+    gloss_title: "Glossary",
   },
 };
 
+// [symbol, it, en] — symbols get a mono font, words a bold one.
+const LEGEND = [
+  ["*", "Campo obbligatorio: senza, il comando non parte.", "Required field: the command will not start without it."],
+  ["<nome>", "Un valore che scrivi tu (un nome, una cartella, una parola).", "A value you type (a name, a folder, a word)."],
+  ["--opzione", "Un'opzione facoltativa. Se il campo resta vuoto vale il predefinito.", "An optional setting. Left empty, the default applies."],
+  ["☐", "Casella = interruttore: spuntata aggiunge l'opzione al comando.", "Checkbox = a switch: ticked, it adds the option to the command."],
+  ["▾ menu", "Scegli fra valori fissi; la spiegazione dice cosa fa ciascuno.", "Pick among fixed values; the explanation says what each does."],
+  ["$ …", "Il comando esatto che verrà eseguito: si aggiorna mentre compili, e puoi copiarlo in un terminale.", "The exact command that will run: it updates as you fill in, and you can copy it into a terminal."],
+  ["--dry-run", "Prova generale: mostra cosa farebbe senza cambiare niente.", "Rehearsal: shows what it would do without changing anything."],
+  ["fa domande", "Il comando chiede conferme: rispondi nella riga sotto la console.", "The command asks for confirmation: answer in the row under the console."],
+  ["modificato", "Impostazione diversa dal valore di fabbrica (↺ la riporta indietro).", "A setting that differs from its factory value (↺ restores it)."],
+  ["Console", "In basso: l'output dei comandi. Ferma interrompe quello in corso.", "At the bottom: the commands' output. Stop interrupts the running one."],
+];
+// [term, it, en]
+const GLOSSARY = [
+  ["Gray Matter", "Il gateway: l'unico server che i client AI vedono. Smista le richieste a Neuron e NeuRAG e unisce le risposte.", "The gateway: the one server your AI clients see. It routes requests to Neuron and NeuRAG and merges the answers."],
+  ["Neuron", "La memoria: ricorda concetti e fatti delle conversazioni, divisi per contesto (progetto).", "The memory: it remembers concepts and facts from conversations, split by context (project)."],
+  ["NeuRAG", "La conoscenza: indicizza documenti e codice in nodi, e li ritrova quando servono.", "The knowledge: it indexes documents and code into nodes and finds them when needed."],
+  ["Grafo", "Una rete di nodi collegati da legami. Neuron e NeuRAG hanno ciascuno il proprio.", "A network of nodes connected by links. Neuron and NeuRAG each have their own."],
+  ["Concetto / fatto", "In Neuron: un concetto è una parola chiave; un fatto è una frase ricordata, legata a uno o più concetti.", "In Neuron: a concept is a keyword; a fact is a remembered sentence tied to one or more concepts."],
+  ["Nodo / chunk", "In NeuRAG: un nodo è un argomento; i chunk sono i pezzi di testo dei documenti che gli appartengono.", "In NeuRAG: a node is a topic; chunks are the pieces of document text that belong to it."],
+  ["Bridge", "Un collegamento fra un concetto di Neuron e un nodo di NeuRAG, gestito da Gray Matter.", "A link between a Neuron concept and a NeuRAG node, kept by Gray Matter."],
+  ["Archiviare / parcheggiare", "Togliere un nodo dalle ricerche normali senza cancellarlo: si può sempre riportare indietro.", "Taking a node out of normal searches without deleting it: it can always be brought back."],
+  ["Daemon", "Il processo di Gray Matter che resta acceso in background e tiene caldi i tool.", "Gray Matter's process that stays on in the background and keeps the tools warm."],
+  ["Client MCP", "Le app AI (Claude, Cursor, VS Code…) che usano i tool tramite il protocollo MCP.", "The AI apps (Claude, Cursor, VS Code…) that use the tools through the MCP protocol."],
+  ["Embedding", "Il modello che trasforma il testo in numeri per trovare le cose simili. Cambiarlo richiede di reindicizzare.", "The model that turns text into numbers to find similar things. Changing it requires reindexing."],
+  ["Standalone", "Un tool registrato direttamente nei client, fuori dal gateway.", "A tool registered directly in the clients, outside the gateway."],
+];
+
 function T(key) { return (STRINGS[LANG] || STRINGS.it)[key] || key; }
+const L = (it, en) => LANG === "en" ? en : it;
 
 async function call(method, payload){
-  // pywebview espone l'Api direttamente; in browser si passa da HTTP.
+  // pywebview exposes the Api directly; in a browser it goes over HTTP.
   if (window.pywebview && window.pywebview.api && window.pywebview.api[method]){
     return await window.pywebview.api[method](payload ? JSON.stringify(payload) : "");
   }
@@ -598,8 +812,9 @@ async function call(method, payload){
 
 function el(tag, attrs = {}, ...kids){
   const n = document.createElement(tag);
-  for (const [k,v] of Object.entries(attrs)){
+  for (const [k,v] of Object.entries(attrs || {})){
     if (k === "class") n.className = v;
+    else if (k === "html") n.innerHTML = v;          // only for our own STRINGS
     else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
     else if (v !== null && v !== undefined) n.setAttribute(k, v);
   }
@@ -608,218 +823,264 @@ function el(tag, attrs = {}, ...kids){
   return n;
 }
 
+const TOOLCOL = {"gray-matter": "var(--c-gm)", neuron: "var(--c-neuron)", neurag: "var(--c-neurag)"};
+const tdot = key => el("span", {class:"tdot", style:"background:" + (TOOLCOL[key] || "var(--dim)")});
+
 async function loadCatalog(){
   let res;
   try{
     res = await call("catalog", {lang: LANG});
   }catch(e){
-    // Mai pagina bianca: si dice cosa succede e si riprova da soli.
+    // Never a blank page: say what is happening and retry on our own.
     document.getElementById("body").replaceChildren(
       el("div", {class:"empty"}, T("no_backend") + " (" + e + ") " + T("retrying")));
     setTimeout(loadCatalog, 1500);
     return;
   }
   CATALOG = res.envs || [];
-  // La versione in testata: se qui leggi una versione vecchia, gira un venv
-  // stantio — è LA prima cosa da controllare quando "non funziona".
-  if (res.version)
-    document.querySelector("header .sub").textContent = "Control Center · v" + res.version;
+  SECTIONS = res.sections || [];
+  // The version in the header: an old number here means a stale venv is
+  // running — the first thing to check when "it does not work".
+  if (res.version) document.getElementById("hdr-sub").textContent = "Control Center · v" + res.version;
   if (res.error) append("[!] " + res.error, "err");
-  document.getElementById("pyv").textContent = res.python || "";
-  if (!current){
-    const first = CATALOG.find(e => e.installed);
-    current = first ? first.key : (CATALOG[0] && CATALOG[0].key);
-  }
+  // the interpreter path is long: a tooltip, not a header row of its own
+  document.getElementById("hdr-sub").title = res.python || "";
   renderNav();
   render();
 }
 
+// The sidebar: what you can look at, then what you can do, then the rest.
+function navItems(){
+  const sec = SECTIONS.map(s => ({key: s.key, icon: {ops:"▸", graph:"⚒", tools:"⚙", settings:"≡"}[s.key] || "•",
+                                  name: s.label, meta: T("view_" + s.key + "_sub")}));
+  const v = (key, icon) => ({key, icon, name: T("view_" + key), meta: T("view_" + key + "_sub")});
+  return [[T("nav_status"), [v("overview", "◉"), v("graphs", "⬡")]],
+          [T("nav_cmds"), sec],
+          [T("nav_adv"), [v("bridges", "⇄")]],
+          [T("nav_help"), [v("guide", "?")]]];
+}
+
+function go(key){
+  view = key; openCmd = null;
+  localStorage.setItem("gm_view", key);
+  document.getElementById("cmd-filter").value = "";
+  renderNav(); render();
+  document.getElementById("body").scrollTop = 0;   // a new view starts at its top
+}
+
 function renderNav(){
-  const nav = document.getElementById("envs");
+  const nav = document.getElementById("views");
   nav.replaceChildren();
-  for (const e of CATALOG){
-    nav.append(el("button", {
-      class: "env" + (e.installed ? "" : " off"),
-      "aria-current": String(current === e.key),
-      onclick: () => { current = e.key; openCmd = null; renderNav(); render(); }
-    },
-      el("div", {class:"name"},
-        el("span", {class:"dot" + (e.installed ? "" : " off")}), e.label),
-      el("div", {class:"meta"},
-        e.installed ? (e.subtitle + (e.version ? " \u00b7 v" + e.version : ""))
-                    : T("not_installed"))
-    ));
-    if (e.installable)
-      nav.append(el("button", {class:"install", onclick: () => installEnv(e.key)},
-                    "Installa " + e.label));
+  const searching = !!document.getElementById("cmd-filter").value.trim();
+  for (const [title, items] of navItems()){
+    nav.append(el("h2", {}, title));
+    for (const it of items)
+      nav.append(el("button", {class:"nv", "aria-current": String(!searching && view === it.key),
+                               onclick: () => go(it.key)},
+        el("span", {class:"ic"}, it.icon), el("span", {class:"name"}, it.name),
+        el("span", {class:"meta"}, it.meta)));
   }
-  nav.append(el("h2", {}, T("views_title")), el("button", {
-    class: "env", "aria-current": String(current === GRAPH_VIEW),
-    onclick: () => { current = GRAPH_VIEW; openCmd = null; renderNav(); render(); }
-  }, el("div", {class:"name"}, T("graphs_nav")), el("div", {class:"meta"}, T("graphs_sub"))));
 }
 
 function render(){
   const body = document.getElementById("body");
   body.replaceChildren();
-  document.body.classList.toggle("gview", current === GRAPH_VIEW);
-  if (current === GRAPH_VIEW) return graphsPanel(body);
-  const env = CATALOG.find(e => e.key === current);
-  if (!env) return;
-  if (!env.installed){
-    body.append(el("div", {class:"empty"},
-      env.label + T("not_installed_detail")));
-    return;
-  }
-  if (env.error){
-    body.append(el("div", {class:"empty l-err"}, "Catalog error: " + env.error));
-    return;
-  }
-  if (!env.groups.length){
-    body.append(el("div", {class:"empty"},
-      env.label + T("no_commands")));
-    return;
-  }
-  const procCard = el("div", {class:"cmds"});
-  procCard.append(el("div", {class:"hint"}, T("loading")));
-  setTimeout(() => processPanel(env, procCard), 50);
-  body.append(groupCard(env.key + ":processes", T("processes_title"), procCard));
-  for (const g of env.groups){
-    const cards = el("div", {class:"cmds"});
-    for (const c of g.commands) cards.append(commandCard(env, c));
-    body.append(groupCard(env.key + ":" + g.key, g.label, cards));
-  }
-  applyCmdFilter();
-}
-
-// Command filter (nav search box): hides command cards whose name+help do not
-// match the query, then hides groups left with no visible card. Runs on every
-// render because render() rebuilds #body from scratch.
-function applyCmdFilter(){
   const q = document.getElementById("cmd-filter").value.trim().toLowerCase();
-  document.querySelectorAll("#body .grp").forEach(grp => {
-    if (!grp.querySelector(".cmd")) return;   // pannello processi: non e' un elenco di comandi
-    let anyVisible = false;
-    grp.querySelectorAll(".cmd").forEach(card => {
-      const show = !q || card.textContent.toLowerCase().includes(q);
-      card.style.display = show ? "" : "none";
-      if (show) anyVisible = true;
-    });
-    grp.style.display = anyVisible ? "" : "none";
-  });
+  if (q) return searchView(body, q);
+  if (view === "graphs") return graphsPanel(body);
+  if (view === "bridges") return bridgesView(body);
+  if (view === "guide") return guideView(body);
+  if (SECTIONS.some(s => s.key === view)) return sectionView(body, view);
+  return overviewView(body);
 }
 
-function commandCard(env, c){
+const intro = key => el("p", {class:"intro", html: T("intro_" + key)});
+
+// Card collapsible. The state lives in localStorage by key, not in the DOM:
+// views are rebuilt from scratch, so any state kept in the element is lost.
+function collapsible(card, head, key, closedByDefault){
+  const saved = localStorage.getItem("gm_collapsed_" + key);
+  if (saved === "1" || (saved === null && closedByDefault)) card.classList.add("collapsed");
+  head.addEventListener("click", () => {
+    const now = card.classList.toggle("collapsed");
+    localStorage.setItem("gm_collapsed_" + key, now ? "1" : "0");
+  });
+  card.append(head);
+  return card;
+}
+function groupCard(key, title, bodyEl, closedByDefault){
+  const card = collapsible(el("div", {class:"grp"}), el("h3", {}, title), "grp_" + key, closedByDefault);
+  card.append(bodyEl);
+  return card;
+}
+function toolTitle(env){
+  return [tdot(env.key), env.label, el("span", {class:"tsub"}, "· " + env.subtitle),
+          el("span", {class:"tver"}, env.version ? "v" + env.version : "")];
+}
+
+function legendBox(){
+  const box = el("div", {class:"legend"});
+  for (const [sym, it, en] of LEGEND)
+    box.append(el("div", {}, el("span", {class:"sym" + (/^[a-z]/i.test(sym) && !sym.startsWith("--") ? " w" : "")}, sym),
+                   el("span", {}, L(it, en))));
+  return box;
+}
+
+// ── command sections: one block per tool, never mixed ───────────────
+function sectionView(body, sec){
+  body.append(intro(sec));
+  body.append(groupCard("legend", T("legend_title"), legendBox(), true));
+  if (sec === "tools") body.append(groupCard("clients", T("clients_block"), clientsBlock()));
+  for (const env of CATALOG){
+    const blk = el("div", {class:"cmds"});
+    body.append(groupCard(sec + ":" + env.key, toolTitle(env), blk));
+    if (!env.installed){
+      blk.append(el("div", {class:"hint"}, env.label + T("not_installed_detail")));
+      if (env.installable) blk.append(el("button", {class:"go small", style:"justify-self:start",
+        onclick: () => installEnv(env.key)}, T("ov_install") + env.label));
+      continue;
+    }
+    if (env.error){ blk.append(el("div", {class:"hint l-err"}, "Catalog error: " + env.error)); continue; }
+    if (!env.commands.length){ blk.append(el("div", {class:"hint"}, env.label + T("no_commands"))); continue; }
+    let cmds = env.commands.filter(c => c.section === sec);
+    if (sec === "settings" && cmds.some(c => c.name === "config")){
+      // A tool's knobs are the heart of its settings: shown open, not behind a card.
+      const knobs = el("div", {class:"knobs"});
+      blk.append(el("div", {class:"sub-h"}, T("settings_params")),
+                 el("div", {class:"hint"}, T("settings_hint")), knobs);
+      configPanel(env, knobs);
+      cmds = cmds.filter(c => c.name !== "config");
+      if (cmds.length) blk.append(el("div", {class:"sub-h"}, T("settings_other")));
+    }
+    if (!cmds.length && sec !== "settings") blk.append(el("div", {class:"hint"}, T("no_cmds_here")));
+    for (const c of cmds) blk.append(commandCard(env, c));
+  }
+  if (sec === "settings"){
+    const cards = el("div", {class:"cards"});
+    body.append(groupCard("connections", T("conn_title"), cards));
+    infraCards(cards);
+  }
+}
+
+function searchView(body, q){
+  body.append(el("p", {class:"intro"}, T("search_title") + "“" + q + "”"));
+  const label = Object.fromEntries(SECTIONS.map(s => [s.key, s.label]));
+  let any = false;
+  for (const env of CATALOG.filter(e => e.installed)){
+    const hits = env.commands.filter(c => [c.name, c.help, c.when, ...c.args.map(a => a.dest + " " + a.doc)]
+      .join(" ").toLowerCase().includes(q));
+    if (!hits.length) continue;
+    any = true;
+    const blk = el("div", {class:"cmds"});
+    for (const c of hits) blk.append(commandCard(env, c, label[c.section]));
+    body.append(groupCard("search:" + env.key, toolTitle(env), blk));
+  }
+  if (!any) body.append(el("div", {class:"empty"}, T("search_none")));
+}
+
+function guideView(body){
+  body.append(intro("guide"));
+  body.append(groupCard("guide-legend", T("legend_title"), legendBox()));
+  const g = el("div", {class:"legend"});
+  for (const [term, it, en] of GLOSSARY)
+    g.append(el("div", {}, el("span", {class:"sym w"}, term), el("span", {}, L(it, en))));
+  body.append(groupCard("guide-gloss", T("gloss_title"), g));
+}
+
+// ── one command ──────────────────────────────────────────────────────
+// What the user would type in a terminal. Mirrors webgui._argv_for: flags,
+// then "--opt value", then positionals, in the parser's order.
+const shq = s => /[\s"'&|<>^;]/.test(s) || s === "" ? '"' + s.replace(/"/g, '\\"') + '"' : s;
+function cmdLine(env, c, values, extra){
+  const out = [env.key, c.name];
+  for (const a of c.args){
+    const v = values[a.dest];
+    if (a.is_flag){ if (v) out.push(a.flag); }
+    else if (a.flag){ if (String(v || "").trim()) out.push(a.flag, shq(String(v).trim())); }
+    else if (String(v || "").trim()) out.push(shq(String(v).trim()));
+  }
+  if (extra && extra.trim()) out.push(extra.trim());
+  return out.join(" ");
+}
+function synopsis(env, c){
+  return [env.key, c.name, ...c.args.map(a => {
+    const name = a.flag || "<" + a.dest + ">";
+    const s = a.is_flag || !a.flag ? name : name + " …";
+    return a.required ? s : "[" + s + "]";
+  })].join(" ");
+}
+
+const SPECIAL = {repair: "repair_hint", uninstall: "uninstall_hint", link: "link_hint"};
+
+function commandCard(env, c, badge){
   const id = env.key + ":" + c.name;
   const open = openCmd === id;
-  const card = el("div", {
-    class:"cmd", "aria-expanded": String(open),
-    onclick: (ev) => {
-      if (ev.target.closest(".form")) return;   // click dentro il form: non richiudere
-      openCmd = open ? null : id; render();
-    }
-  }, el("div", {class:"n"}, c.name), el("div", {class:"h"}, c.help || ""));
-
-  // "Quando serve" solo a card aperta: chiusa, l'elenco deve restare
-  // scorribile a colpo d'occhio; aperta, e' il momento in cui uno si chiede
-  // davvero "e' questo il comando giusto adesso?".
-  if (open && c.when) card.append(el("div", {class:"when"},
-    el("span", {class:"when-k"}, T("when_label")), c.when));
-
+  const toggle = () => { openCmd = open ? null : id; render(); };
+  const card = el("div", {class:"cmd", "aria-expanded": String(open), title: open ? null : "$ " + synopsis(env, c),
+                          onclick: (ev) => { if (!open) toggle(); }},
+    el("div", {class:"n", onclick: (ev) => { if (open){ ev.stopPropagation(); toggle(); } }}, c.name),
+    el("div", {class:"h"}, c.help || "",
+       c.interactive ? el("span", {class:"badge ask"}, T("badge_ask")) : null,
+       badge ? el("span", {class:"badge"}, badge) : null));
   if (!open) return card;
 
-  // `config` non è un comando come gli altri: è il pannello Impostazioni.
-  // Invece del form generico action/key/value, disegna una card di knob
-  // (toggle/select/campi) che si salvano subito — vale per ogni ambiente che
-  // espone un config (Gray Matter e NeuRAG), zero elenchi a mano.
-  if (c.name === "config"){
-    const panel = el("div", {class:"form"});
-    const knobs = el("div", {class:"knobs"});
-    panel.append(el("div", {class:"hint"},
-      T("settings_hint")), knobs);
-    configPanel(env, knobs);
-    card.append(panel);
-    return card;
-  }
+  // "When to use it" only on an open card: closed, the list must stay
+  // scannable; open is when one wonders "is this the right one now?".
+  if (c.when) card.append(el("div", {class:"when"}, el("span", {class:"when-k"}, T("when_label")), c.when));
 
-  if (c.name === "repair"){
+  // config, repair, uninstall and link are panels, not generic forms.
+  if (c.name === "config" || SPECIAL[c.name]){
     const panel = el("div", {class:"form"});
     const box = el("div", {class:"knobs"});
-    panel.append(el("div", {class:"hint"},
-      T("repair_hint")),
-      box);
-    repairPanel(env, box);
-    card.append(panel);
-    return card;
-  }
-
-  if (c.name === "uninstall"){
-    const panel = el("div", {class:"form"});
-    const box = el("div", {class:"knobs"});
-    panel.append(el("div", {class:"hint"},
-      T("uninstall_hint")),
-      box);
-    uninstallPanel(env, box);
-    card.append(panel);
-    return card;
-  }
-
-  if (c.name === "link"){
-    const panel = el("div", {class:"form"});
-    const box = el("div", {class:"knobs"});
-    panel.append(el("div", {class:"hint"},
-      T("link_hint")),
-      box);
-    linkPanel(env, box);
+    panel.append(el("div", {class:"hint"}, T(SPECIAL[c.name] || "settings_hint")), box);
+    ({config: configPanel, repair: repairPanel, uninstall: uninstallPanel, link: linkPanel})[c.name](env, box);
     card.append(panel);
     return card;
   }
 
   const form = el("div", {class:"form"});
   const inputs = {};
-  const fieldRow = (a) => {
+  const line = el("code");
+  const extra = el("input", {type:"text", placeholder: T("extra_placeholder")});
+  const refresh = () => {
+    const vals = {};
+    for (const [dest, o] of Object.entries(inputs)) vals[dest] = o.spec.is_flag ? o.field.checked : o.field.value;
+    line.textContent = cmdLine(env, c, vals, extra.value);
+  };
+  for (const a of c.args){
     let field;
     if (a.is_flag){
       field = el("input", {type:"checkbox", id:"f_"+a.dest});
     } else if (a.choices && a.choices.length){
       field = el("select", {id:"f_"+a.dest},
-                 ...(a.required ? [] : [el("option", {value:""}, "— (lascia vuoto)")]),
+                 ...(a.required ? [] : [el("option", {value:""}, T("leave_empty"))]),
                  ...a.choices.map(o => el("option", {value:o}, o)));
     } else {
-      field = el("input", {type:"text", id:"f_"+a.dest,
-                           placeholder: a.required ? (LANG === "en" ? "required" : "obbligatorio") : (LANG === "en" ? "optional" : "facoltativo")});
+      field = el("input", {type:"text", id:"f_"+a.dest, placeholder: a.required ? T("required") : T("optional")});
     }
+    field.addEventListener("input", refresh);
+    field.addEventListener("change", refresh);
     inputs[a.dest] = {field, spec:a};
-    return el("div", {class:"row"},
-      el("label", {for:"f_"+a.dest}, a.dest.replace(/_/g,"-"),
-         a.required ? el("span",{class:"req"}," *") : ""),
-      el("div", {}, field,
-         a.help ? el("div", {class:"hint"}, a.help) : ""));
-  };
+    form.append(el("div", {class:"row"},
+      el("label", {for:"f_"+a.dest}, a.flag || "<" + a.dest + ">", a.required ? el("span", {class:"req"}, " *") : ""),
+      el("div", {}, field, a.doc ? el("div", {class:"doc"}, a.doc) : "")));
+  }
+  extra.addEventListener("input", refresh);
+  form.append(el("details", {}, el("summary", {class:"hint"}, T("expert_args")), extra));
+  if (!c.args.length) form.append(el("div", {class:"hint"}, T("no_params_hint")));
+  if (c.interactive) form.append(el("div", {class:"hint", style:"color:var(--warn)"}, T("interactive_hint")));
 
-  const required = c.args.filter(a => a.required);
-  const optional = c.args.filter(a => !a.required);
-  for (const a of required) form.append(fieldRow(a));
-
-  // Le opzioni facoltative e il campo libero stanno ripiegati: il caso comune
-  // è "premi Esegui e basta" — nessun parametro misterioso in faccia.
-  const extra = el("input", {type:"text",
-    placeholder: LANG === "en" ? "extra CLI arguments (advanced)" : "argomenti extra da riga di comando (per esperti)"});
-  const adv = el("details", {},
-    el("summary", {class:"hint"}, T("advanced_opts")),
-    ...optional.map(fieldRow),
-    el("div", {class:"row"}, el("label", {}, "extra"), extra));
-  if (optional.length || !required.length) form.append(adv);
-
-  if (c.interactive)
-    form.append(el("div", {class:"hint"},
-      T("interactive_hint")));
-  else if (!required.length)
-    form.append(el("div", {class:"hint"},
-      T("no_params_hint")));
-
-  form.append(el("button", {class:"go",
-    onclick: () => runCmd(env.key, c, inputs, extra.value)}, T("btn_run")));
+  const copyBtn = el("button", {}, T("btn_copy"));
+  copyBtn.addEventListener("click", async () => {
+    const ok = await copyText(line.textContent);
+    copyBtn.textContent = ok ? T("copied") : T("copy_fail");
+    setTimeout(() => { copyBtn.textContent = T("btn_copy"); }, 1400);
+  });
+  form.append(el("div", {class:"hint"}, T("cmd_line_hint")),
+              el("div", {class:"cline"}, el("span", {class:"pr"}, "$"), line, copyBtn));
+  form.append(el("div", {class:"actions"},
+    el("button", {class:"go", onclick: () => runCmd(env.key, c, inputs, extra.value)}, T("btn_run"))));
+  refresh();
   card.append(form);
   return card;
 }
@@ -1050,49 +1311,43 @@ async function linkPanel(env, container){
   container.append(btn, resultBox);
 }
 
-// --- pannello Processi ---------------------------------------------------
-async function processPanel(env, container){
+// --- commands started from the GUI ----------------------------------------
+async function processPanel(container){
   container.replaceChildren(el("div", {class:"hint"}, T("loading")));
   let r;
-  try { r = await call("process_list", {scope: env.key}); }
-  catch(e){     container.replaceChildren(el("div", {class:"hint"}, "process: " + e)); return; }
+  try { r = await call("process_list", {}); }
+  catch(e){ container.replaceChildren(el("div", {class:"hint"}, "process: " + e)); return; }
   container.replaceChildren();
-  if (!r || !r.ok){
-    container.append(el("div", {class:"hint"}, (r && r.error) || (LANG === "en" ? "no processes" : "nessun processo")));
-    return;
-  }
-  const procs = r.processes || [];
+  const procs = (r && r.ok && r.processes) || [];
   if (!procs.length){
-    container.append(el("div", {class:"hint"}, T("no_processes") + env.label));
+    container.append(el("div", {class:"hint"}, T("no_processes")));
     return;
   }
   for (const p of procs){
-    const stopBtn = el("button", {class:"go", style:"padding:3px 10px;font-size:11px"}, T("btn_stop"));
+    const stopBtn = el("button", {class:"go small"}, T("btn_stop"));
     stopBtn.addEventListener("click", async () => {
       stopBtn.disabled = true;
-      await call("process_stop", {pid: p.pid, scope: env.key});
-      processPanel(env, container);
+      await call("process_stop", {pid: p.pid});
+      processPanel(container);
     });
-    container.append(el("div", {class:"row"},
-      el("label", {}, p.name + " (PID " + p.pid + ")"),
-      el("div", {}, el("span", {class:"hint"}, p.source), stopBtn)));
+    container.append(el("div", {class:"infra-row"},
+      el("span", {class:"value"}, p.name), el("span", {class:"hint"}, "PID " + p.pid), stopBtn));
   }
-  const stopAllBtn = el("button", {class:"go", style:"padding:3px 10px;font-size:11px;background:var(--err)"},
-    T("btn_stop_all"));
+  const stopAllBtn = el("button", {class:"go small danger"}, T("btn_stop_all"));
   stopAllBtn.addEventListener("click", async () => {
     stopAllBtn.disabled = true;
-    await call("process_stop", {scope: env.key});
-    processPanel(env, container);
+    await call("process_stop", {});
+    processPanel(container);
   });
-  container.append(el("div", {class:"row"}, el("label", {}), stopAllBtn));
+  container.append(el("div", {class:"infra-row"}, stopAllBtn));
 }
 
-// --- pannello Impostazioni (knob) ---------------------------------------
+// --- settings (knobs) -------------------------------------------------------
 async function configPanel(env, container){
   container.replaceChildren(el("div", {class:"hint"}, T("loading")));
   let r;
   try { r = await call("config_knobs", {tool: env.key}); }
-  catch(e){     container.replaceChildren(el("div", {class:"hint"}, "config: " + e)); return; }
+  catch(e){ container.replaceChildren(el("div", {class:"hint"}, "config: " + e)); return; }
   container.replaceChildren();
   if (!r || !r.ok){
     container.append(el("div", {class:"hint"}, (r && r.error) || T("no_config")));
@@ -1104,17 +1359,17 @@ async function configPanel(env, container){
 
 function knobRow(env, k){
   const status = el("span", {class:"hint kstat"}, "");
-  const save = (value) => saveKnob(env, k, value, status, badge);
+  const save = (value) => saveKnob(env, k, value, status, badge, reset, control);
   let control;
   if (k.type === "bool"){
-    control = el("input", {type:"checkbox", id:"k_"+k.key});
+    control = el("input", {type:"checkbox", id:"k_"+env.key+k.key});
     control.checked = !!k.value;
     control.addEventListener("change", () => save(control.checked));
   } else if (k.suggest && k.suggest.length){
     const cur = k.value == null ? "" : String(k.value);
     const opts = k.suggest.map(String);
     if (!opts.includes(cur)) opts.push(cur);
-    control = el("select", {id:"k_"+k.key},
+    control = el("select", {id:"k_"+env.key+k.key},
       ...opts.map(o => {
         const opt = el("option", {value:o}, o === "" ? "(default)" : o);
         if (o === cur) opt.selected = true;
@@ -1124,31 +1379,38 @@ function knobRow(env, k){
   } else {
     control = el("input", {
       type: (k.type === "int" || k.type === "float") ? "number" : "text",
-      id:"k_"+k.key, value: k.value == null ? "" : String(k.value)});
+      id:"k_"+env.key+k.key, value: k.value == null ? "" : String(k.value)});
     control.addEventListener("keydown", (e) => {
       if (e.key === "Enter"){ e.preventDefault(); save(control.value); }});
-    control.addEventListener("blur", () => save(control.value));
+    control.addEventListener("blur", () => { if (String(control.value) !== String(k.value ?? "")) save(control.value); });
   }
-  const badge = el("span", {class:"pill", style: k.value !== k.default ? "" : "display:none"},
-                   "modificato");
-  return el("div", {class:"row"},
-    el("label", {for:"k_"+k.key}, k.key.replace(/_/g,"-"), " ", badge),
-    el("div", {}, control,
-       k.help ? el("div", {class:"hint"}, k.help) : "", status));
+  const changed = k.value !== k.default;
+  const badge = el("span", {class:"pill", style: changed ? "" : "display:none"}, T("knob_changed"));
+  const reset = el("button", {class:"ghost", title: T("knob_reset") + " (" + k.default + ")",
+                              style: changed ? "margin-left:6px" : "display:none"}, "↺");
+  reset.addEventListener("click", () => save(k.default));
+  return el("div", {class:"row", title: "$ " + env.key + " config set " + k.key + " <" + (LANG === "en" ? "value" : "valore") + ">"},
+    el("label", {for:"k_"+env.key+k.key}, k.key, " ", badge),
+    el("div", {}, el("div", {style:"display:flex;align-items:center"}, control, reset),
+       k.help ? el("div", {class:"doc"}, k.help) : "", status));
 }
 
-async function saveKnob(env, k, value, status, badge){
-  status.textContent = " salvo…"; status.style.color = "";
+async function saveKnob(env, k, value, status, badge, reset, control){
+  status.textContent = T("knob_saving"); status.style.color = "";
   let r;
   try { r = await call("config_set", {tool: env.key, key: k.key, value}); }
   catch(e){ status.textContent = " ✗ " + e; status.style.color = "var(--err)"; return; }
   if (r && r.ok){
     k.value = r.value;
+    if (control.type === "checkbox") control.checked = !!r.value;
+    else control.value = r.value == null ? "" : String(r.value);
     status.textContent = " ✓"; status.style.color = "var(--ok)";
-    badge.style.display = (r.value !== k.default) ? "" : "none";
+    const changed = r.value !== k.default;
+    badge.style.display = changed ? "" : "none";
+    reset.style.display = changed ? "" : "none";
     setTimeout(() => { status.textContent = ""; }, 1400);
   } else {
-    status.textContent = " ✗ " + ((r && r.error) || "errore");
+    status.textContent = " ✗ " + ((r && r.error) || "error");
     status.style.color = "var(--err)";
   }
 }
@@ -1164,7 +1426,7 @@ async function runCmd(tool, c, inputs, extra){
 async function installEnv(key){
   const r = await call("install_env", {key});
   if (r && r.error) append("[!] " + r.error, "err");
-  setTimeout(loadCatalog, 4000);   // a install finita il catalogo si riallinea
+  setTimeout(loadCatalog, 4000);   // once installed, the catalog realigns
 }
 
 function append(line, tag){
@@ -1178,9 +1440,8 @@ function append(line, tag){
 document.getElementById("btn-start").addEventListener("click", () => call("run", {tool:"gray-matter", command:"start", args:{}}));
 document.getElementById("btn-stop").addEventListener("click", () => call("stop", {}));
 
-// Risposta a un comando interattivo: Invio o il pulsante. Si svuota il campo
-// PRIMA della chiamata — chi risponde in fretta a due domande di fila non deve
-// rischiare di rimandare la prima.
+// Answer to an interactive command: Enter or the button. The field is cleared
+// BEFORE the call, so two quick answers in a row never resend the first.
 async function sendStdin(){
   const box = document.getElementById("stdin-input");
   const text = box.value;
@@ -1197,8 +1458,8 @@ document.getElementById("btn-clear").addEventListener("click", async () => {
   document.getElementById("log").replaceChildren();
 });
 
-// Console collassabile. La barra con Avvia/Ferma resta SEMPRE visibile: chiudere
-// la console non deve togliere i comandi, solo il rumore.
+// Collapsible console. The bar with Start/Stop ALWAYS stays: closing the
+// console must remove the noise, not the controls.
 function applyConsoleCollapsed(){
   const off = localStorage.getItem("gm_console_collapsed") === "1";
   document.querySelector("footer").classList.toggle("collapsed", off);
@@ -1212,22 +1473,15 @@ document.getElementById("btn-console-toggle").addEventListener("click", () => {
   applyConsoleCollapsed();
 });
 
-// Copia tutta la console: serve per mandare la trace di un errore. WebView2/
-// pywebview a volte non danno navigator.clipboard → fallback textarea+execCommand,
-// e come ultima rete un metodo Api lato Python che scrive negli appunti.
-document.getElementById("btn-copy").addEventListener("click", async () => {
-  const btn = document.getElementById("btn-copy");
-  const text = document.getElementById("log").innerText || "";
-  const done = (ok) => {
-    btn.textContent = ok ? T("copied") : T("copy_fail");
-    setTimeout(() => { btn.textContent = T("btn_copy"); }, 1500);
-  };
-  if (!text.trim()){ done(false); return; }
+// Clipboard: WebView2/pywebview sometimes lack navigator.clipboard, so a
+// textarea+execCommand fallback, and as the last net a Python Api method.
+async function copyText(text){
+  if (!text.trim()) return false;
   try {
     if (navigator.clipboard && navigator.clipboard.writeText){
-      await navigator.clipboard.writeText(text); done(true); return;
+      await navigator.clipboard.writeText(text); return true;
     }
-  } catch(e){ /* cade nel fallback */ }
+  } catch(e){ /* falls back */ }
   try {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -1235,145 +1489,124 @@ document.getElementById("btn-copy").addEventListener("click", async () => {
     document.body.appendChild(ta); ta.focus(); ta.select();
     const ok = document.execCommand("copy");
     document.body.removeChild(ta);
-    if (ok){ done(true); return; }
-  } catch(e){ /* ultima rete: Python */ }
+    if (ok) return true;
+  } catch(e){ /* last net: Python */ }
   try {
     const r = await call("copy_clipboard", {text});
-    done(!!(r && r.ok));
-  } catch(e){ done(false); }
+    return !!(r && r.ok);
+  } catch(e){ return false; }
+}
+document.getElementById("btn-copy").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-copy");
+  const ok = await copyText(document.getElementById("log").innerText || "");
+  btn.textContent = ok ? T("copied") : T("copy_fail");
+  setTimeout(() => { btn.textContent = T("btn_copy"); }, 1500);
 });
 
-// Card collassabile. Lo stato sta in localStorage per chiave, non nel DOM:
-// refreshInfra() ricostruisce le card da zero a ogni giro, quindi qualunque
-// stato tenuto nell'elemento verrebbe buttato via al primo refresh.
-function collapsible(card, head, key){
-  if (localStorage.getItem("gm_collapsed_" + key) === "1") card.classList.add("collapsed");
-  head.addEventListener("click", () => {
-    const now = card.classList.toggle("collapsed");
-    localStorage.setItem("gm_collapsed_" + key, now ? "1" : "0");
-  });
-  card.append(head);
-  return card;
-}
-function infraCard(key, title){
-  return collapsible(el("div", {class:"infra-card"}), el("h4", {}, title), key);
-}
-// Gruppo di comandi (o il pannello processi): titolo cliccabile, corpo sotto.
-function groupCard(key, title, bodyEl){
-  const card = collapsible(el("div", {class:"grp"}), el("h3", {}, title), "grp_" + key);
-  card.append(bodyEl);
-  return card;
+let wasRunning = false;
+async function poll(){
+  try{
+    const r = await call("poll_log");
+    for (const l of (r.lines || [])) append(l.line, l.tag);
+    const running = Object.values(r.running || {});
+    document.getElementById("running").textContent =
+      running.length ? "▶ " + running.join(", ") : "";
+    // A command just started: open the console, that is where its output goes.
+    if (running.length && !wasRunning && localStorage.getItem("gm_console_collapsed") === "1"){
+      localStorage.setItem("gm_console_collapsed", "0");
+      applyConsoleCollapsed();
+    }
+    wasRunning = running.length > 0;
+    // The reply row exists only while a command runs.
+    const bar = document.getElementById("stdin-bar");
+    const wasHidden = bar.hidden;
+    bar.hidden = running.length === 0;
+    if (wasHidden && !bar.hidden) document.getElementById("stdin-input").focus();
+  }catch(e){ /* window closing */ }
+  setTimeout(poll, 400);
 }
 
-async function refreshInfra(){
+// ── status cards ─────────────────────────────────────────────────────
+const irow = (card, label, value, cls) => card.append(el("div", {class:"infra-row"},
+  el("span", {class:"label"}, label), el("span", {class:"value " + (cls || "")}, value)));
+const card = (title, ...head) => el("div", {class:"card"}, el("h4", {}, ...head, title));
+
+async function infraCards(container){
+  container.replaceChildren(el("div", {class:"hint"}, T("loading")));
+  let tunnel, bridge, cloud;
   try {
-    const [tunnel, bridge, cloud] = await Promise.all([
-      call("tunnel_state"), call("bridge_state"), call("cloud_state")
-    ]);
-    const container = document.getElementById("infra-panels");
-    container.replaceChildren();
+    [tunnel, bridge, cloud] = await Promise.all([call("tunnel_state"), call("bridge_state"), call("cloud_state")]);
+  } catch(e){ container.replaceChildren(el("div", {class:"hint l-err"}, String(e))); return; }
+  container.replaceChildren();
 
-    // Tunnel card
-    const tCard = infraCard("tunnel", T("tunnel_title"));
-    if (tunnel.ok && tunnel.backends.length){
-      tCard.append(el("div", {class:"infra-row"},
-        el("span", {class:"label"}, T("tunnel_backend")),
-        el("span", {class:"value"}, tunnel.backends.join(", "))));
-      tCard.append(el("div", {class:"infra-row"},
-        el("span", {class:"label"}, T("tunnel_cloudflare_creds")),
-        el("span", {class:"value " + (tunnel.has_cloudflare_creds ? "ok" : "warn")},
-          tunnel.has_cloudflare_creds ? "\u2713" : "\u2717")));
-      if (tunnel.config && tunnel.config.backend){
-        tCard.append(el("div", {class:"infra-row"},
-          el("span", {class:"label"}, T("tunnel_config")),
-          el("span", {class:"value"}, tunnel.config.backend + (tunnel.config.tunnel_name ? " (" + tunnel.config.tunnel_name + ")" : ""))));
-      }
-    } else {
-      tCard.append(el("div", {class:"infra-row"},
-        el("span", {class:"value warn"}, T("tunnel_none"))));
+  const tCard = card(T("tunnel_title"));
+  if (tunnel.ok && tunnel.backends.length){
+    irow(tCard, T("tunnel_backend"), tunnel.backends.join(", "));
+    irow(tCard, T("tunnel_cloudflare_creds"), tunnel.has_cloudflare_creds ? "✓" : "✗",
+         tunnel.has_cloudflare_creds ? "ok" : "warn");
+    if (tunnel.config && tunnel.config.backend)
+      irow(tCard, T("tunnel_config"), tunnel.config.backend + (tunnel.config.tunnel_name ? " (" + tunnel.config.tunnel_name + ")" : ""));
+  } else tCard.append(el("div", {class:"infra-row"}, el("span", {class:"value warn"}, T("tunnel_none"))));
+  tCard.append(el("div", {class:"hint"}, "$ neuron tunnel  ·  $ gray-matter bridge --tunnel"));
+  container.append(tCard);
+
+  const bCard = card(T("bridge_title"));
+  if (bridge.ok){
+    irow(bCard, T("bridge_server"), bridge.full_suite ? T("bridge_full_suite") : T("bridge_standalone"),
+         bridge.full_suite ? "ok" : "");
+    for (const b of bridge.bridges){
+      const active = bridge.active_ports.includes(b.default_port);
+      bCard.append(el("div", {class:"infra-row"}, el("span", {class:"label"}, b.key),
+        el("span", {class:"value"}, el("span", {class:"infra-tag " + (active ? "on" : "off")},
+          active ? T("bridge_active") : T("bridge_inactive")),
+          " :" + b.default_port + (b.escalates_to_gm ? " → gm" : ""))));
     }
-    container.append(tCard);
+  }
+  container.append(bCard);
 
-    // Bridge card
-    const bCard = infraCard("bridge", T("bridge_title"));
-    if (bridge.ok){
-      bCard.append(el("div", {class:"infra-row"},
-        el("span", {class:"label"}, T("bridge_server")),
-        el("span", {class:"value " + (bridge.full_suite ? "ok" : "")},
-          bridge.full_suite ? T("bridge_full_suite") : T("bridge_standalone"))));
-      for (const b of bridge.bridges){
-        const active = bridge.active_ports.includes(b.default_port);
-        bCard.append(el("div", {class:"infra-row"},
-          el("span", {class:"label"}, b.key),
-          el("span", {class:"value"},
-            el("span", {class:"infra-tag " + (active ? "on" : "off")},
-              active ? T("bridge_active") : T("bridge_inactive")),
-            " : " + b.default_port + (b.escalates_to_gm ? " \u2192 gm" : ""))));
-      }
+  const cCard = card(T("cloud_title"));
+  if (cloud.ok){
+    for (const [name, db] of Object.entries(cloud.databases)){
+      cCard.append(el("div", {class:"infra-row"}, el("span", {class:"label"}, name),
+        el("span", {class:"value " + (db.configured ? "ok" : "warn")},
+          db.configured ? "✓ " + T("cloud_configured") : "○ " + T("cloud_local")),
+        el("span", {class:"hint"}, db.env_var)));
+      if (db.configured && db.url) irow(cCard, T("cloud_url"), db.url);
     }
-    container.append(bCard);
+  }
+  cCard.append(el("div", {class:"hint"}, "$ gray-matter cloud status"));
+  container.append(cCard);
+}
 
-    // Cloud card
-    const cCard = infraCard("cloud", T("cloud_title"));
-    if (cloud.ok){
-      for (const [name, db] of Object.entries(cloud.databases)){
-        cCard.append(el("div", {class:"infra-row"},
-          el("span", {class:"label"}, name),
-          el("span", {class:"value " + (db.configured ? "ok" : "warn")},
-            db.configured ? "\u2713 " + T("cloud_configured") : "\u25cb " + T("cloud_local")),
-          el("span", {class:"hint"}, db.env_var)));
-        // The URL was already computed server-side (truncated to 50 chars)
-        // but silently dropped here \u2014 cramped-panel complaint, not missing data.
-        if (db.configured && db.url){
-          cCard.append(el("div", {class:"infra-row"},
-            el("span", {class:"label"}, T("cloud_url")),
-            el("span", {class:"value"}, db.url)));
-        }
-      }
-    }
-    container.append(cCard);
-
-    // Memory card: real numbers from both knowledge tools, via the daemon's
-    // warm workers (IPC, no subprocess). Neuron answers with formatted text —
-    // parsed here with regexes; NeurAG answers with JSON — used as-is.
-    try {
-      const mem = await call("mem_stats");
-      const mCard = infraCard("memoria", T("memoria_title"));
-      const row = (label, value, cls) => mCard.append(el("div", {class:"infra-row"},
-        el("span", {class:"label"}, label),
-        el("span", {class:"value " + (cls || "")}, value)));
-
-      const n = mem.neuron && !mem.neuron.error ? parseNeuronStats(mem.neuron.raw) : null;
-      if (n){
-        row(T("mem_ctx"), n.ctx || "?");
-        row(T("mem_turns"), n.turn ?? "?");
-        row(T("mem_nodes"), n.nodes ?? "?");
-        row(T("mem_links"), n.links ? `${n.active}/${n.links}` : "?");
-        row(T("mem_engine"), n.engine || "?");
-        if (n.loop) row(T("mem_loop"), n.loop);
-      } else {
-        mCard.append(el("div", {class:"infra-row"},
-          el("span", {class:"value warn"}, T("mem_offline"))));
-      }
-
-      const r = mem.neurag && mem.neurag.json;
-      if (r && !mem.neurag.error){
-        row("NeuRAG · " + T("mem_topics"), r.nodes ?? "?");
-        row("NeuRAG · " + T("mem_chunks"), r.chunks ?? "?");
-        if (r.embedder) row("NeuRAG · " + T("mem_embedder"),
-          `${r.embedder} (${r.embedding_dim ?? "?"}d)`);
-      } else {
-        mCard.append(el("div", {class:"infra-row"},
-          el("span", {class:"value warn"}, "NeuRAG: " + T("mem_offline"))));
-      }
-      container.append(mCard);
-    } catch(e){ /* stats are best-effort, never fatal */ }
-  } catch(e){ /* backend down */ }
+// Real numbers from both knowledge tools, through the daemon's warm workers
+// (IPC, no subprocess). Neuron answers with text, NeuRAG with JSON.
+async function memCard(container){
+  const c = card(T("ov_mem"));
+  container.append(c);
+  let mem;
+  try { mem = await call("mem_stats"); } catch(e){ return; }
+  const n = mem.neuron && !mem.neuron.error ? parseNeuronStats(mem.neuron.raw) : null;
+  c.append(el("div", {class:"sub-h", style:"margin-top:0"}, "Neuron"));
+  if (n){
+    irow(c, T("mem_ctx"), n.ctx || "?");
+    irow(c, T("mem_turns"), n.turn ?? "?");
+    irow(c, T("mem_nodes"), n.nodes ?? "?");
+    irow(c, T("mem_links"), n.links ? `${n.active}/${n.links}` : "?");
+    irow(c, T("mem_engine"), n.engine || "?");
+    if (n.loop) irow(c, T("mem_loop"), n.loop);
+  } else irow(c, "", T("mem_offline"), "warn");
+  const r = mem.neurag && mem.neurag.json;
+  c.append(el("div", {class:"sub-h"}, "NeuRAG"));
+  if (r && !mem.neurag.error){
+    irow(c, T("mem_topics"), r.nodes ?? "?");
+    irow(c, T("mem_chunks"), r.chunks ?? "?");
+    if (r.embedder) irow(c, T("mem_embedder"), `${r.embedder} (${r.embedding_dim ?? "?"}d)`);
+  } else irow(c, "", T("mem_offline"), "warn");
 }
 
 // Parse the formatted text `neuron status` returns. The worker renders it
-// either multi-line or as a single "a | b | c" line, so every field stops at
-// the first "|" or newline; anything unmatched stays null and renders "?".
+// either multi-line or as one "a | b | c" line, so every field stops at the
+// first "|" or newline; anything unmatched stays null and renders "?".
 function parseNeuronStats(raw){
   const g = (re) => { const m = raw.match(re); return m ? m[1].trim() : null; };
   const core = raw.match(/Turn (\d+) \| Nodes: (\d+) \| Links: (\d+) \(active (\d+)\)/);
@@ -1389,65 +1622,70 @@ function parseNeuronStats(raw){
   };
 }
 
-async function poll(){
-  try{
-    const r = await call("poll_log");
-    for (const l of (r.lines || [])) append(l.line, l.tag);
-    const running = Object.values(r.running || {});
-    document.getElementById("running").textContent =
-      running.length ? "▶ " + running.join(", ") : "";
-    // La riga di risposta esiste solo mentre un comando gira: un input attivo
-    // senza nessuno che ascolti è solo un modo per confondere.
-    const bar = document.getElementById("stdin-bar");
-    const wasHidden = bar.hidden;
-    bar.hidden = running.length === 0;
-    if (wasHidden && !bar.hidden) document.getElementById("stdin-input").focus();
-  }catch(e){ /* finestra in chiusura */ }
-  setTimeout(poll, 400);
+const startStop = (key, running) => call("run", {tool: key, command: running ? "stop" : "start", args: {}});
+
+async function overviewView(body){
+  body.append(intro("overview"));
+  const tools = el("div", {class:"cards"});
+  body.append(groupCard("ov-tools", T("envs_title"), tools));
+  let health = {};
+  try { const h = await call("health_state"); for (const t of (h.tools || [])) health[t.key] = t; } catch(e){}
+  if (!tools.isConnected) return;
+  for (const env of CATALOG){
+    const h = health[env.key] || {};
+    const st = env.installed ? (h.status || "unknown") : "off";
+    const c = card("", tdot(env.key), el("span", {}, env.label), el("span", {class:"sp"}),
+                   el("span", {class:"hint"}, env.installed ? T("ov_" + (st === "running" ? "running" : st === "stopped" ? "stopped" : "unknown")) : T("not_installed")));
+    c.append(el("div", {class:"hint", style:"margin-bottom:6px"}, env.subtitle));
+    if (env.installed){
+      irow(c, L("Versione", "Version"), env.version || "?");
+      if (h.health && h.health.memory_mb != null) irow(c, "RAM", h.health.memory_mb + " MB");
+      const running = st === "running";
+      if (h.via === "gateway") irow(c, L("Gestito da", "Managed by"), T("ov_via_gateway"), "ok");
+      c.append(el("div", {class:"actions", style:"margin-top:8px"},
+        h.via === "gateway" ? null :
+        el("button", {class:"go small" + (running ? " danger" : ""), onclick: async (ev) => {
+          ev.target.disabled = true; await startStop(env.key, running); setTimeout(render, 1500); }},
+          running ? T("btn_stop") : T("btn_start")),
+        el("button", {class:"ghost", onclick: () => go("ops")}, T("ov_open"))));
+    } else if (env.installable){
+      c.append(el("button", {class:"go small", onclick: () => installEnv(env.key)}, T("ov_install") + env.label));
+    }
+    tools.append(c);
+  }
+  const more = el("div", {class:"cards"});
+  body.append(groupCard("ov-mem", T("ov_activity"), more));
+  memCard(more);
+  const procs = el("div", {class:"card"});
+  more.append(procs);
+  procs.append(el("h4", {}, T("processes_title")));
+  const pbox = el("div");
+  procs.append(pbox);
+  processPanel(pbox);
 }
 
 async function refreshHealth(){
   try {
     const r = await call("health_state");
-    if (!r.ok) return;
-    const bar = document.getElementById("health-bar");
-    bar.replaceChildren();
-    const tools = r.tools || [];
-    for (const t of tools){
-      const cls = t.status || "stopped";
-      const items = [];
-      items.push(el("span", {class:"dot"}));
-      items.push(el("span", null, t.label));
-      if (t.version) items.push(el("span", {class:"val"}, "v" + t.version));
-      if (t.health && t.health.ping_ms != null)
-        items.push(el("span", {class:"val"}, t.health.ping_ms + "ms"));
-      if (t.health && t.health.memory_mb != null)
-        items.push(el("span", {class:"val"}, t.health.memory_mb + "MB"));
-      // Toggle button: running -> stop, stopped -> start
-      const running = cls === "running";
-      const btn = el("button", {class:"hb"}, running ? "\u25a0" : "\u25b6");
-      btn.title = running ? "Stop " + t.label : "Start " + t.label;
-      btn.onclick = async () => {
-        btn.disabled = true;
-        if (running){
-          await call("run", {tool: t.key, command: "stop", args: {}});
-        } else {
-          await call("run", {tool: t.key, command: "start", args: {}});
-        }
-        refreshHealth();  // immediate refresh
-      };
-      items.push(btn);
-      bar.append(el("div", {class:"health-item " + cls}, ...items));
-    }
-    // "Stop All" button for GM daemon
-    if (tools.length > 0){
-      const stopAll = el("button", {class:"stop-all"}, T("hb_stop_all"));
-      stopAll.onclick = async () => {
-        stopAll.disabled = true;
-        await call("stop", {});
-        setTimeout(refreshHealth, 500);
-      };
-      bar.append(stopAll);
+    if (r.ok){
+      const bar = document.getElementById("health-bar");
+      bar.replaceChildren();
+      const tools = r.tools || [];
+      for (const t of tools){
+        const cls = t.status || "stopped";
+        const running = cls === "running";
+        const btn = el("button", {class:"hb", title: (running ? T("btn_stop") : T("btn_start")) + " " + t.label},
+                       running ? "■" : "▶");
+        btn.onclick = async () => { btn.disabled = true; await startStop(t.key, running); refreshHealth(); };
+        bar.append(el("div", {class:"health-item " + cls, title: t.label + (t.version ? " v" + t.version : "")
+                                + (t.via === "gateway" ? " · " + T("ov_via_gateway") : "")},
+          el("span", {class:"dot"}), el("span", {}, t.label), t.via === "gateway" ? null : btn));
+      }
+      if (tools.length){
+        const stopAll = el("button", {class:"stop-all"}, T("hb_stop_all"));
+        stopAll.onclick = async () => { stopAll.disabled = true; await call("stop", {}); setTimeout(refreshHealth, 500); };
+        bar.append(stopAll);
+      }
     }
   } catch(e){ /* backend down */ }
   setTimeout(refreshHealth, 15000);
@@ -1456,54 +1694,56 @@ async function refreshHealth(){
 // ── MCP clients: detect + verify + merge ─────────────────────────
 let CLIENT_SEL = new Set();
 
-async function loadClients(){
-  const panel = document.getElementById("clients-panel");
-  const grid  = document.getElementById("clients-grid");
-  const probs = document.getElementById("clients-problems");
-  let st;
-  try { st = await call("clients_state", ""); }
-  catch(e){ return; }
-  if (!st || !st.ok) return;
-
-  grid.replaceChildren();
-  for (const c of (st.clients || [])){
-    const bad = !!c.problem;
-    const item = el("div", {class:"client-item" + (c.detected ? "" : " absent") + (bad ? " bad" : "")});
-    const dot  = el("span", {class:"dot" + (c.registered ? " on" : "") + (bad ? " warn" : "")});
-    const box  = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = CLIENT_SEL.has(c.key) || (c.detected && !c.registered);
-    if (box.checked) CLIENT_SEL.add(c.key);
-    box.onchange = () => { box.checked ? CLIENT_SEL.add(c.key) : CLIENT_SEL.delete(c.key); };
-    item.append(box, dot, el("span", {}, c.label));
-    if (!c.detected) item.append(el("span", {class:"path"}, " " + T("clients_absent")));
-    item.onclick = (ev) => { if (ev.target !== box){ box.checked = !box.checked; box.onchange(); } };
-    grid.append(item);
+function clientsBlock(){
+  const box = el("div");
+  const grid = el("div", {class:"clients-grid"});
+  const probs = el("div", {class:"client-problems", style:"display:none"});
+  box.append(el("div", {class:"hint", style:"margin-bottom:8px"}, T("clients_sub")), grid, probs,
+    el("div", {class:"actions"},
+      el("button", {class:"go small", onclick: () => registerClients(load)}, T("clients_register")),
+      el("button", {class:"ghost", onclick: () => load()}, T("clients_refresh"))));
+  async function load(){
+    let st;
+    try { st = await call("clients_state", ""); } catch(e){ return; }
+    if (!st || !st.ok){ grid.replaceChildren(el("div", {class:"hint"}, (st && st.error) || "?")); return; }
+    grid.replaceChildren();
+    for (const c of (st.clients || [])){
+      const bad = !!c.problem;
+      const item = el("div", {class:"client-item" + (c.detected ? "" : " absent") + (bad ? " bad" : "")});
+      const dot  = el("span", {class:"dot" + (c.registered ? " on" : "") + (bad ? " warn" : "")});
+      const cb   = el("input", {type:"checkbox"});
+      cb.checked = CLIENT_SEL.has(c.key) || (c.detected && !c.registered);
+      if (cb.checked) CLIENT_SEL.add(c.key);
+      cb.onchange = () => { cb.checked ? CLIENT_SEL.add(c.key) : CLIENT_SEL.delete(c.key); };
+      item.append(cb, dot, el("span", {}, c.label));
+      if (!c.detected) item.append(el("span", {class:"hint"}, " " + T("clients_absent")));
+      item.onclick = (ev) => { if (ev.target !== cb){ cb.checked = !cb.checked; cb.onchange(); } };
+      grid.append(item);
+    }
+    // The error register: never silently skip a config we could not use.
+    const withProblems = (st.clients || []).filter(c => c.problem);
+    if (withProblems.length){
+      probs.replaceChildren(el("b", {}, T("clients_problems")));
+      for (const c of withProblems) probs.append(el("div", {}, c.label + ": " + c.problem));
+      probs.style.display = "";
+    } else probs.style.display = "none";
   }
-
-  // The error register: never silently skip a config we could not use.
-  const withProblems = (st.clients || []).filter(c => c.problem);
-  if (withProblems.length){
-    probs.replaceChildren(el("b", {}, T("clients_problems")));
-    for (const c of withProblems) probs.append(el("div", {}, c.label + ": " + c.problem));
-    probs.style.display = "";
-  } else { probs.style.display = "none"; }
-  panel.classList.add("show");
+  load();
+  return box;
 }
 
-async function registerClients(){
+async function registerClients(reload){
   const picked = [...CLIENT_SEL];
   if (!picked.length){ append("[clients] " + T("clients_none"), "warn"); return; }
   const res = await call("clients_register", {clients: picked, gateway: true});
   if (!res.ok && res.error){ append("[clients] " + res.error, "err"); return; }
   for (const r of (res.results || [])){
     const ok = r.ok || r.action === "skipped";
-    append("[clients] " + r.client + ": " + r.action + (r.detail ? " \u2014 " + r.detail : ""),
-           ok ? "ok" : "err");
+    append("[clients] " + r.client + ": " + r.action + (r.detail ? " — " + r.detail : ""), ok ? "ok" : "err");
     if (r.snippet) append(r.snippet, "warn");   // JSONC: hand the user valid JSON
   }
   if (res.ok) append("[clients] " + T("clients_ok"), "ok");
-  loadClients();
+  reload();
 }
 
 async function checkMigration(){
@@ -1512,39 +1752,117 @@ async function checkMigration(){
     if (!r.ok) return;
     const old = r.old_installs || [];
     if (old.length === 0) return;
-    
     const banner = document.getElementById("migration-banner");
-    const msg = document.getElementById("migration-msg");
-    const tools = document.getElementById("migration-tools");
-    
-    msg.innerHTML = "<b>" + old.length + "</b>" + T("migrate_title");
-    tools.replaceChildren();
-    for (const t of old){
-      const pill = el("div", {class:"tool-pill"},
-        el("span", {class:"name"}, t.label),
-        t.venv ? el("span", {class:"path"}, t.venv) : null
-      );
-      tools.append(pill);
-    }
+    document.getElementById("migration-msg").replaceChildren(el("b", {}, String(old.length)), T("migrate_title"));
+    document.getElementById("migration-tools").replaceChildren(...old.map(t => el("div", {class:"tool-pill"},
+      el("span", {}, t.label), t.venv ? el("span", {class:"path"}, t.venv) : null)));
     banner.classList.add("show");
-    
-    // Wire buttons
     document.getElementById("btn-migrate-all").onclick = async () => {
       const res = await call("migrate", {all: true});
       append("[migrate] " + (res.migrated || []).length + " tools registered", "ok");
       banner.classList.remove("show");
-      loadCatalog(); // refresh sidebar
+      loadCatalog();
     };
-    document.getElementById("btn-migrate-dismiss").onclick = () => {
-      banner.classList.remove("show");
-    };
+    document.getElementById("btn-migrate-dismiss").onclick = () => banner.classList.remove("show");
   } catch(e){ /* backend down */ }
 }
 
-// ── Graphs view (read-only): Neuron, NeuRAG, bridges ─────────────
+// ── Bridges (advanced): GM's own store, edited by hand ──────────────
+async function bridgesView(body){
+  body.append(intro("bridges"));
+  const msg = el("div", {class:"hint"});
+  const fN = el("input", {type:"text", placeholder:"kafka", list:"dl-neuron", autocomplete:"off"});
+  const fK = el("input", {type:"text", placeholder:"Streaming", list:"dl-neurag", autocomplete:"off"});
+  const dlN = el("datalist", {id:"dl-neuron"}), dlK = el("datalist", {id:"dl-neurag"});
+  // Real names to pick from: the same read-only call the Graph view makes.
+  call("graphs").then(d => {
+    const opt = v => el("option", {value: v});
+    dlN.replaceChildren(...((d.neuron && d.neuron.nodes) || []).map(n => opt(n.keyword)));
+    dlK.replaceChildren(...((d.neurag && d.neurag.nodes) || []).map(n => opt(n.name)));
+  }).catch(() => {});
+  const fR = el("input", {type:"text"});
+  const add = el("button", {class:"go"}, T("br_add"));
+  add.addEventListener("click", async () => {
+    add.disabled = true;
+    const r = await call("bridge_add", {neuron: fN.value, neurag: fK.value, rationale: fR.value});
+    add.disabled = false;
+    msg.replaceChildren();
+    if (r && r.ok){ toast(T(r.created ? "br_created" : "br_reinforced"), "ok"); fN.value = fK.value = fR.value = ""; loadList(); return; }
+    msg.append(el("span", {class:"l-err"}, (r && r.error) || "error"));
+    if (r && r.suggest) msg.append("  ", T("br_suggest"),
+      el("a", {href:"#", onclick: (ev) => { ev.preventDefault(); fK.value = r.suggest; }}, r.suggest));
+  });
+  const lab = (t, f) => el("div", {}, el("label", {}, t), f);
+  body.append(groupCard("br-add", T("br_add_title"), el("div", {style:"display:grid;gap:8px"},
+    el("div", {class:"hint"}, T("br_pick_hint")), dlN, dlK,
+    el("div", {class:"bform"}, lab(T("br_neuron"), fN), lab(T("br_neurag"), fK), lab(T("br_rationale"), fR), add), msg)));
+
+  const filter = el("input", {type:"search", placeholder: T("br_filter"), style:"max-width:320px;margin-bottom:8px"});
+  const tbl = el("div");
+  body.append(groupCard("br-list", T("br_list"), el("div", {}, filter, tbl)));
+  let rows = [];
+  filter.addEventListener("input", draw);
+
+  async function loadList(){
+    tbl.replaceChildren(el("div", {class:"hint"}, T("loading")));
+    let r;
+    try { r = await call("bridges_list"); } catch(e){ r = {error: String(e)}; }
+    if (!r || !r.ok){ tbl.replaceChildren(el("div", {class:"hint l-err"}, (r && r.error) || "error")); return; }
+    rows = r.bridges || [];
+    draw();
+  }
+  function draw(){
+    const q = filter.value.trim().toLowerCase();
+    const vis = rows.filter(b => !q || [b.neuron, b.neurag, b.rationale].join(" ").toLowerCase().includes(q));
+    if (!vis.length){ tbl.replaceChildren(el("div", {class:"hint"}, T("br_none"))); return; }
+    const t = el("table", {class:"bt"}, el("tr", {},
+      el("th", {}, "Neuron"), el("th", {}, "NeuRAG"), el("th", {}, T("br_weight")),
+      el("th", {}, T("br_rationale")), el("th", {}, T("br_last")), el("th", {})));
+    for (const b of vis) t.append(rowOf(b));
+    tbl.replaceChildren(t, el("div", {class:"hint", style:"margin-top:6px"}, vis.length + " / " + rows.length));
+  }
+  function rowOf(b){
+    const when = b.last_used ? new Date(b.last_used * 1000).toLocaleDateString(LANG === "en" ? "en-GB" : "it-IT") : "";
+    const tr = el("tr");
+    const showRow = () => {
+      let armed = false;
+      const del = el("button", {class:"ghost"}, T("br_delete"));
+      del.addEventListener("click", async () => {
+        if (!armed){ armed = true; del.textContent = T("br_confirm_delete"); del.style.color = "var(--err)";
+                     setTimeout(() => { armed = false; del.textContent = T("br_delete"); del.style.color = ""; }, 4000); return; }
+        const r = await call("bridge_remove", {neuron: b.neuron, neurag: b.neurag});
+        if (r && r.ok) loadList(); else append("[bridge] " + ((r && r.error) || "error"), "err");
+      });
+      tr.replaceChildren(el("td", {class:"m"}, b.neuron), el("td", {class:"m"}, b.neurag),
+        el("td", {class:"n"}, Number(b.weight || 0).toFixed(1)), el("td", {}, b.rationale || ""),
+        el("td", {class:"n hint"}, when),
+        el("td", {class:"a"}, el("button", {class:"ghost", onclick: edit}, T("br_edit")), " ", del));
+    };
+    const edit = () => {
+      const fw = el("input", {type:"number", step:"0.5", min:"0.5", value: String(b.weight ?? 1), style:"width:80px"});
+      const fr = el("input", {type:"text", value: b.rationale || ""});
+      const save = el("button", {class:"go small"}, T("br_save"));
+      save.addEventListener("click", async () => {
+        const r = await call("bridge_update", {neuron: b.neuron, neurag: b.neurag, rationale: fr.value, weight: fw.value});
+        if (r && r.ok) loadList(); else append("[bridge] " + ((r && r.error) || "error"), "err");
+      });
+      tr.replaceChildren(el("td", {class:"m"}, b.neuron), el("td", {class:"m"}, b.neurag),
+        el("td", {class:"n"}, fw), el("td", {}, fr), el("td", {class:"n hint"}, when),
+        el("td", {class:"a"}, save, " ", el("button", {class:"ghost", onclick: showRow}, T("br_cancel"))));
+    };
+    showRow();
+    return tr;
+  }
+  loadList();
+
+  const gm = CATALOG.find(e => e.key === "gray-matter");
+  const tr = gm && gm.commands.find(c => c.name === "bridges-transfer");
+  if (tr) body.append(groupCard("br-transfer", T("br_transfer"), el("div", {class:"cmds"}, commandCard(gm, tr))));
+}
+
+// ── Graphs view: Neuron, NeuRAG, bridges (bridges and KB nodes editable) ─────────────
 // The data comes from the tools (Api.graphs -> daemon IPC), never from the
 // stores; the library is vendored in assets/ so the view works offline.
-const GRAPH_VIEW = "__graphs__";
 const GCOL = {neuron:"#7aa2f7", neurag:"#bb9af7", fact:"#e0af68", bridge:"#9ece6a"};
 let visReady = null;
 
@@ -1630,16 +1948,32 @@ function graphModel(data){
   return {nodes, edges, byId, factsOf, bridgesOf, counts, errors};
 }
 
-function graphSide(side, m, id, edgeId){
+// What a node stands for as a bridge end: a concept by keyword, a fact by
+// "#id", a KB node by its exact name; null for anything else (ghost ends).
+function bridgeEnd(n){
+  if (!n || !n.raw) return null;
+  if (n.kind === "concept") return {side: "neuron", name: n.raw.keyword};
+  if (n.kind === "fact") return {side: "neuron", name: "#" + n.raw.id};
+  if (n.kind === "kb") return {side: "neurag", name: n.raw.name};
+  return null;
+}
+
+function graphSide(side, m, id, edgeId, g){
   side.replaceChildren();
   const n = m.byId[id];
   if (!n){
     const e = m.edges.find(x => x.id === edgeId);
+    if (e && e.bridge) return bridgeEditor(side, e.bridge, g);
     side.append(e ? el("div", {class:"gfact"}, e.title || "") : el("div", {class:"hint"}, T("graphs_pick")));
     return;
   }
   side.append(el("h4", {}, n.label));
   const r = n.raw || {};
+  const acts = el("div", {class:"actions", style:"margin:6px 0"});
+  side.append(acts);
+  const end = bridgeEnd(n);
+  if (end) acts.append(el("button", {class:"ghost", onclick: () => g.startLink(id)},
+    "⇄ " + T(end.side === "neuron" ? "graphs_link_kb" : "graphs_link_neuron")));
   if (n.kind === "concept"){
     side.append(el("div", {class:"hint"}, [r.domain, r.topic].filter(Boolean).join(" · ")),
                 el("div", {class:"gk"}, T("graphs_facts")));
@@ -1649,6 +1983,19 @@ function graphSide(side, m, id, edgeId){
       el("div", {class:"gk"}, f.kind + " · #" + f.id + (f.confirmed ? " · ✓" + f.confirmed : "")),
       f.text));
   } else if (n.kind === "kb"){
+    // NeuRAG's own commands, the same the Graph maintenance section runs.
+    const runN = async (command, args, label) => {
+      const res = await call("run", {tool: "neurag", command, args});
+      if (res && res.error){ toast(res.error, "err"); return; }
+      toast(label + " — " + T("gr_done_reload"), "ok");
+      setTimeout(g.reload, 2500);
+    };
+    acts.append(el("button", {class:"ghost", onclick: () =>
+      runN("archive", n.archived ? {name: r.name, restore: true} : {name: r.name},
+           T(n.archived ? "gr_restore" : "gr_archive"))}, T(n.archived ? "gr_restore" : "gr_archive")));
+    const nn = el("input", {type:"text", placeholder: T("gr_rename_ph"), style:"width:140px"});
+    acts.append(nn, el("button", {class:"ghost", onclick: () => nn.value.trim() &&
+      runN("rename-node", {name: r.name, new_name: nn.value.trim()}, T("gr_rename"))}, T("gr_rename")));
     side.append(el("div", {class:"hint"}, r.path),
       el("div", {class:"gk"}, r.node_type + " · layer " + (r.layer || 2)
                               + (n.archived ? " · " + T("graphs_archived_one") : "")));
@@ -1662,13 +2009,73 @@ function graphSide(side, m, id, edgeId){
   } else side.append(el("div", {class:"hint"}, T("graphs_missing")));
   const bs = m.bridgesOf[id] || [];
   if (bs.length) side.append(el("div", {class:"gk"}, T("graphs_bridge_list")));
-  for (const b of bs) side.append(el("div", {class:"gfact", style:"border-color:" + GCOL.bridge},
+  for (const b of bs) side.append(el("div", {class:"gfact", style:"border-color:" + GCOL.bridge + ";cursor:pointer",
+    onclick: () => bridgeEditor(side, b, g)},
     el("div", {class:"gk"}, b.neuron + " ↔ " + b.neurag + " · w " + Number(b.weight || 0).toFixed(1)),
     b.rationale || ""));
 }
 
+// Edit or delete one bridge (GM's own store), from the graph.
+function bridgeEditor(side, b, g){
+  side.replaceChildren(el("h4", {}, b.neuron + " ↔ " + b.neurag),
+    el("div", {class:"hint"}, T("intro_bridges_short")));
+  const fr = el("input", {type:"text", value: b.rationale || ""});
+  const fw = el("input", {type:"number", step:"0.5", min:"0.5", value: String(b.weight ?? 1)});
+  const save = el("button", {class:"go small"}, T("br_save"));
+  save.addEventListener("click", async () => {
+    const r = await call("bridge_update", {neuron: b.neuron, neurag: b.neurag, rationale: fr.value, weight: fw.value});
+    if (r && r.ok){ toast(T("br_saved"), "ok"); g.reload(); } else toast((r && r.error) || "error", "err");
+  });
+  let armed = false;
+  const del = el("button", {class:"ghost"}, T("br_delete"));
+  del.addEventListener("click", async () => {
+    if (!armed){ armed = true; del.textContent = T("br_confirm_delete"); del.style.color = "var(--err)"; return; }
+    const r = await call("bridge_remove", {neuron: b.neuron, neurag: b.neurag});
+    if (r && r.ok){ toast(T("br_removed"), "ok"); g.reload(); } else toast((r && r.error) || "error", "err");
+  });
+  side.append(el("div", {class:"gk"}, T("br_rationale")), fr,
+              el("div", {class:"gk"}, T("br_weight")), fw,
+              el("div", {class:"actions", style:"margin-top:10px"}, save, del));
+}
+
+// Ask for the rationale of a bridge drawn on the graph, then save it.
+function newBridgeForm(side, a, b, g){
+  const nEnd = a.side === "neuron" ? a : b, kEnd = a.side === "neuron" ? b : a;
+  const fr = el("input", {type:"text", placeholder: T("br_rationale")});
+  const save = el("button", {class:"go small"}, T("br_add"));
+  const msg = el("div", {class:"hint"});
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    const r = await call("bridge_add", {neuron: nEnd.name, neurag: kEnd.name, rationale: fr.value});
+    save.disabled = false;
+    if (r && r.ok){ toast(T(r.created ? "br_created" : "br_reinforced"), "ok"); g.reload(); }
+    else msg.replaceChildren(el("span", {class:"l-err"}, (r && r.error) || "error"));
+  });
+  side.replaceChildren(el("h4", {}, T("graphs_new_bridge")),
+    el("div", {class:"gfact", style:"border-color:" + GCOL.bridge},
+      el("div", {class:"gk"}, "Neuron"), nEnd.name, el("div", {class:"gk"}, "NeuRAG"), kEnd.name),
+    el("div", {class:"gk"}, T("br_rationale")), fr,
+    el("div", {class:"actions", style:"margin-top:10px"}, save,
+       el("button", {class:"ghost", onclick: () => graphSide(side, {byId:{}, edges:[]}, null)}, T("br_cancel"))), msg);
+  fr.focus();
+}
+
+// Physics knobs, Obsidian-style: kept per viewer in localStorage.
+const PHYS_DEFAULT = {repulsion: 45, central: 1, spring: 90, stiff: 8, live: false};
+function physOptions(p){
+  return {solver: "forceAtlas2Based", stabilization: {iterations: 250},
+          forceAtlas2Based: {gravitationalConstant: -p.repulsion, centralGravity: p.central / 100,
+                             springLength: p.spring, springConstant: p.stiff / 100, avoidOverlap: .2,
+                             damping: .5}};
+}
+function loadPhys(){
+  try { return Object.assign({}, PHYS_DEFAULT, JSON.parse(localStorage.getItem("gm_graph_phys") || "{}")); }
+  catch (_) { return Object.assign({}, PHYS_DEFAULT); }
+}
+
 async function graphsPanel(body){
   const shows = {neuron: true, neurag: true, bridges: true, archived: true};
+  const phys = loadPhys();
   const net = el("div", {id:"gnet"}, el("div", {class:"empty", style:"padding:22px"}, T("loading")));
   const side = el("div", {id:"gside"}, el("div", {class:"hint"}, T("graphs_pick")));
   const stats = el("span");
@@ -1677,62 +2084,155 @@ async function graphsPanel(body){
     el("input", {type:"checkbox", checked:"", onchange: ev => { shows[k] = ev.target.checked; draw(); }}),
     k === "archived" ? null : el("span", {class:"gsw", style:"background:" + GCOL[k === "bridges" ? "bridge" : k]}),
     T("graphs_" + k)));
+  const linkBtn = el("button", {class:"gbtn", title: T("graphs_link_hint")}, "⇄ " + T("graphs_link"));
+  const physBtn = el("button", {class:"gbtn"}, "⚙ " + T("graphs_physics"));
+  const fitBtn = el("button", {class:"gbtn"}, "⤢ " + T("graphs_fit"));
+  const physBox = el("div", {class:"gphys", hidden:""});
+  const banner = el("div", {class:"gbanner", hidden:""});
   body.append(el("div", {class:"graphs"},
-    el("div", {class:"gbar"}, ...boxes, search,
-       el("button", {onclick: () => render()}, T("graphs_reload")), stats),
+    el("div", {class:"gbar"}, ...boxes, search, linkBtn, physBtn, fitBtn,
+       el("button", {class:"gbtn", onclick: () => render()}, "↻ " + T("graphs_reload")), stats),
+    physBox, banner,
     el("div", {class:"gwrap"}, net, side)));
 
   let data;
   try { await loadVis(); data = await call("graphs"); }
   catch (e){ net.replaceChildren(el("div", {class:"empty l-err", style:"padding:22px"}, String(e))); return; }
-  if (current !== GRAPH_VIEW || !net.isConnected) return;     // the user moved on meanwhile
+  if (view !== "graphs" || !net.isConnected) return;     // the user moved on meanwhile
   const m = graphModel(data || {});
   stats.textContent = m.counts;
   if (data && data.error) m.errors.push(data.error);
   if (m.errors.length) stats.append(el("span", {class:"l-err"}, "  [!] " + m.errors.join(" | ")));
 
   net.replaceChildren();
-  const network = new vis.Network(net, {nodes: [], edges: []}, {
+  const dsN = new vis.DataSet(), dsE = new vis.DataSet();
+  const network = new vis.Network(net, {nodes: dsN, edges: dsE}, {
     nodes: {shape: "dot", borderWidth: 1, scaling: {min: 5, max: 24, label: {enabled: false}},
             font: {color: "#c0caf5", size: 12, face: "Segoe UI"}},
     edges: {color: {color: "#3b4261", highlight: "#7aa2f7", hover: "#7aa2f7", inherit: false},
             smooth: false, width: 1, selectionWidth: 2},
-    physics: {solver: "forceAtlas2Based", stabilization: {iterations: 250},
-              forceAtlas2Based: {gravitationalConstant: -45, springLength: 90, avoidOverlap: .2}},
-    interaction: {hover: true, tooltipDelay: 150, hideEdgesOnDrag: true},
+    physics: physOptions(phys),
+    interaction: {hover: true, tooltipDelay: 150, hideEdgesOnDrag: true, navigationButtons: false},
+    manipulation: {enabled: false, addEdge: (edge, cb) => { cb(null); finishLink(edge.from, edge.to); }},
   });
-  network.on("stabilizationIterationsDone", () => network.setOptions({physics: false}));
-  network.on("click", p => graphSide(side, m, p.nodes[0], p.edges[0]));
+  network.on("stabilizationIterationsDone", () => {
+    if (!phys.live) network.setOptions({physics: false});
+    network.fit({animation: {duration: 400}});
+  });
+  // Dragging a node wakes the simulation for a moment, like Obsidian.
+  network.on("dragStart", p => { if (p.nodes.length) network.setOptions({physics: physOptions(phys)}); });
+  network.on("dragEnd", () => { if (!phys.live) setTimeout(() => network.setOptions({physics: false}), 1500); });
+
+  const g = {reload: () => { if (view === "graphs") render(); }, startLink};
+  network.on("click", p => {
+    if (linking){ if (pendingFrom && p.nodes[0] && p.nodes[0] !== pendingFrom) finishLink(pendingFrom, p.nodes[0]); return; }
+    focusOn(p.nodes[0]);
+    graphSide(side, m, p.nodes[0], p.edges[0], g);
+  });
+
+  // Obsidian-style focus: the picked node and its neighbours stay lit.
+  let lit = null;
+  function focusOn(id){
+    const keep = id ? new Set([id, ...network.getConnectedNodes(id)]) : null;
+    if (!keep && !lit) return;
+    lit = keep;
+    dsN.update(dsN.get().map(n => ({id: n.id,
+      opacity: keep && !keep.has(n.id) ? .12 : (m.byId[n.id].archived ? .3 : 1)})));
+  }
 
   function draw(){
     const keep = n => shows[n.src] && (shows.archived || !n.archived);
     const vn = m.nodes.filter(keep), ids = new Set(vn.map(n => n.id));
-    network.setOptions({physics: true});
-    network.setData({nodes: vn,
-      edges: m.edges.filter(e => shows[e.src] && ids.has(e.from) && ids.has(e.to))});
+    lit = null;
+    dsN.clear(); dsE.clear();
+    dsN.add(vn);
+    dsE.add(m.edges.filter(e => shows[e.src] && ids.has(e.from) && ids.has(e.to)));
+    network.setOptions({physics: physOptions(phys)});
   }
+
+  // Draw a bridge: drag from a Neuron end to a NeuRAG end (either way round).
+  // From the side panel the start is known: the next clicked node ends it.
+  let linking = false, pendingFrom = null;
+  function startLink(fromId){
+    linking = true;
+    pendingFrom = fromId || null;
+    banner.hidden = false;
+    banner.replaceChildren(fromId ? el("b", {}, m.byId[fromId].label + " → ") : "",
+      T(fromId ? "graphs_link_pick" : "graphs_link_hint"), " ",
+      el("button", {class:"ghost", onclick: stopLink}, T("br_cancel")));
+    linkBtn.classList.add("on");
+    if (!fromId) network.addEdgeMode();
+  }
+  function stopLink(){
+    linking = false; pendingFrom = null;
+    banner.hidden = true; linkBtn.classList.remove("on");
+    network.disableEditMode();
+  }
+  function finishLink(from, to){
+    const a = bridgeEnd(m.byId[from]), b = bridgeEnd(m.byId[to]);
+    stopLink();
+    if (!a || !b || a.side === b.side){ toast(T("graphs_link_bad"), "warn"); return; }
+    newBridgeForm(side, a, b, g);
+  }
+  linkBtn.addEventListener("click", () => linking ? stopLink() : startLink());
+  fitBtn.addEventListener("click", () => network.fit({animation: true}));
+
+  // The physics panel: four forces and "keep moving".
+  const save = () => { try { localStorage.setItem("gm_graph_phys", JSON.stringify(phys)); } catch (_) {} };
+  const slider = (key, min, max, step) => {
+    const out = el("span", {class:"gval"}, String(phys[key]));
+    const s = el("input", {type:"range", min, max, step, value: String(phys[key])});
+    s.addEventListener("input", () => {
+      phys[key] = Number(s.value); out.textContent = s.value; save();
+      network.setOptions({physics: physOptions(phys)});
+    });
+    return el("label", {}, T("ph_" + key), s, out);
+  };
+  const live = el("input", {type:"checkbox"});
+  live.checked = phys.live;
+  live.addEventListener("change", () => {
+    phys.live = live.checked; save();
+    network.setOptions({physics: phys.live ? physOptions(phys) : false});
+  });
+  physBox.append(slider("repulsion", 5, 200, 5), slider("central", 0, 10, .5), slider("spring", 20, 300, 10),
+    slider("stiff", 1, 30, 1), el("label", {}, live, T("ph_live")),
+    el("button", {class:"gbtn", onclick: () => { network.setOptions({physics: physOptions(phys)}); network.stabilize(200); }},
+       T("ph_relayout")),
+    el("button", {class:"gbtn", onclick: () => { Object.assign(phys, PHYS_DEFAULT); save(); render(); }}, T("ph_reset")));
+  physBtn.addEventListener("click", () => { physBox.hidden = !physBox.hidden; physBtn.classList.toggle("on", !physBox.hidden); });
+
   search.addEventListener("input", () => {
     const q = search.value.trim().toLowerCase();
     network.selectNodes(q ? m.nodes.filter(n => String(n.label).toLowerCase().includes(q)
-                                                && network.body.data.nodes.get(n.id)).map(n => n.id) : []);
+                                                && dsN.get(n.id)).map(n => n.id) : []);
   });
   search.addEventListener("keydown", ev => {
     const sel = network.getSelectedNodes();
     if (ev.key !== "Enter" || !sel.length) return;
     network.focus(sel[0], {scale: 1.3, animation: true});
-    graphSide(side, m, sel[0]);
+    focusOn(sel[0]);
+    graphSide(side, m, sel[0], null, g);
   });
   draw();
 }
 
-// ── i18n: apply language to all static UI elements ────────────────
+// Short-lived notice in a corner: the outcome of a click, where the eye is.
+function toast(msg, kind){
+  let box = document.getElementById("toasts");
+  if (!box) document.body.append(box = el("div", {id:"toasts"}));
+  const t = el("div", {class:"toast " + (kind || "")}, msg);
+  box.append(t);
+  setTimeout(() => t.classList.add("out"), 3200);
+  setTimeout(() => t.remove(), 3700);
+}
+
+// ── i18n: apply the language to the static parts ─────────────────
 function applyLang(){
   localStorage.setItem("gm_lang", LANG);
   document.documentElement.lang = LANG;
-  // gone once render() has replaced #body: switching language died here
+  // gone once render() has replaced #body
   const loadingMsg = document.getElementById("loading-msg");
   if (loadingMsg) loadingMsg.textContent = T("loading_catalog");
-  document.getElementById("nav-title").textContent = T("envs_title");
   document.getElementById("cmd-filter").placeholder = T("filter_placeholder");
   document.getElementById("console-title").textContent = T("console_title");
   applyConsoleCollapsed();
@@ -1745,51 +2245,27 @@ function applyLang(){
   document.getElementById("stdin-label").textContent = T("stdin_label");
   document.getElementById("stdin-input").placeholder = T("stdin_hint");
   document.getElementById("btn-migrate-all").textContent = T("btn_migrate_all");
-  document.getElementById("clients-title").textContent = T("clients_title");
-  document.getElementById("clients-sub").textContent = T("clients_sub");
-  document.getElementById("btn-clients-refresh").textContent = T("clients_refresh");
-  document.getElementById("btn-clients-register").textContent = T("clients_register");
-  document.getElementById("btn-clients-hide").textContent = T("clients_hide");
   document.getElementById("btn-migrate-dismiss").textContent = T("btn_ignore");
-  // Re-render sidebar + body with new lang
-  if (CATALOG.length){ renderNav(); render(); }
 }
 
-// Wire language selector
 const langSel = document.getElementById("lang-select");
 langSel.value = LANG;
 langSel.addEventListener("change", () => {
   LANG = langSel.value;
   applyLang();
-  // Le descrizioni dei comandi arrivano dal backend gia' nella lingua giusta:
-  // senza ricaricare il catalogo restavano nella lingua precedente, con
-  // l'interfaccia tradotta a meta'.
+  // Command descriptions come from the backend already translated: the
+  // catalog must be reloaded or they stay in the previous language.
   loadCatalog();
 });
 
+// The search box lives outside #body, so it survives every render.
+document.getElementById("cmd-filter").addEventListener("input", () => { renderNav(); render(); });
+
+applyLang();
 loadCatalog();
 poll();
 refreshHealth();
 setTimeout(checkMigration, 800);
-document.getElementById("btn-clients-refresh").onclick = loadClients;
-document.getElementById("btn-clients-register").onclick = registerClients;
-document.getElementById("btn-clients-hide").onclick = () =>
-  document.getElementById("clients-panel").classList.remove("show");
-// Il pannello client si puo' anche solo ripiegare (titolo), e il ripiego resta.
-{
-  const panel = document.getElementById("clients-panel");
-  const title = document.getElementById("clients-title");
-  if (localStorage.getItem("gm_collapsed_clients") === "1") panel.classList.add("collapsed");
-  title.addEventListener("click", () => {
-    const now = panel.classList.toggle("collapsed");
-    localStorage.setItem("gm_collapsed_clients", now ? "1" : "0");
-  });
-}
-setTimeout(loadClients, 1000);
-setTimeout(refreshInfra, 1200);
-// Command filter lives outside #body so it survives render() rebuilds.
-document.getElementById("cmd-filter").addEventListener("input", applyCmdFilter);
-applyLang(); // initial apply
 </script>
 </body>
 </html>

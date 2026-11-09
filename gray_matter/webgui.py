@@ -280,7 +280,10 @@ class Api:
             for env in catalog.environments(lang):
                 envs.append({**env, "groups": catalog.grouped(env),
                              "installable": (not env["installed"]) and env["key"] != "gray-matter"})
-            return {"envs": envs, "python": _python(), "version": _gm_version()}
+            sections = [{"key": k, "label": en if lang == "en" else it}
+                        for k, it, en in catalog.SECTIONS]
+            return {"envs": envs, "sections": sections,
+                    "python": _python(), "version": _gm_version()}
         except BaseException as exc:  # noqa: BLE001 — anche SystemExit
             return {"envs": [], "python": _python(), "version": _gm_version(),
                     "error": f"catalogo non leggibile: {type(exc).__name__}: {exc}"}
@@ -789,6 +792,19 @@ class Api:
         except ImportError:
             pass
         
+        # The daemon knows what really runs: GM itself and the tools it hosts
+        # (the GME pid stays empty for gateway-managed tools, which read as
+        # "stopped" while they answered). One IPC call, short timeout.
+        daemon: "dict | None" = None
+        try:
+            from gray_matter import cli as _cli
+            r = _cli._send_ipc({"action": "status"}, timeout=3.0,
+                               connect_timeout=_cli.FAST_CONNECT)
+            if isinstance(r, dict) and "error" not in r:
+                daemon = r
+        except Exception:  # noqa: BLE001 — daemon down: fall back to the pids
+            daemon = None
+
         tools = []
         for env in catalog.environments():
             if not env.get("installed"):
@@ -826,8 +842,16 @@ class Api:
             except Exception:  # noqa: BLE001
                 health["ping_ms"] = None
             
+            via = ""
+            if daemon is not None:
+                if env["key"] == "gray-matter":
+                    health["status"], via = "running", "daemon"
+                elif (daemon.get(env["key"]) or {}).get("status") == "alive":
+                    health["status"], via = "running", "gateway"
+
             tools.append({
                 "key": env["key"],
+                "via": via,
                 "label": env.get("label", env["key"]),
                 "version": env.get("version", ""),
                 "status": health.get("status", "unknown"),
@@ -906,6 +930,57 @@ class Api:
         except Exception as e:  # noqa: BLE001 — store unreadable: the other two still show
             out["bridges"] = {"error": str(e)}
         return out
+
+    # -- bridges (advanced editing) -----------------------------------------
+    # The bridge store is GM's own (bridges.db), so GM edits it directly; the
+    # NeuRAG end is still checked through the tool, never its store (ADR-016).
+    def bridges_list(self, _args: str = "") -> dict:
+        from gray_matter import bridges as _bridges
+        keep = ("neuron", "neurag", "rationale", "weight", "created", "last_used", "promoted")
+        return {"ok": True, "bridges": [{k: b.get(k) for k in keep}
+                                        for b in _bridges.all_bridges()]}
+
+    def bridge_add(self, args: str = "") -> dict:
+        from gray_matter import bridges as _bridges
+        req = _req(args)
+        neuron = " ".join(str(req.get("neuron", "")).split())
+        node = " ".join(str(req.get("neurag", "")).split())
+        if not neuron or not node:
+            return {"ok": False, "error": "neuron + neurag required"}
+        # ADR-016 D4: the NeuRAG end must be an existing node, by its exact name.
+        hit = self._tool_json("gm-neurag", "knowledge_neighbors",
+                              {"query": node, "depth": 1, "limit": 1})
+        if "error" in hit and "node" not in hit:
+            return {"ok": False, "error": f"NeuRAG unavailable: {hit['error']}"}
+        found = (hit.get("node") or {}).get("name") or ""
+        if found.lower() != node.lower():
+            return {"ok": False, "error": f"no NeuRAG node named '{node}'",
+                    "suggest": found}
+        created = _bridges.add_bridge(neuron, found, str(req.get("rationale", "")))
+        self._emit(f"[bridge] {neuron} <-> {found}: "
+                   + ("created" if created else "reinforced (it already existed)"), "ok")
+        return {"ok": True, "created": created}
+
+    def bridge_update(self, args: str = "") -> dict:
+        from gray_matter import bridges as _bridges
+        req = _req(args)
+        try:
+            weight = None if req.get("weight") in (None, "") else float(req["weight"])
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "weight must be a number"}
+        ok = _bridges.update_bridge(req.get("neuron", ""), req.get("neurag", ""),
+                                    rationale=req.get("rationale"), weight=weight)
+        if ok:
+            self._emit(f"[bridge] {req.get('neuron')} <-> {req.get('neurag')}: updated", "ok")
+        return {"ok": ok} if ok else {"ok": False, "error": "bridge not found or weight out of range"}
+
+    def bridge_remove(self, args: str = "") -> dict:
+        from gray_matter import bridges as _bridges
+        req = _req(args)
+        ok = _bridges.remove_bridge(req.get("neuron", ""), req.get("neurag", ""))
+        if ok:
+            self._emit(f"[bridge] {req.get('neuron')} <-> {req.get('neurag')}: removed", "warn")
+        return {"ok": ok} if ok else {"ok": False, "error": "bridge not found"}
 
     # -- infrastructure ---------------------------------------------------
     def tunnel_state(self, _args: str = "") -> dict:
