@@ -189,6 +189,9 @@
   .bt tr:hover td{background:var(--panel)}
   .bform{display:grid;grid-template-columns:1fr 1fr 2fr auto;gap:8px;align-items:end}
   .bform label{font-size:11px;color:var(--dim);display:block;margin-bottom:3px}
+  .pick{max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px;display:flex;flex-direction:column;gap:2px}
+  .pick-item{all:unset;flex-shrink:0;cursor:pointer;padding:3px 6px;border-radius:4px;font-family:var(--mono,monospace);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pick-item:hover,.pick-item:focus-visible{background:var(--hover,rgba(127,127,127,.15))}
   @media (max-width:800px){.bform{grid-template-columns:1fr}}
 
   /* --- migration banner --- */
@@ -400,6 +403,8 @@ const STRINGS = {
     search_none: "Nessun comando trovato.",
     no_cmds_here: "Nessun comando di questo tool in questa sezione.",
     processes_title: "Comandi lanciati da qui",
+    server_lost: "Il control center ha perso il suo server (chiuso o fermato da una reinstallazione). Chiudi questa finestra e riapri Gray Matter.",
+    br_avail: "Nodi disponibili",
     not_installed_detail: " non è installato.",
     no_commands: " è installato ma non espone nessun comando: quasi sempre è una versione vecchia nel venv. Rilancia l’installer (install.ps1) e riapri.",
     settings_params: "Parametri",
@@ -554,7 +559,7 @@ const STRINGS = {
     br_removed: "Bridge eliminato",
     br_created: "Bridge creato",
     br_reinforced: "Esisteva già: rinforzato",
-    br_pick_hint: "I campi suggeriscono i nomi veri mentre scrivi. Puoi anche crearli dal Grafo con ⇄ Collega.",
+    br_pick_hint: "Sotto ogni campo c'è l'elenco dei nodi che esistono davvero: scrivi per filtrarlo, clicca un nome per sceglierlo. Puoi anche crearli dal Grafo con ⇄ Collega.",
     legend_title: "Legenda: come si legge una scheda",
     gloss_title: "Glossario",
   },
@@ -606,6 +611,8 @@ const STRINGS = {
     search_none: "No command found.",
     no_cmds_here: "No command of this tool in this section.",
     processes_title: "Commands started from here",
+    server_lost: "The control center lost its server (closed, or stopped by a reinstall). Close this window and reopen Gray Matter.",
+    br_avail: "Available nodes",
     not_installed_detail: " is not installed.",
     no_commands: " is installed but exposes no commands: usually an outdated venv. Re-run the installer (install.ps1) and reopen.",
     settings_params: "Parameters",
@@ -760,7 +767,7 @@ const STRINGS = {
     br_removed: "Bridge deleted",
     br_created: "Bridge created",
     br_reinforced: "It already existed: reinforced",
-    br_pick_hint: "The fields suggest real names as you type. You can also create them from the Graph with ⇄ Link.",
+    br_pick_hint: "Under each field is the list of nodes that really exist: type to filter it, click a name to pick it. You can also create them from the Graph with ⇄ Link.",
     legend_title: "Legend: how to read a command",
     gloss_title: "Glossary",
   },
@@ -803,11 +810,28 @@ async function call(method, payload){
   if (window.pywebview && window.pywebview.api && window.pywebview.api[method]){
     return await window.pywebview.api[method](payload ? JSON.stringify(payload) : "");
   }
-  const r = await fetch(API + "/api/" + method, {
+  const post = () => fetch(API + "/api/" + method, {
     method:"POST", headers:{"Content-Type":"application/json", "X-GM-Token":TOKEN},
     body: payload ? JSON.stringify(payload) : ""
   });
+  let r;
+  try { r = await post(); }
+  catch(e){
+    // A network error (not an HTTP one) means this page's server is gone: the
+    // control center process was closed or killed (a reinstall stops it).
+    // Retry once for a blip, then say so once instead of "Failed to fetch" per panel.
+    await new Promise(ok => setTimeout(ok, 400));
+    try { r = await post(); }
+    catch(e2){ serverLost(); throw new Error(T("server_lost")); }
+  }
   return await r.json();
+}
+
+function serverLost(){
+  if (document.getElementById("server-lost")) return;
+  document.body.prepend(el("div", {id:"server-lost", role:"alert",
+    style:"position:fixed;top:0;left:0;right:0;z-index:999;padding:10px 16px;background:var(--err);color:#fff;font-weight:600"},
+    T("server_lost")));
 }
 
 function el(tag, attrs = {}, ...kids){
@@ -1771,15 +1795,29 @@ async function checkMigration(){
 async function bridgesView(body){
   body.append(intro("bridges"));
   const msg = el("div", {class:"hint"});
-  const fN = el("input", {type:"text", placeholder:"kafka", list:"dl-neuron", autocomplete:"off"});
-  const fK = el("input", {type:"text", placeholder:"Streaming", list:"dl-neurag", autocomplete:"off"});
-  const dlN = el("datalist", {id:"dl-neuron"}), dlK = el("datalist", {id:"dl-neurag"});
-  // Real names to pick from: the same read-only call the Graph view makes.
+  const fN = el("input", {type:"text", placeholder:"kafka", autocomplete:"off"});
+  const fK = el("input", {type:"text", placeholder:"Streaming", autocomplete:"off"});
+  // The real names, always in view: the field filters its list, a click fills the field.
+  const picker = (field) => {
+    const box = el("div", {class:"pick"}, el("div", {class:"hint"}, T("loading")));
+    let all = [];
+    const draw = () => {
+      const q = field.value.trim().toLowerCase();
+      const hit = all.filter(n => !q || n.name.toLowerCase().includes(q));
+      box.replaceChildren(el("div", {class:"hint"}, T("br_avail") + ": " + hit.length + " / " + all.length),
+        ...hit.slice(0, 200).map(n => el("button", {type:"button", class:"pick-item", title: n.sub,
+          onclick: () => { field.value = n.name; draw(); }}, n.name, n.sub ? el("span", {class:"hint"}, " " + n.sub) : null)));
+    };
+    field.addEventListener("input", draw);
+    return {box, set: (list, err) => { all = list; if (err) box.replaceChildren(el("div", {class:"hint l-err"}, err)); else draw(); }};
+  };
+  const pN = picker(fN), pK = picker(fK);
+  // The same read-only call the Graph view makes.
   call("graphs").then(d => {
-    const opt = v => el("option", {value: v});
-    dlN.replaceChildren(...((d.neuron && d.neuron.nodes) || []).map(n => opt(n.keyword)));
-    dlK.replaceChildren(...((d.neurag && d.neurag.nodes) || []).map(n => opt(n.name)));
-  }).catch(() => {});
+    const nN = (d.neuron && d.neuron.nodes) || [], nK = (d.neurag && d.neurag.nodes) || [];
+    pN.set(nN.map(n => ({name: n.keyword, sub: n.topic || ""})), d.neuron && d.neuron.error);
+    pK.set(nK.map(n => ({name: n.name, sub: n.path || ""})), d.neurag && d.neurag.error);
+  }).catch(e => { pN.set([], String(e.message || e)); pK.set([], String(e.message || e)); });
   const fR = el("input", {type:"text"});
   const add = el("button", {class:"go"}, T("br_add"));
   add.addEventListener("click", async () => {
@@ -1794,8 +1832,9 @@ async function bridgesView(body){
   });
   const lab = (t, f) => el("div", {}, el("label", {}, t), f);
   body.append(groupCard("br-add", T("br_add_title"), el("div", {style:"display:grid;gap:8px"},
-    el("div", {class:"hint"}, T("br_pick_hint")), dlN, dlK,
-    el("div", {class:"bform"}, lab(T("br_neuron"), fN), lab(T("br_neurag"), fK), lab(T("br_rationale"), fR), add), msg)));
+    el("div", {class:"hint"}, T("br_pick_hint")),
+    el("div", {class:"bform"}, lab(T("br_neuron"), fN), lab(T("br_neurag"), fK), lab(T("br_rationale"), fR), add),
+    el("div", {class:"bform", style:"align-items:start"}, pN.box, pK.box), msg)));
 
   const filter = el("input", {type:"search", placeholder: T("br_filter"), style:"max-width:320px;margin-bottom:8px"});
   const tbl = el("div");
