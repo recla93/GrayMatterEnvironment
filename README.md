@@ -1,4 +1,4 @@
-﻿# Gray Matter Environment
+# Gray Matter Environment
 
 <div align="center">
 <img src="gray_matter/assets/gray-matter-logo.png" alt="Gray Matter logo" width="420">
@@ -24,9 +24,9 @@ Gray Matter is a **Model Context Protocol (MCP)** ecosystem that gives AI agents
 
 | Component | Version | Role | Learns? |
 |---|---|---|---|
-| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.8.1-7c8cff?style=flat-square)](neuron/) | Episodic/conceptual semantic memory — graph, salience, trust, decay | Yes |
-| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.7.0-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base — nodes, chunks, triggers, auto-ingest | No — permanent vault |
-| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.6.0-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, GUI | Bridges only |
+| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.10.0-7c8cff?style=flat-square)](neuron/) | Semantic memory of typed facts (decisions, fixes, ideas, the user and their habits), indexed by a concept graph — salience, trust, decay | Yes |
+| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.8.0-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base of your documents — dated chunks, auto-ingest, history archive | No — permanent vault |
+| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.8.0-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, memory hooks, control center | Bridges only |
 
 **Model:** MCP clients register ONLY `gray-matter` (the gateway). Neuron and
 NeuRAG run as GM-managed workers. Each can also run standalone.
@@ -292,11 +292,11 @@ python gray_matter/selfcheck.py      # Gray Matter deterministics
 3. Merge into `main`. `mirror.yml` splits the tree and fast-forwards the three
    public repos.
 4. Release by tagging **here**, with the prefix matching the subtree folder
-   name: `neuron-v6.8.1`, `neurag-v1.7.0`, `gray_matter-v1.6.0`. A bare `v*`
+   name: `neuron-v6.10.0`, `neurag-v1.8.0`, `gray_matter-v1.8.0`. A bare `v*`
    would fire all three at once, and a prefix that is not the folder name is
    how a tag gets published and never mirrored — `release-gm.yml` once fired on
    `gm-v*` while the mirror looked for `gray_matter-v*`. The mirror renames the
-   tag on the way out, so `neuron-v6.8.1` lands on Neuron as `v6.8.1`, and
+   tag on the way out, so `neuron-v6.10.0` lands on Neuron as `v6.10.0`, and
    then publishes the same Release there (wheels attached, notes generated
    from the mirror's history) — the tag alone left that repo's Releases page
    frozen on the last hand-made release while the tags moved on.

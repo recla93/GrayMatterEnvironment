@@ -20,24 +20,19 @@ The full-suite installer lives in the `gray_matter` folder and installs Gray
 Matter plus whichever peers (Neuron, NeuRAG) sit next to it into **one shared
 venv**, registers them in your MCP clients, and opens the control center.
 
-**Windows** — double-click `install.cmd` in the root or `gray_matter\install.cmd`:
+| Where you got it | Windows | macOS / Linux |
+|---|---|---|
+| The `gray-matter` release download | double-click `install.cmd` | double-click `install.command`, or `sh install.sh` |
+| This repository (`GrayMatterEnvironment`) | double-click `gray_matter\install.cmd` | `sh gray_matter/install.sh` |
+
+From a terminal in this repository:
 
 ```powershell
-.\install.ps1                                    # root
-powershell -NoProfile -ExecutionPolicy Bypass -File .\gray_matter\install.ps1  # gray_matter/
+powershell -NoProfile -ExecutionPolicy Bypass -File .\gray_matter\install.ps1
 ```
 
-**macOS / Linux** — double-click `install.command` or:
-
 ```sh
-sh install.sh                                    # root
-sh gray_matter/install.sh                        # gray_matter/
-```
-
-Non-interactive (CI / scripted):
-
-```sh
-sh install.sh --yes
+sh gray_matter/install.sh          # add --yes for CI / scripted installs
 ```
 
 What it does:
@@ -92,8 +87,8 @@ to standalone instead of exiting.
 ## 4. pip (source checkout)
 
 ```sh
-git clone https://github.com/recla93/Neuron.git
-cd Neuron
+git clone https://github.com/recla93/GrayMatterEnvironment.git
+cd GrayMatterEnvironment
 
 # Install all three:
 pip install -e gray_matter -e neuron -e neurag
@@ -126,7 +121,9 @@ Neuron/NeuRAG entries (backups saved as `.bak`).
 ## 5. Upgrade
 
 Close your AI clients first: the installer stops every process of the shared
-venv before pip writes (a loaded `.pyd` cannot be replaced on Windows). Then
+venv before pip writes (a loaded `.pyd` cannot be replaced on Windows). That
+includes the control center: if it was open, it shows a banner saying it lost its
+server — close it and open it again after the install. Then
 re-run the one-click installer (step 1). What happens depends on what it finds:
 
 | Installed | Behaviour |

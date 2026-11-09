@@ -52,20 +52,23 @@ An earlier version spawned a new subprocess per call. The persistent worker mode
 1. Client calls `gray_matter_pulse(topic="kotlin coroutines")`
 2. Check `ContextCache` — if hit, return cached response immediately
 3. If miss, fan out in parallel:
-   - Neuron `get_context(topic, depth=1)` — semantic memory recall
-   - NeuRAG `knowledge_query(rag_query, top_n)` — knowledge base search. The query is expanded with the last 3 topics from a conversation buffer for multi-turn recall
+   - Neuron `pre_turn(topic)` — the same **facts** the memory loop and the hook read, minus the ones already shown in this session
+   - NeuRAG `knowledge_query(rag_query, top_n)` — knowledge base search. The query is expanded with the last topics from a conversation buffer for multi-turn recall
 4. Join results with `---` separator
-5. Attach relevant cross-store **bridges** (links between Neuron concepts and NeuRAG nodes). If a bridge reaches weight 5+, auto-confirm the Neuron concept (salience boost)
-6. If NeuRAG had a hit, fetch **proactive neighbors** (depth-2 structured neighbors not already in the response)
-7. Fire **Flash** on topic shifts: call Neuron `forgotten(threshold=5, near=topic)` to surface dormant mid-band concepts. Rate-limited (min gap of 3 pulses + per-concept cooldown)
-8. If flash surfaced a dormant concept AND NeuRAG had a hit, auto-create a cross-store bridge (v3b auto-discovery)
-9. Cache the response, record latency stats, return
+5. Everything below is **proactive** and must fit in `proactive_budget_chars` (0 turns it off):
+   - the saved **bridges** whose ends match the topic (strongest first; showing a bridge reinforces it)
+   - a **flash** at a topic shift: a dormant fact (idea, decision, fix) near the topic, from Neuron `forgotten(facts=true, near=topic)`. Rate-limited
+6. Cache the response, record latency stats, return
+
+Bridges are **only explicit** (ADR-016): they come from `gray_matter_bridge`, from
+`gray-matter promote`, or from the control center. A pulse or a flash never creates
+one.
 
 ## Key design decisions
 
 ### Hebbian bridge learning
 
-Cross-store bridges reinforce their weight each time they are surfaced in a pulse (+1, capped at 1000). Unused bridges decay during idle periods (weight -1 after 7 days unused, pruned below 1.0). At weight >= 5, the Neuron concept gets an auto-confirm. This is the orchestrator's own memory that learns from use.
+Cross-store bridges reinforce their weight each time they are surfaced in a pulse (+1, capped at 1000). Unused bridges decay during idle periods (weight -1 after 7 days unused, pruned below 1.0). Showing a bridge no longer confirms anything in Neuron (ADR-016 D5): a fact is confirmed only by `confirm` or by being cited. This is the orchestrator's own memory that learns from use.
 
 ### Dynamic cache TTL
 

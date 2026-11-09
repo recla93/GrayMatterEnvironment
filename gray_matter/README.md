@@ -20,7 +20,7 @@ bridges, and serendipitous flash recall.
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-1.7.0-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-1.8.0-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -48,16 +48,21 @@ in every client, you register **one** — Gray Matter — and it handles everyth
 
 - **Pass-through proxy** — republishes every Neuron and NeuRAG tool with real
   schemas, so the LLM can call them directly.
-- **`gray_matter_pulse(topic)`** — the killer feature: one call that fans out to
-  Neuron (context memory) and NeuRAG (knowledge chunks) in parallel, joins the
-  results, adds cross-store bridges, and fires a serendipitous flash — all in a
-  single round-trip.
+- **`gray_matter_pulse(topic)`** — one call that fans out to Neuron (the facts
+  of the memory) and NeuRAG (knowledge chunks) in parallel, joins the results,
+  adds the saved bridges for the topic, and sometimes a flash — all in a single
+  round-trip.
 - **Persistent workers** — each sub-server runs as a long-lived subprocess with
   its model pre-warmed. No cold imports per call.
 - **Context cache** — TTL + LRU, multi-topic, targeted invalidation on writes.
-- **Cross-store bridges** — Hebbian links between Neuron concepts and NeuRAG
-  nodes; unused ones decay, 5+ uses promote the concept (confirm → trust).
-- **Flash** — serendipitous dormant-concept recall on topic shifts.
+- **Cross-store bridges** — links you make between a Neuron concept (or fact)
+  and a NeuRAG node; showing one reinforces it, unused ones decay. Never created
+  automatically.
+- **Flash** — on a topic shift, an old idea, decision or fix related to the topic.
+- **Memory hooks** — with Claude Code the memory arrives before your message is
+  read, and the end of the turn checks that the facts were saved.
+- **Control center** — a local web app for everything above, built for people
+  who do not program.
 
 > **In one line:** one server, two brains, zero re-registration.
 
@@ -69,12 +74,12 @@ in every client, you register **one** — Gray Matter — and it handles everyth
 |---|---|---|
 | 🔌 | **One server to rule them all** | Register `gray-matter` once — Neuron + NeuRAG are auto-discovered as managed workers. |
 | ⚡ | **Unified pulse** | `gray_matter_pulse(topic)` = memory + knowledge + bridges + flash in one call. |
-| 🧠 | **Cross-store bridges** | Hebbian links connect Neuron concepts to NeuRAG nodes; usage promotes, idleness decays. |
+| 🧠 | **Cross-store bridges** | Explicit links between Neuron concepts and NeuRAG nodes; use reinforces, idleness decays. |
 | 💾 | **Warm workers** | Persistent subprocesses with pre-warmed models — no cold import penalty per call. |
 | 🗃️ | **Smart cache** | TTL + LRU with targeted invalidation — cached pulses survive until a relevant write happens. |
-| 🎯 | **Flash recall** | On topic shifts, a dormant concept surfaces serendipitously — the AI remembers what you forgot to ask. |
+| 🎯 | **Flash recall** | On topic shifts, a dormant fact (idea, decision, fix) surfaces — the AI remembers what you forgot to ask. |
 | 🩺 | **Full CLI** | `status`, `doctor`, `stats`, `bridges`, `knowledge`, `config` — manage everything from the terminal. |
-| 🖥️ | **Web GUI** | Unified control center with real-time server status, cache stats and bridge visualization. |
+| 🖥️ | **Control center** | One local web app: status, an interactive graph of memory + knowledge + bridges, every command with its arguments explained, settings, bridge editing. IT/EN. |
 
 ---
 
@@ -91,14 +96,14 @@ Gray Matter runs a **fan-out model** around every pulse:
                  ▼                         ▼
     ┌─────────────────────┐   ┌─────────────────────────┐
     │  Neuron worker      │   │  NeuRAG worker           │
-    │  get_context(...)   │   │  knowledge_query(...)    │
-    │  (semantic memory)  │   │  (knowledge chunks)      │
+    │  pre_turn(...)      │   │  knowledge_query(...)    │
+    │  (memory facts)     │   │  (knowledge chunks)      │
     └─────────────────────┘   └─────────────────────────┘
                  │                         │
                  └────────────┬────────────┘
                               ▼
     ┌──────────────────────────────────────────────────────────────┐
-    │  Join results → Add cross-store bridges → Flash recall       │
+    │  Join results → Add saved bridges → Flash (a dormant fact)   │
     │  → Cache → Return to LLM                                    │
     └──────────────────────────────────────────────────────────────┘
 ```
@@ -108,9 +113,10 @@ imports the server module once and keeps the process alive — so the model stay
 across calls. Gray Matter serializes requests per worker pipe with an `asyncio.Lock`,
 so there's no interleaving.
 
-**Cross-store bridges** are the magic glue: when a Neuron concept and a NeuRAG topic
-co-occur frequently, the bridge gets promoted (5+ uses → `confirm` call → trust boost).
-Idle bridges decay. This means the two memories learn to cooperate over time.
+**Cross-store bridges** are the glue between the two memories. They are made on
+purpose — by the AI with `gray_matter_bridge`, by `gray-matter promote`, or by you in
+the control center — never by a pulse or a flash. Each time one is shown its weight
+grows; idle ones decay.
 
 ---
 
@@ -135,8 +141,8 @@ Pre-built `pyturso` wheels are bundled — no C/Rust compiler needed.
 ### Option B — pip (source checkout)
 
 ```bash
-git clone https://github.com/recla93/gray-matter.git
-cd gray-matter
+git clone https://github.com/recla93/GrayMatterEnvironment.git
+cd GrayMatterEnvironment/gray_matter
 pip install -e ".[dev]"             # editable install with test deps
 pip install -e ".[cloud,rag,gui]"   # optional: Turso, NeuRAG, web GUI
 ```
@@ -183,8 +189,8 @@ gray-matter uninstall --purge-data # wipes everything, no questions
 | `gray_matter_pulse(topic, top_n?)` | Combined memory + knowledge + bridges + flash in one call |
 | `gray_matter_brainstorm(seed, n?)` | What surrounds a problem, with its history: mid-band memory nodes (related but not obvious) with their facts and link rationales, plus the nearest knowledge chunks. For dilemmas, bugs and decisions |
 | `gray_matter_status()` | Server summary: version, flash counter, registered servers |
-| `gray_matter_bridge(neuron_concept, neurag_node, rationale?)` | Persist a cross-store bridge manually |
-| `gray_matter_state_set` / `gray_matter_state_get` / `gray_matter_state_delta` | Blackboard: publish `key=value` with an optional TTL · read a key · changes since a version |
+| `gray_matter_bridge(neuron_concept, neurag_node, rationale?)` | Save a bridge; the NeuRAG end must be an existing node, by its exact name |
+| `gray_matter_state_set` / `_get` / `_delta` | Blackboard (internal): publish `key=value` with an optional TTL · read a key · changes since a version. Announced only with `GM_TOOLS=all` |
 
 </details>
 
@@ -193,21 +199,25 @@ gray-matter uninstall --purge-data # wipes everything, no questions
 
 Republished with their original names and schemas (`mcp__gray-matter__pre_turn`, …):
 
-`pre_turn`, `store_turn`, `confirm`, `dismiss`, `get_context`, `status`,
-`find_candidates`, `forgotten`, `recall`, `switch_context`, `list_contexts`,
-`help`, `skill` — plus Neuron's admin tools (`around`, `vector_search`, `merge`,
-`consolidate`, `prune`, `export`, `reset`, …) reachable by name.
+`pre_turn`, `store_turn`, `confirm`, `status`, `switch_context`, `list_contexts`,
+`help`, `skill` — plus Neuron's admin tools (`get_context`, `find_candidates`,
+`forgotten`, `recall`, `dismiss`, `around`, `vector_search`, `merge`, `consolidate`,
+`prune`, `export`, `reset`, …) reachable by name.
 
 </details>
 
 <details>
 <summary><strong>Pass-through: NeuRAG tools</strong></summary>
 
-`knowledge_query`, `knowledge_confirm`, `knowledge_ingest`, `knowledge_ingest_status`,
-`knowledge_index`, `knowledge_add_node`, `knowledge_add_chunks`, `knowledge_import`,
-`knowledge_rename_node`, `knowledge_remove_node`, `knowledge_reindex`,
-`knowledge_status`, `knowledge_tree`, `knowledge_health`, `knowledge_neighbors`,
-`knowledge_related`, `knowledge_link_graph`, `knowledge_rebuild_links`, `knowledge_skill`
+Announced: `knowledge_query`, `knowledge_ingest`, `knowledge_ingest_status`,
+`knowledge_status`, `knowledge_tree`, `knowledge_confirm`, `knowledge_skill`.
+Admin, reachable by name: `knowledge_archive`, `knowledge_neighbors`,
+`knowledge_related`, `knowledge_link_graph`, `knowledge_health`,
+`knowledge_rebuild_links`, `knowledge_reindex`, `knowledge_rename_node`,
+`knowledge_remove_node`, `knowledge_import`, `knowledge_index`,
+`knowledge_add_node`, `knowledge_add_chunks`.
+
+Every parameter: [../docs/TOOLS.md](../docs/TOOLS.md).
 
 </details>
 
@@ -264,7 +274,7 @@ session-start hook carries the same rule statically.
 | `gray-matter bridges` | List persisted cross-store bridges |
 | `gray-matter bridges-transfer` | Move bridges between local and cloud |
 | `gray-matter bridge` | Expose the suite over HTTP for remote connectors |
-| `gray-matter promote [--apply]` | CLS consolidation: stable Neuron concepts (old enough, and confirmed or anchored by strong links) become NeuRAG nodes **with their link rationales and episodes as chunks**, under the `memoria promossa` godnode. Dry run by default — read the list, promoted text does not decay |
+| `gray-matter promote [--apply]` | Proven memory becomes knowledge: active `decision`/`fix`/`fact` facts, at least 20 turns old and used at least once, become NeuRAG chunks (source `neuron:#id`), one node per first concept, plus a bridge `#id` ↔ node so they are never promoted twice. `user` and `habit` facts never. Dry run by default |
 | `gray-matter backup [--force]` | Copy the three stores (Neuron graphs, NeuRAG vault, GM bridges) into `<suite>/backups/gm-graph-backup_<date>/`; the daemon does it once a day and keeps 7 days |
 
 ### Configuration
@@ -283,7 +293,7 @@ session-start hook carries the same rule statically.
 
 | Command | Description |
 |---|---|
-| `gray-matter gui [--classic]` | Open the web control center (Graphs view: Neuron, NeuRAG, bridges) |
+| `gray-matter gui` | Open the control center (see below) |
 | `gray-matter gm-neuron <tool> <args>` | Call a Neuron tool via the gateway (testing) |
 | `gray-matter gm-neurag <tool> <args>` | Call a NeuRAG tool via the gateway (testing) |
 
@@ -307,8 +317,8 @@ gray_matter/
 ├── gme.py             # Tool registry (GME): multi-venv discovery, health tracking
 ├── shortcut.py        # Desktop shortcut creation (cross-platform: .lnk/.command/.desktop)
 ├── cli.py             # CLI entry point (24+ commands, argparse)
-├── webgui.py          # Web-based control center (pywebview)
-├── gui.py             # Legacy Tkinter control center
+├── webgui.py          # Control center: local HTTP server + Api (window via pywebview, or the browser)
+├── webgui.html        # Control center page (sections, graph view, IT/EN)
 ├── bridge.py          # HTTP bridge for remote connectors (ChatGPT, Perplexity)
 ├── _env.py            # Credential sanitization (shared with Neuron/NeuRAG)
 └── tests/             # Test suite (34 tests)
@@ -369,8 +379,9 @@ gray-matter config get flash_min_gap
 | Env var | Default | What it controls |
 |---|---|---|
 | `GM_PREWARM` | `"1"` | Set `"0"` to disable worker pre-warming |
-| `GM_HOME` | `%LOCALAPPDATA%` (Win) / `$XDG_DATA_HOME` (Unix) | Root of all data dirs |
-| `GRAY_MATTER_BRIDGES` | `~/.local/share/gray_matter/bridges.json` | Override bridges store path |
+| `GM_HOME` | `%LOCALAPPDATA%\GrayMatterEnvironment\graymatter` (Win) / `~/.local/share/GrayMatterEnvironment/graymatter` | Gray Matter's data folder |
+| `GM_TOOLS` | `core` | `all` also announces the blackboard tools (`gray_matter_state_*`) |
+| `GRAY_MATTER_BRIDGES` | `<GM_HOME>/bridges.db` | Override bridges store path |
 
 ### Hardcoded constants (edit in source)
 
@@ -380,7 +391,6 @@ These are not yet exposed via config. Change them in `server.py` / `bridges.py` 
 |---|---|---|---|
 | `HEARTBEAT_TIMEOUT` | `15.0` s | `server.py` | Missed heartbeats before marking a server dead |
 | Worker call timeout | `60` s | `server.py` | Max time for a single worker pipe call |
-| `_PROMOTE_AT` | `5` | `bridges.py` | Bridge weight to auto-promote a Neuron concept |
 | `_WEIGHT_CAP` | `1000` | `bridges.py` | Max bridge weight (Hebbian cap) |
 
 ---
@@ -422,7 +432,7 @@ connector; both peers arrive through it as warm workers.
 ### 🧠 [Neuron](https://github.com/recla93/Neuron)
 **Semantic memory — it learns.**
 
-Concepts, typed links, salience and decay in a living graph. Answers
+Typed facts indexed by concepts, with links, salience and decay. Answers
 *"what did we decide, and why?"*
 
 `pre_turn` · `store_turn` · `recall` · `find_candidates`

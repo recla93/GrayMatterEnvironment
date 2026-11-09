@@ -10,7 +10,7 @@
 | Variable | Default | Where read | Purpose |
 |---|---|---|---|
 | `NS_GRAPHS_DIR` | per-user (see Data paths) | `config.py:63` | Override graph store location |
-| `NEURON_SLUG` | `"neuron5"` | `config.py:36` | Sub-directory name for the graph store (allows v5 beside older majors) |
+| `NEURON_SLUG` | `"neuron"` | `config.py` | Sub-directory name of the graph store under the suite folder (old installs used `neuron5`; they are moved on start) |
 | `NS_EMBED_MODEL` | `"sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"` | `server.py:163` | Embedding model name (384-dim). Changing requires full re-embed (`scripts/reembed.py`) |
 | `NS_EMBED_DIM` | `"384"` | `models.py:76` | Embedding vector dimension. Must match `NS_EMBED_MODEL` |
 | `NS_CONSOLIDATE_AUTO` | `""` (off) | `server.py:327` | Enable auto-consolidation every N turns (`"1"`, `"true"`, `"yes"`, `"on"` to enable) |
@@ -27,8 +27,9 @@
 | `NEURON_DRIFT_EXPIRY_TURNS` | `3` | `models.py:62` | Inactive turns before a drift link is pruned |
 | `NEURON_SLEEP_IDLE_SECONDS` | `1800` (30 min) | `models.py:67` | Idle seconds before sleep-mode activates on next load |
 | `NEURON_STAGE_FRESH_SECONDS` | `21600` (6h) | `models.py:68` | Staged stimulus validity duration |
-| `NEURON_EPISODES_PER_NODE` | `5` | `models.py:71` | Max episodes (facts) per node |
-| `NEURON_EPISODE_MAX_CHARS` | `200` | `models.py:72` | Max characters per episode (~40 tokens) |
+| `NEURON_EPISODES_PER_NODE` | `5` | `models.py` | Fallback only (no embedder): how many recent facts per top concept `pre_turn` looks at. Facts are never evicted: this limits what is read, not what is kept |
+| `NEURON_EPISODE_MAX_CHARS` | `400` | `models.py` | The length a fact should stay under (told to the model in the `store_turn` schema) |
+| `NEURON_FACT_MAX_CHARS` | `2000` | `models.py` | Safety cut: a fact longer than this is truncated and `store_turn` reports `fact_truncated` |
 | `NEURON_MAX_NODES` | `1000` | `config.py` (`KNOBS`) | Evict lowest-salience nodes beyond this cap (100-5000; `neuron config set max_nodes N` or the control center) |
 | `NEURON_USER` | `""` | `server.py:1066` | Provenance tag for refs (`by` field in shared DB) |
 | `TURSO_DATABASE_URL` | `""` | `db.py:41` | Remote Turso Cloud database URL |
@@ -38,11 +39,13 @@
 
 | Variable | Default | Where read | Purpose |
 |---|---|---|---|
-| `GM_HOME` | `%LOCALAPPDATA%/gray_matter` (Win) or `~/.local/share/gray_matter` (Linux) | `paths.py` | Root directory for all GM data |
+| `GM_HOME` | `<suite>/graymatter` — `%LOCALAPPDATA%\GrayMatterEnvironment\graymatter` (Windows), `~/.local/share/GrayMatterEnvironment/graymatter` (Linux/macOS) | `paths.py` | Root directory for all GM data (see [Data](DATA.md)) |
 | `GM_PREWARM` | `"1"` if `prewarm` is True | `server.py` | Disable worker pre-warming at startup (`"0"` to skip) |
 | `GM_NEURON_CLIENTS` | (auto-detected) | `executor.py` | Override path to Neuron client assets directory |
-| `GM_GUI_NOBROWSER` | (unset) | `webgui.py` | If set, skip auto-opening browser for web GUI |
-| `GM_GUI_SELFTEST` | (unset) | `webgui.py` | If set, auto-close webview after 1s (testing) |
+| `GM_GUI_BROWSER` | (unset) | `webgui.py` | If set, open the control center in the system browser instead of its own window |
+| `GM_GUI_NOBROWSER` | (unset) | `webgui.py` | In browser mode, do not open the browser (print the URL only) |
+| `GM_GUI_DEBUG` | (unset) | `webgui.py` | Open the window with developer tools |
+| `GM_GUI_SELFTEST` | (unset) | `webgui.py` | Close the window as soon as the page has loaded (testing; `GM_GUI_SELFTEST_TIMEOUT`, default 45 s) |
 | `GM_TURSO_DATABASE_URL` | (empty) | `bridges.py` | Cloud tier for GM bridges — its OWN Turso DB (`gm_bridges`), never Neuron's/NeuRAG's |
 | `GM_TURSO_AUTH_TOKEN` | falls back to `TURSO_AUTH_TOKEN` | `bridges.py` | Auth token for the bridges DB (can be the shared group token) |
 | `GRAY_MATTER_BRIDGES` | `<GM_HOME>/bridges.db` | `bridges.py` | Local bridges store path override (a legacy `.json` value migrates once to its `.db` sibling) |
@@ -99,34 +102,18 @@ The cross-encoder rerank stage was removed in 2026-07: measured on the benchmark
 
 ## Data paths
 
-### Neuron graph store
+Everything lives under one suite folder: `%LOCALAPPDATA%\GrayMatterEnvironment\` on
+Windows, `~/.local/share/GrayMatterEnvironment/` on Linux and macOS
+(`$XDG_DATA_HOME` if set).
 
-Resolved by `config.py:graphs_dir()`:
+| What | Where | Override |
+|---|---|---|
+| Neuron graphs | `<suite>/neuron/graphs/graph_<context>.db` | `NS_GRAPHS_DIR` |
+| NeuRAG knowledge base | `<suite>/neurag/knowledge.db` (+ `config.json`) | — |
+| Gray Matter (bridges, settings, manifest) | `<suite>/graymatter/` | `GM_HOME` |
+| Daily backups | `<suite>/backups/` | `GM_BACKUP_KEEP` (days kept, `0` disables) |
 
-| OS | Default path |
-|---|---|
-| Windows | `%LOCALAPPDATA%\neuron5\graphs\` |
-| Linux | `~/.local/share/neuron5/graphs/` |
-
-Override with `NS_GRAPHS_DIR`. Each context gets its own file: `graph_<context>.db`.
-
-### Gray Matter data
-
-Root: `GM_HOME` (`%LOCALAPPDATA%\gray_matter` on Windows, `~/.local/share/gray_matter` on Linux).
-
-| File/Dir | Purpose |
-|---|---|
-| `config.json` | Tunable knobs (overrides only) |
-| `bridges.json` | Cross-store bridge links |
-| `manifest.json` | Install manifest (installed servers, hooks, data paths) |
-
-### NeuRAG data
-
-| OS | Default path |
-|---|---|
-| All | `~/.local/share/neurag/knowledge.db` |
-
-Override by passing `db_path` to `KnowledgeGraph()`.
+The full file list and the table schemas are in [Data](DATA.md).
 
 ## Storage tiers (degradation)
 

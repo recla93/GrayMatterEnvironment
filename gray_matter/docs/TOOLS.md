@@ -7,14 +7,14 @@
 
 ## gray_matter_pulse
 
-Main orchestrator call. Calls Neuron `get_context` and NeuRAG `knowledge_query` in parallel, merges results, applies cache, fires flash on topic shifts.
+The richer explicit read. Calls Neuron `pre_turn` (the facts) and NeuRAG `knowledge_query` in parallel, merges the results, adds the saved bridges for the topic and, at a topic shift, a flash (a dormant idea, decision or fix). Cached.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `topic` | string | yes | — | Topic to search (max 200 chars) |
 | `top_n` | integer | no | 5 | Number of NeuRAG chunks (1-10) |
 
-**Returns:** Merged text from Neuron context + NeuRAG results + bridge links + flash + proactive neighbors.
+**Returns:** Neuron facts + NeuRAG excerpts, then bridges and flash within `proactive_budget_chars`.
 
 ## gray_matter_status
 
@@ -26,12 +26,23 @@ Show registered servers, cache state, and orchestrator counters.
 
 ## gray_matter_bridge
 
-Persist a cross-store bridge: a link between a Neuron concept and a NeuRAG knowledge node. Idempotent.
+Save a bridge: a link between a Neuron concept and a NeuRAG node (its exact, existing name). Idempotent: the same pair again reinforces it. Bridges are never created automatically.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `neuron_concept` | string | yes | — | Neuron concept/keyword |
-| `neurag_node` | string | yes | — | NeuRAG node/topic |
+| `neurag_node` | string | yes | — | NeuRAG node, exact name |
+
+## gray_matter_brainstorm
+
+What surrounds a problem, with its history: mid-band memory nodes with their facts and link rationales, plus the nearest knowledge chunks.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `seed` | string | yes | — | The problem, dilemma or decision, in one sentence |
+| `n` | integer | no | 5 | Memory nodes (max 10); knowledge chunks capped at 3 |
+
+The blackboard tools `gray_matter_state_set` / `_get` / `_delta` are internal and announced only with `GM_TOOLS=all`.
 | `rationale` | string | no | `""` | Why they connect |
 
 ---
