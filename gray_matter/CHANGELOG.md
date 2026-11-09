@@ -1,6 +1,22 @@
 # Changelog — Gray Matter
 
-## Unreleased
+## 1.8.0 (2026-11-09)
+- **Control center riorganizzato per attività e per tool.** Barra laterale per
+  sezioni (Panoramica, Grafi, Comandi operativi, Manutenzione grafo,
+  Manutenzione tool, Impostazioni, Bridge, Guida e legenda), un blocco per tool
+  in ogni sezione, ogni argomento spiegato in italiano e inglese, la riga di
+  comando esatta copiabile. Lo stato dei tool dentro il gateway lo dà il daemon.
+- **Vista Grafi.** Concetti e fatti di Neuron, nodi di NeuRAG e bridge in un
+  grafo interattivo (vis-network vendorizzato, funziona offline); bridge creati
+  trascinando, nodi KB archiviati, ripristinati, rinominati coi comandi di NeuRAG.
+- **Bridge: i nodi disponibili sempre in vista.** Sotto i due campi l'elenco dei
+  concetti di Neuron e dei nodi di NeuRAG che esistono: si filtra scrivendo, si
+  sceglie con un clic. Prima c'erano solo suggerimenti nascosti mentre si scrive.
+- **«Failed to fetch» sostituito da un avviso chiaro.** Una reinstallazione
+  ferma ogni processo del venv, anche il server della GUI: la pagina restava
+  aperta e ogni pannello mostrava `TypeError: Failed to fetch`. Ora la GUI
+  riprova una volta e, se il server non c'è più, lo dice in un banner unico.
+- **Grafi e vault vecchi migrati all'avvio**, non al primo uso del contesto.
 - **I client avviano i server con `-I`.** Un client avvia il server MCP nella
   cartella del progetto aperto, e `-m` mette quella cartella in testa a
   `sys.path`: aperto nella radice del repo, GM importava `gray_matter` e

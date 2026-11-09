@@ -1,6 +1,17 @@
 # Changelog — NeuRAG
 
-## Unreleased
+## 1.8.0 (2026-11-09)
+- **Conoscenza datata, la storia in archivio (ADR-017 D1).** Ogni chunk ha la
+  data del suo documento (nel nome, nelle prime righe o l'ultima modifica), e a
+  parità la ricerca preferisce il più recente. `neurag archive <nodo>` /
+  `knowledge_archive` porta un nodo nel livello dormiente, fuori dalla ricerca
+  normale ma mai cancellato; `--restore` lo riporta, `archive=true` lo cerca.
+  I vault esistenti prendono la data all'avvio, senza re-ingest.
+- **`neurag ingest` dell'utente funziona con GM acceso.** Il controllo delle
+  radici pensato per l'AI rifiutava il comando dell'utente passato dal daemon.
+- **`knowledge_neighbors` cerca prima il nome esatto**: la validazione dei
+  bridge ne dipende.
+- **`knowledge_link_graph(format="json")`** per la vista Grafi di GM.
 - **Gli hook dei client chiedono fatti (ADR-015).** Le copie degli hook di
   Claude Code e Cowork, del plugin OpenCode e della skill `neuron-usage` dicono
   `store_turn(facts=[{kind, text, concepts}])`, allineate a Neuron.
