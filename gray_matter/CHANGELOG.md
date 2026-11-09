@@ -1,5 +1,23 @@
 # Changelog — Gray Matter
 
+## 1.8.1 (2026-11-10)
+- **La suite si trova dalla sua venv.** Chi parte da `<suite>/graymatter/.venv`
+  (server MCP, hook, GUI) usa i dati accanto alla venv, senza variabili
+  d'ambiente: i client MCP avviano il server con un ambiente ridotto, e Claude
+  Desktop (app MSIX) dirotta le scritture sotto AppData nella sua cartella
+  privata, che sparisce se l'app si reinstalla. Ora la suite può stare fuori da
+  AppData (`GM_HOME=<cartella>` all'install) e ogni client la trova da solo.
+  Vale per GM, registro dei tool, Neuron, NeuRAG e hook di inizio sessione.
+- **Kimi Code è un client.** Registrazione MCP in `~/.kimi-code/mcp.json` e hook
+  nativi in `~/.kimi-code/config.toml`: `SessionStart` (handshake) e
+  `UserPromptSubmit` (richiamo, con `gm_memhook.py recall --plain`, perché Kimi
+  accoda al contesto l'output testuale). Disinstallare toglie solo i nostri.
+- **I test non possono più toccare la memoria vera.** Il `conftest.py` comune
+  toglie `GM_HOME`, `NS_GRAPHS_DIR`, `NEURAG_HOME` e le credenziali Turso prima
+  di ogni suite: con `NS_GRAPHS_DIR`/`NEURAG_HOME` impostati sulla macchina, un
+  test di disinstallazione con `purge_data` aveva cancellato grafi e
+  knowledge.db reali (ripristinati dal backup giornaliero).
+
 ## 1.8.0 (2026-11-09)
 - **Control center riorganizzato per attività e per tool.** Barra laterale per
   sezioni (Panoramica, Grafi, Comandi operativi, Manutenzione grafo,

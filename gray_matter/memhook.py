@@ -184,6 +184,9 @@ def main(argv: list) -> None:
         return
     if not text:
         return
+    if "--plain" in argv:   # hosts that append raw stdout to the context (Kimi)
+        sys.stdout.buffer.write(text.encode("utf-8"))
+        return
     out = ({"decision": "block", "reason": text} if mode == "save" else
            {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                    "additionalContext": text}})

@@ -130,3 +130,27 @@ def test_dry_run_touches_nothing(base):
     assert res and all(r["ok"] for r in res)
     assert old.exists()
     assert not (base / "GrayMatterEnvironment" / "neuron").exists()
+
+
+def test_installed_venv_carries_its_suite(base, monkeypatch):
+    """A suite outside AppData (out of an MSIX client's redirect) is found from
+    the venv itself: MCP clients start the server with a reduced env, so an env
+    var alone would not reach it. GM_HOME still wins; a venv that is not under
+    <suite>/graymatter/.venv (the pre-suite layout) changes nothing."""
+    import sys
+    suite = base / "elsewhere" / "GrayMatterEnvironment"
+    monkeypatch.setattr(sys, "prefix", str(suite / "graymatter" / ".venv"))
+    paths, gme = _reload()
+    assert paths._user_base() == suite
+    assert gme.gme_root() == suite / "registry"
+    neuron_config = pytest.importorskip("neuron.config")
+    assert neuron_config.user_data_dir() == str(suite / "neuron")
+    neurag_paths = pytest.importorskip("neurag.paths")
+    assert neurag_paths._user_base() == suite
+
+    monkeypatch.setenv("GM_HOME", str(base / "pinned"))
+    assert paths._user_base() == base / "pinned"
+
+    monkeypatch.delenv("GM_HOME")
+    monkeypatch.setattr(sys, "prefix", str(base / "graymatter" / ".venv"))
+    assert paths._user_base() == base / "GrayMatterEnvironment"

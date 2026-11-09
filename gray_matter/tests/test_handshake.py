@@ -570,3 +570,31 @@ def test_uninstall_scrubs_every_event_we_registered(monkeypatch, tmp_path):
                                         "neuron_reminder_hook", "gm_memhook"))]
         assert left == [], f"{event}: {left}"
     assert "echo mio" in _cmds(body, "UserPromptSubmit"), "deleted a user's own hook"
+
+
+def test_a_hook_entry_of_another_live_gm_venv_gets_rewritten(monkeypatch, tmp_path):
+    """Moving the suite leaves the old venv ON DISK: its interpreter is alive,
+    so the dead-interpreter rule never fired and the hooks kept running the old
+    code against the old data root (seen 2026-11-10, suite moved out of AppData).
+    An entry of ours on ANOTHER <x>/graymatter/.venv is ours to move."""
+    import json
+    from gray_matter import executor
+
+    home = _fake_home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    old_py = tmp_path / "old" / "GrayMatterEnvironment" / "graymatter" / ".venv" / "Scripts" / "python.exe"
+    old_py.parent.mkdir(parents=True)
+    old_py.write_text("", encoding="utf-8")                     # alive
+    hook = home / ".claude" / "hooks" / "neuron_sessionstart_hook.py"
+    settings = home / ".claude" / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [
+            {"type": "command", "command": f'"{old_py}" "{hook}"'}]}]}}), encoding="utf-8")
+
+    executor._deploy_claude_code(
+        ASSET_DIRS["neuron"] / "claude-code-hook" / "neuron_sessionstart_hook.py", dry_run=False)
+
+    body = json.loads(settings.read_text(encoding="utf-8-sig"))
+    ours = [h["command"] for e in body["hooks"]["SessionStart"] for h in e["hooks"]
+            if "neuron_sessionstart_hook" in h.get("command", "")]
+    assert len(ours) == 1 and str(old_py) not in ours[0], ours

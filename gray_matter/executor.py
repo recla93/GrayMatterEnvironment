@@ -571,8 +571,20 @@ def _upsert_hook_group(cfg: dict, event: str, matcher: str | None,
             if isinstance(g, dict)
             and any(marker in (h.get("command") or "")
                     for h in (g.get("hooks") or []) if isinstance(h, dict))]
+    # Also stale: a LIVE interpreter of another GM install (<x>/graymatter/.venv).
+    # After moving the suite the old venv still exists, so "dead" never fired
+    # and the hooks kept running the old code against the old data root.
+    me = os.path.normcase(os.path.abspath(_hook_interpreter(command)))
+
+    def _stale(cmd: str) -> bool:
+        if _entry_is_dead(cmd):
+            return True
+        exe = Path(_hook_interpreter(cmd))
+        return (exe.is_absolute() and exe.parent.parent.name == ".venv"
+                and exe.parent.parent.parent.name == "graymatter"
+                and os.path.normcase(str(exe)) != me)
     dead = [g for g in ours
-            if any(_entry_is_dead(h.get("command") or "")
+            if any(_stale(h.get("command") or "")
                    for h in (g.get("hooks") or []) if isinstance(h, dict))]
     if not dead and ours:
         return False
@@ -748,10 +760,69 @@ def _deploy_codex(src: Path, dry_run: bool) -> tuple[list[str], str]:
     return [str(cache)], "plugin mirrored + enabled in config.toml"
 
 
+def _kimi_dir() -> Path:
+    return Path(os.path.expanduser("~")) / ".kimi-code"
+
+
+_KIMI_MARKERS = ("neuron_sessionstart_hook", _MEMHOOK[:-3])
+
+
+def _kimi_drop_ours(text: str) -> str:
+    """config.toml without our [[hooks]] blocks; every other byte stays."""
+    import re
+    parts = re.split(r"(?m)^(?=\[)", text)
+    return "".join(p for p in parts
+                   if not (p.startswith("[[hooks]]") and any(m in p for m in _KIMI_MARKERS)))
+
+
+def _deploy_kimi(src: Path, dry_run: bool) -> tuple[list[str], str]:
+    """Copy the session-start hook + memhook to ~/.kimi-code/hooks and add them
+    as [[hooks]] in ~/.kimi-code/config.toml.
+
+    Kimi appends a hook's stdout to the context on exit 0, so the memhook runs
+    with --plain (text, not Claude's JSON). Stop/save is not deployed: it reads
+    a Claude Code transcript, which Kimi does not write."""
+    dest = _kimi_dir() / "hooks" / src.name
+    memhook_dest = dest.parent / _MEMHOOK
+    deployed = [str(dest), str(memhook_dest)]
+    if dry_run:
+        return deployed, "hooks copied + SessionStart/UserPromptSubmit registered"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    shutil.copy2(Path(__file__).with_name("memhook.py"), memhook_dest)
+    cfg = _kimi_dir() / "config.toml"
+    text = cfg.read_text(encoding="utf-8-sig") if cfg.exists() else ""
+    blocks = [("SessionStart", f'"{sys.executable}" "{dest}"', 10),
+              ("UserPromptSubmit", f'"{sys.executable}" -I "{memhook_dest}" recall --plain', 10)]
+    new = _kimi_drop_ours(text).rstrip("\n")
+    for event, cmd, timeout in blocks:
+        # json.dumps: a TOML basic string with the same escapes (\" and \\).
+        new += (f"\n\n[[hooks]]\nevent = \"{event}\"\ncommand = {json.dumps(cmd)}\n"
+                f"timeout = {timeout}")
+    new = new.lstrip("\n") + "\n"
+    if new != text:
+        if cfg.exists():
+            shutil.copyfile(cfg, cfg.with_suffix(".toml.bak"))
+        cfg.write_text(new, encoding="utf-8", newline="\n")
+    return deployed, "hooks copied + SessionStart/UserPromptSubmit registered in config.toml"
+
+
+def _scrub_kimi_config(dry_run: bool) -> None:
+    cfg = _kimi_dir() / "config.toml"
+    try:
+        text = cfg.read_text(encoding="utf-8-sig")
+    except OSError:
+        return
+    new = _kimi_drop_ours(text)
+    if new != text and not dry_run:
+        cfg.write_text(new, encoding="utf-8", newline="\n")
+
+
 _DEPLOYERS = {"claude-code": _deploy_claude_code,
               "cowork": _deploy_cowork,
               "opencode": _deploy_opencode,
-              "codex": _deploy_codex}
+              "codex": _deploy_codex,
+              "kimi": _deploy_kimi}
 
 
 def _deploy_hook(client: str, asset: str, assets_root: Path, dry_run: bool) -> dict:
@@ -1001,6 +1072,8 @@ def _remove_hook(client: str, path: str, dry_run: bool) -> dict:
         _scrub_opencode_config(dry_run)
     elif client == "codex":
         _scrub_codex_plugins(dry_run)
+    elif client == "kimi":
+        _scrub_kimi_config(dry_run)
     return {"action": "remove_hook", "ok": ok, "client": client, "path": path}
 
 

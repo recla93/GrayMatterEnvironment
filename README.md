@@ -24,9 +24,9 @@ Gray Matter is a **Model Context Protocol (MCP)** ecosystem that gives AI agents
 
 | Component | Version | Role | Learns? |
 |---|---|---|---|
-| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.10.0-7c8cff?style=flat-square)](neuron/) | Semantic memory of typed facts (decisions, fixes, ideas, the user and their habits), indexed by a concept graph — salience, trust, decay | Yes |
-| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.8.0-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base of your documents — dated chunks, auto-ingest, history archive | No — permanent vault |
-| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.8.0-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, memory hooks, control center | Bridges only |
+| [**Neuron**](neuron/) | [![Neuron](https://img.shields.io/badge/v6.10.1-7c8cff?style=flat-square)](neuron/) | Semantic memory of typed facts (decisions, fixes, ideas, the user and their habits), indexed by a concept graph — salience, trust, decay | Yes |
+| [**NeuRAG**](neurag/) | [![NeuRAG](https://img.shields.io/badge/v1.8.1-7c8cff?style=flat-square)](neurag/) | Hierarchical knowledge base of your documents — dated chunks, auto-ingest, history archive | No — permanent vault |
+| [**Gray Matter**](gray_matter/) | [![Gray Matter](https://img.shields.io/badge/v1.8.1-7c8cff?style=flat-square)](gray_matter/) | Gateway/orchestrator — routes, caches, bridges, memory hooks, control center | Bridges only |
 
 **Model:** MCP clients register ONLY `gray-matter` (the gateway). Neuron and
 NeuRAG run as GM-managed workers. Each can also run standalone.

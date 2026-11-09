@@ -84,7 +84,7 @@ def test_detected_is_a_subset_of_known_clients(name):
 # --- The matrices stay as their owners decided -------------------------------
 
 CANONICAL = {"claude-desktop", "claude-code", "cursor", "vscode",
-             "opencode", "windsurf", "codex", "zed", "chatgpt"}
+             "opencode", "windsurf", "codex", "zed", "kimi", "chatgpt"}
 
 
 def test_all_three_tools_offer_the_same_clients():

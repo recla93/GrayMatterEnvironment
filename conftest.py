@@ -36,6 +36,15 @@ import sys
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _TOOLS = ("neuron", "gray_matter", "neurag")
 
+# The overrides that point a process at a REAL memory. Set on the machine (a
+# client config or a user env var), they reached tests whose fixtures pin only
+# GM_HOME: on 2026-11-10 an uninstall test with purge_data=True deleted the live
+# graphs and knowledge.db through NS_GRAPHS_DIR/NEURAG_HOME. No test may inherit
+# them; a test that needs one sets it with monkeypatch.
+for _var in ("GM_HOME", "NS_GRAPHS_DIR", "NEURAG_HOME", "TURSO_DATABASE_URL",
+             "TURSO_AUTH_TOKEN"):
+    os.environ.pop(_var, None)
+
 for _p in (_ROOT, os.path.join(_ROOT, "neuron", "src")):
     # inserted in this order so neuron/src ends up at index 0 and wins
     if _p in sys.path:

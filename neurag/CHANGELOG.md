@@ -1,5 +1,13 @@
 # Changelog — NeuRAG
 
+## 1.8.1 (2026-11-10)
+- **NeuRAG trova la suite dalla venv** in cui è installato
+  (`<suite>/graymatter/.venv`), come Gray Matter 1.8.1: niente variabili
+  d'ambiente per una suite fuori da AppData.
+- **Plugin OpenCode e hook allineati a Neuron 6.10.1** (registro in
+  `registry/`, suite dalla venv).
+- **Kimi Code fra i client** (`~/.kimi-code/mcp.json`).
+
 ## 1.8.0 (2026-11-09)
 - **Conoscenza datata, la storia in archivio (ADR-017 D1).** Ogni chunk ha la
   data del suo documento (nel nome, nelle prime righe o l'ultima modifica), e a

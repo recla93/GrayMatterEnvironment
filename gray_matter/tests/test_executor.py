@@ -24,6 +24,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    # The peers' own overrides: set on the machine, they pointed this test at
+    # the user's real graphs.
+    monkeypatch.delenv("NS_GRAPHS_DIR", raising=False)
+    monkeypatch.delenv("NEURAG_HOME", raising=False)
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -501,3 +505,28 @@ def test_uninstall_takes_the_desktop_shortcut_and_the_icon_with_it(env, monkeypa
     results = executor.execute_uninstall(assume_yes=True, remove_venv=False)
     assert not lnk.exists() and not ico.exists(), results
     assert any(r["action"] == "remove_shortcut" for r in results)
+
+
+def test_deploy_hook_kimi(env):
+    """Kimi Code: our two [[hooks]] in ~/.kimi-code/config.toml, the memhook
+    with --plain (Kimi appends raw stdout); the user's own hooks and settings
+    stay, a second install does not duplicate, uninstall removes only ours."""
+    home = env / "home"
+    cfg = home / ".kimi-code" / "config.toml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    mine = '[[hooks]]\nevent = "PreToolUse"\nmatcher = "Bash"\ncommand = "node guard.mjs"\n'
+    cfg.write_text('default_model = "k2"\n\n' + mine, encoding="utf-8")
+    for _ in range(2):
+        res = _run_install({"installed": ["neuron"], "gm_present": True, "clients": ["kimi"]})
+    hook = [r for r in res if r["action"] == "deploy_hook"][0]
+    assert hook["ok"], hook
+    text = cfg.read_text(encoding="utf-8")
+    import tomllib
+    hooks = tomllib.loads(text)["hooks"]
+    assert [h["event"] for h in hooks] == ["PreToolUse", "SessionStart", "UserPromptSubmit"]
+    assert hooks[2]["command"].endswith("recall --plain")
+    assert (home / ".kimi-code" / "hooks" / "gm_memhook.py").exists()
+    assert 'default_model = "k2"' in text
+    from gray_matter import executor
+    executor._scrub_kimi_config(dry_run=False)
+    assert [h["event"] for h in tomllib.loads(cfg.read_text(encoding="utf-8"))["hooks"]] == ["PreToolUse"]

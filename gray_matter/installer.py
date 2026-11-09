@@ -26,6 +26,9 @@ HOOK_ASSETS = {
     # codex consuma lo STESSO plugin cowork (formato .claude-plugin), non un
     # plugin nativo: lo copia nel suo cache e lo abilita in config.toml.
     "codex": "cowork-plugin/neuron-guard",
+    # Kimi Code runs command hooks from [[hooks]] in config.toml: the same
+    # session-start hook as Claude Code, plus the memhook recall.
+    "kimi": "claude-code-hook/neuron_sessionstart_hook.py",
 }
 
 

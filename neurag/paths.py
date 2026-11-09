@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -31,7 +32,12 @@ def _user_base() -> Path:
     """La radice UNICA della suite: `<base>/GrayMatterEnvironment`.
 
     È ciò che fa atterrare i tre tool sotto una sola cartella per utente,
-    insieme ai json dei path: prima erano quattro radici scollegate."""
+    insieme ai json dei path: prima erano quattro radici scollegate.
+    La venv installata in <suite>/graymatter/.venv vince: vedi
+    gray_matter/paths.py:venv_suite() (keep-in-sync)."""
+    p = Path(sys.prefix)
+    if p.name == ".venv" and p.parent.name == "graymatter" and p.parent.parent.name == SUITE_DIR:
+        return p.parent.parent
     return _os_base() / SUITE_DIR
 
 

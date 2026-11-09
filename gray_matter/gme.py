@@ -123,7 +123,8 @@ def gme_root() -> Path:
     ``GrayMatterEnvironment/*.json``, sia quello macOS in Library — cosi'
     spostare la regola non puo' far dire alla GUI "nessun tool installato".
     """
-    suite = user_base() / "GrayMatterEnvironment"
+    from gray_matter.paths import venv_suite   # lazy: paths must not import gme
+    suite = venv_suite() or user_base() / "GrayMatterEnvironment"
     current = suite / "registry"
     if current.is_dir():
         return current

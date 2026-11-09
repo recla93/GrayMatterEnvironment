@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -43,6 +44,21 @@ def _os_base() -> Path:
     return Path(base or os.path.expanduser("~"))
 
 
+def venv_suite() -> "Path | None":
+    """The suite the running interpreter was installed into, or None.
+
+    The installer puts the venv at <suite>/graymatter/.venv, so a process
+    started from it (MCP server, hook, GUI) finds its data next to it with no
+    env var: MCP clients pass the server a reduced env, and an MSIX client
+    (Claude Desktop) redirects writes under AppData into its private LocalCache.
+    A suite outside AppData only works if every process can find it on its own.
+    Keep-in-sync with neuron/config.py, neurag/paths.py, gme.py and the hooks."""
+    p = Path(sys.prefix)
+    if p.name == ".venv" and p.parent.name == "graymatter" and p.parent.parent.name == SUITE_DIR:
+        return p.parent.parent
+    return None
+
+
 def _user_base() -> Path:
     """La radice UNICA della suite: <base>/GrayMatterEnvironment.
 
@@ -57,7 +73,7 @@ def _user_base() -> Path:
     """
     if os.environ.get("GM_HOME"):
         return Path(os.environ["GM_HOME"])
-    return _os_base() / SUITE_DIR
+    return venv_suite() or _os_base() / SUITE_DIR
 
 
 # --- Code / control (removed on uninstall) ---------------------------------

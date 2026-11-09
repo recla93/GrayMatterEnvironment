@@ -197,6 +197,11 @@ CLIENTS: dict[str, dict] = {
     "codex": {"label": "Codex CLI", "paths": lambda: [_home(".codex", "config.toml")],
               "keys": ["mcp_servers"], "style": "args", "format": "toml",
               "create_if_missing": False},
+    # Kimi Code: ~/.kimi-code/mcp.json, same `mcpServers` shape as Claude.
+    # shortcut: detected only once mcp.json exists, upgrade to probing the
+    # ~/.kimi-code folder if fresh Kimi installs need registering too.
+    "kimi": {"label": "Kimi Code", "paths": lambda: [_home(".kimi-code", "mcp.json")],
+             "keys": ["mcpServers"], "style": "args", "create_if_missing": False},
     # ChatGPT non gira su questa macchina: non ha un file da scrivere, ci arriva
     # via HTTP pubblico. "Registrarlo" significa accendere il bridge ed esporlo
     # con un tunnel — `remote: True` e' quello che dice a register() di non
