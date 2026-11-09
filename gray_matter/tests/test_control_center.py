@@ -35,11 +35,15 @@ def test_section_overrides_name_real_commands():
 
 def test_operational_maintenance_and_settings_stay_apart():
     sec = {(t, c["name"]): c["section"] for t, c in _commands()}
-    assert sec.get(("neurag", "query")) == "ops"
-    assert sec.get(("neurag", "archive")) == "graph"
-    assert sec.get(("gray-matter", "repair")) == "tools"
-    assert sec.get(("gray-matter", "config")) == "settings"
-    assert sec.get(("neurag", "config")) == "settings"
+    want = {("neurag", "query"): "ops", ("neurag", "archive"): "graph",
+            ("gray-matter", "repair"): "tools", ("gray-matter", "config"): "settings",
+            ("neurag", "config"): "settings"}
+    # The standalone CI job runs without NeuRAG: only check the tools installed here.
+    installed = {t for t, _ in sec}
+    assert "gray-matter" in installed
+    for key, section in want.items():
+        if key[0] in installed:
+            assert sec.get(key) == section, key
 
 
 @pytest.mark.parametrize("lang", ["it", "en"])

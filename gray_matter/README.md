@@ -190,7 +190,7 @@ gray-matter uninstall --purge-data # wipes everything, no questions
 | `gray_matter_brainstorm(seed, n?)` | What surrounds a problem, with its history: mid-band memory nodes (related but not obvious) with their facts and link rationales, plus the nearest knowledge chunks. For dilemmas, bugs and decisions |
 | `gray_matter_status()` | Server summary: version, flash counter, registered servers |
 | `gray_matter_bridge(neuron_concept, neurag_node, rationale?)` | Save a bridge; the NeuRAG end must be an existing node, by its exact name |
-| `gray_matter_state_set` / `_get` / `_delta` | Blackboard (internal): publish `key=value` with an optional TTL · read a key · changes since a version. Announced only with `GM_TOOLS=all` |
+| `gray_matter_state_set` / `gray_matter_state_get` / `gray_matter_state_delta` | Blackboard (internal): publish `key=value` with an optional TTL · read a key · changes since a version. Announced only with `GM_TOOLS=all` |
 
 </details>
 
