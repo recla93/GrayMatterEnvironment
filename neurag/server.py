@@ -327,9 +327,6 @@ def _tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="knowledge_remove_node",
-            description="Delete a node and its entire subtree (children, chunks, links). "
-        Tool(
             name="knowledge_archive",
             description="Declare a node (and its subtree) history: it leaves the default "
                         "search and stays reachable with knowledge_query(archive=true). "
@@ -343,6 +340,9 @@ def _tools() -> list[Tool]:
                 "required": ["name"],
             },
         ),
+        Tool(
+            name="knowledge_remove_node",
+            description="Delete a node and its entire subtree (children, chunks, links). "
                         "Runs server-side on the single DB writer (the Gray-Matter worker "
                         "or the standalone CLI) — never a second process.",
             inputSchema={
