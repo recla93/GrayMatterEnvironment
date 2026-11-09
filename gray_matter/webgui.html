@@ -109,6 +109,27 @@
   summary:hover{color:var(--fg)}
   .empty{color:var(--dim);font-size:13px;padding:22px 0}
 
+  /* --- Graphs view: Neuron, NeuRAG and the bridges between them --- */
+  /* the graph needs the height: the status cards above step aside while it is open */
+  body.gview #infra-panels, body.gview #clients-panel, body.gview #health-bar{display:none}
+  .graphs{display:flex;flex-direction:column;gap:8px;height:100%;min-height:460px}
+  .gbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:12px;color:var(--dim)}
+  .gbar label{display:flex;align-items:center;gap:5px;cursor:pointer}
+  .gbar input[type=checkbox]{width:auto;margin:0}
+  .gbar input[type=search]{width:220px}
+  .gbar button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--dim);
+               padding:4px 11px;font-size:12px;cursor:pointer}
+  .gbar button:hover{color:var(--fg);border-color:var(--accent)}
+  .gsw{display:inline-block;width:9px;height:9px;border-radius:50%}
+  .gwrap{flex:1;display:flex;gap:10px;min-height:0}
+  #gnet{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+  #gside{width:310px;flex-shrink:0;overflow-y:auto;background:var(--panel);border:1px solid var(--line);
+         border-radius:8px;padding:10px 12px;font-size:12px}
+  #gside h4{margin:0 0 4px;font-size:14px;color:var(--fg);word-break:break-word}
+  #gside .gk{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-top:10px}
+  .gfact{border-left:2px solid var(--line);padding:2px 8px;margin:6px 0;word-break:break-word}
+  .gfact .gk{margin:0}
+
    /* --- console --- */
   footer{height:238px;flex-shrink:0;border-top:1px solid var(--line);
          background:var(--panel2);display:flex;flex-direction:column}
@@ -328,6 +349,26 @@ const STRINGS = {
     copied: "Copiato!",
     copy_fail: "Copia fallita",
     no_backend: "Non raggiungo il backend",
+    views_title: "Viste",
+    graphs_nav: "Grafi",
+    graphs_sub: "Neuron · NeuRAG · bridge",
+    graphs_neuron: "Concetti (Neuron)",
+    graphs_neurag: "Nodi KB (NeuRAG)",
+    graphs_bridges: "Bridge",
+    graphs_archived: "Archiviati",
+    graphs_search: "Cerca un nodo…",
+    graphs_reload: "Ricarica",
+    graphs_pick: "Clicca un nodo: un concetto mostra i suoi fatti attivi, un nodo KB il suo percorso, un bridge il motivo.",
+    graphs_facts: "Fatti attivi",
+    graphs_no_facts: "Nessun fatto attivo.",
+    graphs_bridge_list: "Bridge",
+    graphs_missing: "Estremo di un bridge che non esiste (più) nello store.",
+    graphs_archived_one: "archiviato",
+    graphs_concepts: "concetti",
+    graphs_fact_n: "fatti attivi",
+    graphs_kb_nodes: "nodi KB",
+    graphs_bridge_n: "bridge",
+    graphs_lib_fail: "Libreria del grafo non caricata",
     retrying: "\u2014 riprovo\u2026",
     memoria_title: "Memoria",
     mem_offline: "offline (daemon non attivo)",
@@ -433,6 +474,26 @@ const STRINGS = {
     copied: "Copied!",
     copy_fail: "Copy failed",
     no_backend: "Cannot reach backend",
+    views_title: "Views",
+    graphs_nav: "Graphs",
+    graphs_sub: "Neuron · NeuRAG · bridges",
+    graphs_neuron: "Concepts (Neuron)",
+    graphs_neurag: "KB nodes (NeuRAG)",
+    graphs_bridges: "Bridges",
+    graphs_archived: "Archived",
+    graphs_search: "Find a node…",
+    graphs_reload: "Reload",
+    graphs_pick: "Click a node: a concept shows its active facts, a KB node its path, a bridge its rationale.",
+    graphs_facts: "Active facts",
+    graphs_no_facts: "No active facts.",
+    graphs_bridge_list: "Bridges",
+    graphs_missing: "A bridge end that is not (or no longer) in the store.",
+    graphs_archived_one: "archived",
+    graphs_concepts: "concepts",
+    graphs_fact_n: "active facts",
+    graphs_kb_nodes: "KB nodes",
+    graphs_bridge_n: "bridges",
+    graphs_lib_fail: "Graph library not loaded",
     retrying: "\u2014 retrying\u2026",
     memoria_title: "Memory",
     mem_offline: "offline (daemon not running)",
@@ -592,11 +653,17 @@ function renderNav(){
       nav.append(el("button", {class:"install", onclick: () => installEnv(e.key)},
                     "Installa " + e.label));
   }
+  nav.append(el("h2", {}, T("views_title")), el("button", {
+    class: "env", "aria-current": String(current === GRAPH_VIEW),
+    onclick: () => { current = GRAPH_VIEW; openCmd = null; renderNav(); render(); }
+  }, el("div", {class:"name"}, T("graphs_nav")), el("div", {class:"meta"}, T("graphs_sub"))));
 }
 
 function render(){
   const body = document.getElementById("body");
   body.replaceChildren();
+  document.body.classList.toggle("gview", current === GRAPH_VIEW);
+  if (current === GRAPH_VIEW) return graphsPanel(body);
   const env = CATALOG.find(e => e.key === current);
   if (!env) return;
   if (!env.installed){
@@ -1474,11 +1541,197 @@ async function checkMigration(){
   } catch(e){ /* backend down */ }
 }
 
+// ── Graphs view (read-only): Neuron, NeuRAG, bridges ─────────────
+// The data comes from the tools (Api.graphs -> daemon IPC), never from the
+// stores; the library is vendored in assets/ so the view works offline.
+const GRAPH_VIEW = "__graphs__";
+const GCOL = {neuron:"#7aa2f7", neurag:"#bb9af7", fact:"#e0af68", bridge:"#9ece6a"};
+let visReady = null;
+
+function loadVis(){
+  if (window.vis) return Promise.resolve();
+  return visReady ||= new Promise((ok, ko) => document.head.append(el("script", {
+    src: API + "/vis-network.min.js", onload: ok,
+    onerror: () => { visReady = null; ko(new Error(T("graphs_lib_fail"))); }})));
+}
+
+// Payload -> {nodes, edges, byId, factsOf, bridgesOf, counts, errors}.
+function graphModel(data){
+  const nodes = [], edges = [], errors = [], byId = {}, bridgesOf = {};
+  const add = n => { if (!byId[n.id]){ byId[n.id] = n; nodes.push(n); } return n.id; };
+  const edge = e => edges.push(Object.assign({id: "e" + edges.length}, e));
+
+  const nx = data.neuron || {};
+  if (nx.error) errors.push("Neuron: " + nx.error);
+  const facts = nx.facts || [], factById = {}, factsOf = {}, nOf = {};
+  for (const f of facts){
+    factById[f.id] = f;
+    if (f.status === "active") for (const c of f.concepts || []) (factsOf[String(c).toLowerCase()] ||= []).push(f);
+  }
+  for (const n of nx.nodes || []){
+    const fs = factsOf[n.keyword.toLowerCase()] || [];
+    nOf[n.keyword.toLowerCase()] = add({id: "n:" + n.keyword, label: n.keyword, src: "neuron",
+      kind: "concept", raw: n, value: 1 + fs.length,
+      color: GCOL.neuron, title: (n.domain || "") + " · " + fs.length
+                                + " " + T("graphs_fact_n")});
+  }
+  for (const l of nx.links || []){
+    const a = nOf[String(l.source).toLowerCase()], b = nOf[String(l.target).toLowerCase()];
+    if (a && b && a !== b) edge({from: a, to: b, src: "neuron", width: Math.min(4, .5 + (l.weight || 0)),
+      title: l.link_type + (l.rationale ? ": " + l.rationale : "")});
+  }
+
+  const kx = data.neurag || {};
+  if (kx.error) errors.push("NeuRAG: " + kx.error);
+  const kOf = {};
+  let archived = 0;
+  for (const n of kx.nodes || []){
+    const arch = (n.layer || 2) > 2;
+    archived += arch;
+    kOf[String(n.name).toLowerCase()] = add({id: "k:" + n.id, label: n.name, src: "neurag",
+      kind: "kb", raw: n, archived: arch, opacity: arch ? .3 : 1, value: n.node_type === "godnode" ? 6 : 3,
+      shape: n.node_type === "godnode" ? "star" : n.node_type === "fundamental" ? "diamond" : "dot",
+      color: GCOL.neurag, font: arch ? {color: "#565f89"} : undefined,
+      title: n.path + (arch ? " (" + T("graphs_archived_one") + ")" : "")});
+    if (n.parent_id !== null && n.parent_id !== undefined && n.parent_id !== n.id)
+      edge({from: "k:" + n.parent_id, to: "k:" + n.id, src: "neurag", dashes: [2, 4], title: "parent"});
+  }
+  for (const l of kx.links || [])
+    edge({from: "k:" + l.source_id, to: "k:" + l.target_id, src: "neurag",
+      title: l.link_type + " " + Number(l.weight || 0).toFixed(2) + (l.evidence ? "\n" + l.evidence : "")});
+
+  const bx = data.bridges;
+  if (bx && bx.error) errors.push("Bridges: " + bx.error);
+  const ghost = (id, label) => add({id, label, src: "bridges", kind: "ghost", value: 1,
+    color: {background: "transparent", border: GCOL.bridge}, shapeProperties: {borderDashes: [3, 3]}});
+  const bridges = Array.isArray(bx) ? bx : [];
+  for (const b of bridges){
+    let from;
+    if (String(b.neuron).startsWith("#")){
+      const fid = b.neuron.slice(1), f = factById[fid];
+      from = "f:" + fid;
+      if (!byId[from]){
+        add({id: from, label: b.neuron, src: "bridges", kind: "fact", raw: f, value: 1,
+             color: GCOL.fact, title: f ? f.text : T("graphs_missing")});
+        for (const c of (f && f.concepts) || [])
+          if (nOf[c.toLowerCase()]) edge({from, to: nOf[c.toLowerCase()], src: "bridges", dashes: [1, 3]});
+      }
+    } else from = nOf[String(b.neuron).toLowerCase()] || ghost("n?:" + b.neuron, b.neuron);
+    const to = kOf[String(b.neurag).toLowerCase()] || ghost("k?:" + b.neurag, b.neurag);
+    for (const end of [from, to]) (bridgesOf[end] ||= []).push(b);
+    edge({from, to, src: "bridges", bridge: b, color: {color: GCOL.bridge, highlight: GCOL.bridge},
+      width: 1 + Math.min(3, (b.weight || 1) / 3),
+      title: (b.rationale || "bridge") + " (w " + Number(b.weight || 0).toFixed(1) + ")"});
+  }
+  const active = facts.filter(f => f.status === "active").length;
+  const counts = [(nx.nodes || []).length + " " + T("graphs_concepts"), active + " " + T("graphs_fact_n"),
+    (kx.nodes || []).length + " " + T("graphs_kb_nodes") + " (" + archived + " " + T("graphs_archived_one") + ")",
+    bridges.length + " " + T("graphs_bridge_n")].join(" · ");
+  return {nodes, edges, byId, factsOf, bridgesOf, counts, errors};
+}
+
+function graphSide(side, m, id, edgeId){
+  side.replaceChildren();
+  const n = m.byId[id];
+  if (!n){
+    const e = m.edges.find(x => x.id === edgeId);
+    side.append(e ? el("div", {class:"gfact"}, e.title || "") : el("div", {class:"hint"}, T("graphs_pick")));
+    return;
+  }
+  side.append(el("h4", {}, n.label));
+  const r = n.raw || {};
+  if (n.kind === "concept"){
+    side.append(el("div", {class:"hint"}, [r.domain, r.topic].filter(Boolean).join(" · ")),
+                el("div", {class:"gk"}, T("graphs_facts")));
+    const fs = m.factsOf[r.keyword.toLowerCase()] || [];
+    if (!fs.length) side.append(el("div", {class:"hint"}, T("graphs_no_facts")));
+    for (const f of fs) side.append(el("div", {class:"gfact"},
+      el("div", {class:"gk"}, f.kind + " · #" + f.id + (f.confirmed ? " · ✓" + f.confirmed : "")),
+      f.text));
+  } else if (n.kind === "kb"){
+    side.append(el("div", {class:"hint"}, r.path),
+      el("div", {class:"gk"}, r.node_type + " · layer " + (r.layer || 2)
+                              + (n.archived ? " · " + T("graphs_archived_one") : "")));
+    let tags = [];
+    try { tags = JSON.parse(r.tags || "[]"); } catch (_) {}
+    if (tags.length) side.append(el("div", {class:"hint"}, tags.join(", ")));
+  } else if (n.kind === "fact"){
+    side.append(n.raw ? el("div", {class:"gfact"},
+      el("div", {class:"gk"}, r.kind + " · " + r.status + " · " + (r.concepts || []).join(", ")), r.text)
+      : el("div", {class:"hint"}, T("graphs_missing")));
+  } else side.append(el("div", {class:"hint"}, T("graphs_missing")));
+  const bs = m.bridgesOf[id] || [];
+  if (bs.length) side.append(el("div", {class:"gk"}, T("graphs_bridge_list")));
+  for (const b of bs) side.append(el("div", {class:"gfact", style:"border-color:" + GCOL.bridge},
+    el("div", {class:"gk"}, b.neuron + " ↔ " + b.neurag + " · w " + Number(b.weight || 0).toFixed(1)),
+    b.rationale || ""));
+}
+
+async function graphsPanel(body){
+  const shows = {neuron: true, neurag: true, bridges: true, archived: true};
+  const net = el("div", {id:"gnet"}, el("div", {class:"empty", style:"padding:22px"}, T("loading")));
+  const side = el("div", {id:"gside"}, el("div", {class:"hint"}, T("graphs_pick")));
+  const stats = el("span");
+  const search = el("input", {type:"search", placeholder: T("graphs_search")});
+  const boxes = Object.keys(shows).map(k => el("label", {},
+    el("input", {type:"checkbox", checked:"", onchange: ev => { shows[k] = ev.target.checked; draw(); }}),
+    k === "archived" ? null : el("span", {class:"gsw", style:"background:" + GCOL[k === "bridges" ? "bridge" : k]}),
+    T("graphs_" + k)));
+  body.append(el("div", {class:"graphs"},
+    el("div", {class:"gbar"}, ...boxes, search,
+       el("button", {onclick: () => render()}, T("graphs_reload")), stats),
+    el("div", {class:"gwrap"}, net, side)));
+
+  let data;
+  try { await loadVis(); data = await call("graphs"); }
+  catch (e){ net.replaceChildren(el("div", {class:"empty l-err", style:"padding:22px"}, String(e))); return; }
+  if (current !== GRAPH_VIEW || !net.isConnected) return;     // the user moved on meanwhile
+  const m = graphModel(data || {});
+  stats.textContent = m.counts;
+  if (data && data.error) m.errors.push(data.error);
+  if (m.errors.length) stats.append(el("span", {class:"l-err"}, "  [!] " + m.errors.join(" | ")));
+
+  net.replaceChildren();
+  const network = new vis.Network(net, {nodes: [], edges: []}, {
+    nodes: {shape: "dot", borderWidth: 1, scaling: {min: 5, max: 24, label: {enabled: false}},
+            font: {color: "#c0caf5", size: 12, face: "Segoe UI"}},
+    edges: {color: {color: "#3b4261", highlight: "#7aa2f7", hover: "#7aa2f7", inherit: false},
+            smooth: false, width: 1, selectionWidth: 2},
+    physics: {solver: "forceAtlas2Based", stabilization: {iterations: 250},
+              forceAtlas2Based: {gravitationalConstant: -45, springLength: 90, avoidOverlap: .2}},
+    interaction: {hover: true, tooltipDelay: 150, hideEdgesOnDrag: true},
+  });
+  network.on("stabilizationIterationsDone", () => network.setOptions({physics: false}));
+  network.on("click", p => graphSide(side, m, p.nodes[0], p.edges[0]));
+
+  function draw(){
+    const keep = n => shows[n.src] && (shows.archived || !n.archived);
+    const vn = m.nodes.filter(keep), ids = new Set(vn.map(n => n.id));
+    network.setOptions({physics: true});
+    network.setData({nodes: vn,
+      edges: m.edges.filter(e => shows[e.src] && ids.has(e.from) && ids.has(e.to))});
+  }
+  search.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    network.selectNodes(q ? m.nodes.filter(n => String(n.label).toLowerCase().includes(q)
+                                                && network.body.data.nodes.get(n.id)).map(n => n.id) : []);
+  });
+  search.addEventListener("keydown", ev => {
+    const sel = network.getSelectedNodes();
+    if (ev.key !== "Enter" || !sel.length) return;
+    network.focus(sel[0], {scale: 1.3, animation: true});
+    graphSide(side, m, sel[0]);
+  });
+  draw();
+}
+
 // ── i18n: apply language to all static UI elements ────────────────
 function applyLang(){
   localStorage.setItem("gm_lang", LANG);
   document.documentElement.lang = LANG;
-  document.getElementById("loading-msg").textContent = T("loading_catalog");
+  // gone once render() has replaced #body: switching language died here
+  const loadingMsg = document.getElementById("loading-msg");
+  if (loadingMsg) loadingMsg.textContent = T("loading_catalog");
   document.getElementById("nav-title").textContent = T("envs_title");
   document.getElementById("cmd-filter").placeholder = T("filter_placeholder");
   document.getElementById("console-title").textContent = T("console_title");

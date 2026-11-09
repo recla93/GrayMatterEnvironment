@@ -283,7 +283,7 @@ session-start hook carries the same rule statically.
 
 | Command | Description |
 |---|---|
-| `gray-matter gui [--classic]` | Open the web control center |
+| `gray-matter gui [--classic]` | Open the web control center (Graphs view: Neuron, NeuRAG, bridges) |
 | `gray-matter gm-neuron <tool> <args>` | Call a Neuron tool via the gateway (testing) |
 | `gray-matter gm-neurag <tool> <args>` | Call a NeuRAG tool via the gateway (testing) |
 

@@ -871,6 +871,42 @@ class Api:
                 out[key] = {"raw": raw} if data is None else {"json": data}
         return out
 
+    # -- graphs (read-only) -------------------------------------------------
+    @staticmethod
+    def _tool_json(action: str, tool: str, args: dict) -> dict:
+        """One tool call through the daemon, its JSON answer or {"error"}.
+        Never opens a store: GM orchestrates, the tools own their data (ADR-016)."""
+        from gray_matter import cli as _cli
+        try:
+            resp = _cli._send_ipc({"action": action, "tool": tool, "args": args},
+                                  timeout=30.0, connect_timeout=_cli.FAST_CONNECT)
+        except Exception as e:  # noqa: BLE001 — daemon down / token missing
+            return {"error": str(e)}
+        raw = (resp or {}).get("result")
+        if raw is None:
+            return {"error": (resp or {}).get("error", "no daemon")}
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return {"error": str(raw)[:300]}
+        return data if isinstance(data, dict) else {"error": str(raw)[:300]}
+
+    def graphs(self, _args: str = "") -> dict:
+        """The three graphs for the Graphs panel: Neuron concepts and facts,
+        NeuRAG nodes (with layer) and links, GM's bridges between the two."""
+        out: dict = {"ok": True,
+                     "neuron": self._tool_json("gm-neuron", "export", {}),
+                     "neurag": self._tool_json("gm-neurag", "knowledge_link_graph",
+                                               {"format": "json"})}
+        try:
+            from gray_matter import bridges as _bridges
+            out["bridges"] = [{k: b.get(k) for k in
+                               ("neuron", "neurag", "rationale", "weight", "promoted")}
+                              for b in _bridges.all_bridges()]
+        except Exception as e:  # noqa: BLE001 — store unreadable: the other two still show
+            out["bridges"] = {"error": str(e)}
+        return out
+
     # -- infrastructure ---------------------------------------------------
     def tunnel_state(self, _args: str = "") -> dict:
         """Tunnel status: backend detection, public URL, config."""
@@ -1206,6 +1242,14 @@ def _build_server(api: Api):
                     self._send(200, logo.read_bytes(), "image/png")
                 except OSError:
                     self._send(404, b"", "image/png")   # header hides it via onerror
+                return
+            # Vendored, so the Graphs view works offline (no CDN).
+            if self.path.split("?", 1)[0] == "/vis-network.min.js":
+                lib = Path(__file__).with_name("assets") / "vis-network.min.js"
+                try:
+                    self._send(200, lib.read_bytes(), "text/javascript; charset=utf-8")
+                except OSError:
+                    self._send(404, b"", "text/javascript")
                 return
             self._send(200, holder["html"].encode("utf-8"), "text/html; charset=utf-8")
 

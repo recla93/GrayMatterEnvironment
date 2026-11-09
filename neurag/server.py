@@ -264,7 +264,10 @@ def _tools() -> list[Tool]:
         Tool(
             name="knowledge_link_graph",
             description="Show all node links (tag_overlap, cross_ref) with weights and evidence.",
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={"type": "object", "properties": {
+                "format": {"type": "string", "enum": ["text", "json"], "default": "text",
+                           "description": "json: {nodes (with layer), links} for a graph view"},
+            }},
         ),
         Tool(
             name="knowledge_rebuild_links",
@@ -663,6 +666,15 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "knowledge_link_graph":
         graph = db.get_link_graph()
+        if arguments.get("format") == "json":
+            # The GM graphs panel: every node (the tree too), its layer, every link.
+            nodes = db.get_descendants(0)          # path LIKE '/%': the root too
+            keep = ("id", "name", "node_type", "parent_id", "path", "layer", "tags")
+            return [TextContent(type="text", text=json.dumps({
+                "nodes": [{k: n.get(k) for k in keep} for n in nodes],
+                "links": [{k: l.get(k) for k in ("source_id", "target_id", "link_type",
+                                                 "weight", "evidence")} for l in graph],
+            }, ensure_ascii=False))]
         if not graph:
             return [TextContent(type="text", text="No links. Run knowledge_rebuild_links first.")]
         lines = []
