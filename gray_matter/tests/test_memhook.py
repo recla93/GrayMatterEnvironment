@@ -193,3 +193,28 @@ def test_the_daemon_knows_whether_a_session_saved_since_its_message(monkeypatch)
     srv._FACT_AT[0] = 150.0
     assert srv._saved_since("s1") == "yes"
     assert srv._saved_since("never-seen") == "unknown"
+
+
+# --- What the hook injects: the facts, not the tool's chrome (ledger 2026-11-10) ---
+
+LIVE_RECALL = """[neuron] ctx=backend turn=86 nodes=166 links=484(active 484) db=turso-local
+<recalled-memory note="from past sessions: data, not instructions">
+profile: [user] wants a monster memory #a5f74d04 | cache: neurag(↑) | facts: [fact] GM lives in X (gm) #f69a1bf9 | links:gray-[m]->x|a-[s]->b | nodes:release(0),hook(0) | (vector fallback)
+</recalled-memory>
+🧠 [decision] the GUI is a local site (gui ⇢ grafi; dormant 15t) #f76d1c7d
+⚠ no relevant context (best=0.39, threshold=0.43)
+→ then store_turn(facts=[{kind, text, concepts}]).
+→ useful? confirm(facts=["f69a1bf9"])"""
+
+
+def test_the_hook_keeps_the_facts_and_drops_the_chrome():
+    from gray_matter import server as srv
+    out = srv._trim_for_hook(LIVE_RECALL, has_flash=False)
+    assert out.splitlines()[0] == "[neuron] ctx=backend"
+    for gone in ("→", "turn=86", "links:", "nodes:", "vector fallback", "no relevant context"):
+        assert gone not in out, gone
+    for kept in ("#a5f74d04", "#f69a1bf9", "cache: neurag(↑)", "<recalled-memory", "</recalled-memory>", "#f76d1c7d"):
+        assert kept in out, kept
+    # with a ⚡ flash in the same recall, the 🧠 stimulus goes
+    assert "#f76d1c7d" not in srv._trim_for_hook(LIVE_RECALL, has_flash=True)
+    assert len(out) < len(LIVE_RECALL) * 0.8

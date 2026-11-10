@@ -1381,6 +1381,44 @@ async def _kb_vector_pointer(text: str, shown: set) -> str:
     return f'\n\n📚 KB: "{label}" (cos {m.group(2)}) → knowledge_query for the detail'
 
 
+_HEADER = re.compile(r"^\[neuron\] (ctx=\S+).*$")
+# Graph metadata riding on the cache line: "links:a-[s]->b|..." and "nodes:x(0),...".
+_META_SEGMENT = re.compile(r"^(links:|nodes:|\(vector fallback\)$)")
+
+
+def _trim_for_hook(ctx: str, has_flash: bool) -> str:
+    """What the HOOK injects of a pre_turn answer: the facts, not the tool's chrome.
+
+    Measured on 91 real recalls (ledger, 2026-11-10): ~22% was text repeated on
+    every turn, which the model never acted on:
+      - the `→` lines: "then store_turn" (the save check of every client hook
+        does that now) and "useful? confirm(...)" (explicit use: 1%);
+      - the stats in the header (turn, nodes, links, db): `ctx=` stays, it
+        names the context a `switch_context` would leave;
+      - graph metadata segments (links:, nodes:), often cut mid-word by the budget;
+      - "no relevant context" notes: nothing to act on.
+    And the 🧠 stimulus is the least used part (21%): with a ⚡ flash in the
+    same recall it goes, one serendipity per message is enough.
+    The pre_turn TOOL answer is untouched: an MCP-only client still gets it all."""
+    out = []
+    for line in ctx.splitlines():
+        s = line.strip()
+        if s.startswith("→ ") or s.startswith("⚠ no relevant context"):
+            continue
+        if has_flash and s.startswith("🧠 "):
+            continue
+        m = _HEADER.match(s)
+        if m:
+            line = f"[neuron] {m.group(1)}"
+        elif " | " in line or s.startswith(("links:", "nodes:")):
+            keep = [seg for seg in line.split(" | ") if not _META_SEGMENT.match(seg.strip())]
+            if not keep:
+                continue
+            line = " | ".join(keep)
+        out.append(line)
+    return "\n".join(out).strip("\n")
+
+
 async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
                        exclude: "list | None" = None) -> str:
     """ADR-014: what the UserPromptSubmit hook injects, composed in ONE IPC call.
@@ -1414,6 +1452,7 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
         kb_task)
     from gray_matter.memhook import BUDGET, PROFILE_BUDGET
     _note_facts(ctx, flashed)
+    ctx = _trim_for_hook(ctx or "", bool(flash))
     # Episodes -> knowledge: bridges matching the message, or the facts just
     # shown (a promoted fact has its `#id <-> node` bridge). Nothing when none.
     links = ""
