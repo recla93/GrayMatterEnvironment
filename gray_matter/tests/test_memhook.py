@@ -141,3 +141,55 @@ def test_a_down_daemon_costs_the_hook_half_a_second_not_two(monkeypatch):
     out = mh.recall({"prompt": "una domanda abbastanza lunga"})
     assert out == ""
     assert time.perf_counter() - t < 1.5
+
+
+# --- Hosts without a Claude Code transcript (Kimi, Codex, OpenCode) ----------
+
+def test_without_a_transcript_the_daemon_decides_the_save(monkeypatch):
+    asked = []
+
+    def fake_ipc(msg):
+        asked.append(msg)
+        return verdict
+
+    monkeypatch.setattr(mh, "_ipc", fake_ipc)
+    verdict = "no"
+    assert mh.save({"session_id": "s1"}) == mh.REMIND          # Kimi: no answer text -> substantive
+    assert asked[-1] == {"action": "saved", "session": "s1"}
+    assert mh.save({"session_id": "s1", "last_assistant_message": "ok"}) == ""   # Codex, short answer
+    assert mh.save({"session_id": "s1", "last_assistant_message": "x" * 700}) == mh.REMIND
+    for verdict in ("yes", "unknown", ""):                       # saved, unseen turn, daemon down
+        assert mh.save({"session_id": "s1"}) == "", verdict
+    verdict = "no"
+    assert mh.save({"session_id": "s1", "stop_hook_active": True}) == ""
+
+
+def test_without_a_transcript_the_daemon_picks_the_profile(monkeypatch):
+    sent = []
+    monkeypatch.setattr(mh, "_ipc", lambda m: sent.append(m) or "ctx")
+    mh.recall({"prompt": "come funzionano i bridge?", "session_id": "s1"})
+    assert sent[-1]["profile"] is None and sent[-1]["exclude"] == []
+    mh.recall({"prompt": "ok", "session_id": "s1"})             # an ack: no save check for it
+    assert sent[-1] == {"action": "turn", "session": "s1", "worth": False}
+
+
+def test_plain_save_blocks_with_exit_2_and_the_reason_on_stderr(monkeypatch, capsys):
+    import io
+    import sys
+    import pytest
+    monkeypatch.setattr(mh, "_ipc", lambda m: "no")
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b'{"session_id": "s1"}')))
+    with pytest.raises(SystemExit) as e:
+        mh.main(["memhook", "save", "--plain"])
+    assert e.value.code == 2
+    assert capsys.readouterr().err.startswith("[memory]")
+
+
+def test_the_daemon_knows_whether_a_session_saved_since_its_message(monkeypatch):
+    from gray_matter import server as srv
+    monkeypatch.setattr(srv, "_HOOK_TURN", {"s1": 100.0})
+    monkeypatch.setattr(srv, "_FACT_AT", [50.0])
+    assert srv._saved_since("s1") == "no"
+    srv._FACT_AT[0] = 150.0
+    assert srv._saved_since("s1") == "yes"
+    assert srv._saved_since("never-seen") == "unknown"

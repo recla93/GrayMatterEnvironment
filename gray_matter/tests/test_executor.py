@@ -251,10 +251,12 @@ def test_deploy_hook_cowork_and_opencode(env):
     hooks = {r["client"]: r for r in res if r["action"] == "deploy_hook"}
     assert hooks["cowork"]["ok"] and hooks["opencode"]["ok"]
     assert (home / ".claude" / "plugins" / "neuron-guard" / "hooks" / "hooks.json").exists()
-    mjs = home / ".config" / "opencode" / "plugins" / "neuron-handshake.mjs"
-    assert mjs.exists()
+    # OpenCode 2.x loads a local plugin only as a directory with a package.json.
+    pdir = home / ".config" / "opencode" / "plugins" / "neuron-handshake"
+    assert (pdir / "index.mjs").exists()          # 2.x loads index.*, never package.json `main`
+    assert json.loads((pdir / "package.json").read_text(encoding="utf-8"))["main"] == "./index.mjs"
     cfg = json.loads((home / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
-    assert any("neuron-handshake" in p for p in cfg["plugin"])
+    assert [p for p in cfg["plugin"] if "neuron-handshake" in p] == ["./plugins/neuron-handshake"]
 
 
 def test_deploy_hook_codex(env):
@@ -523,10 +525,34 @@ def test_deploy_hook_kimi(env):
     text = cfg.read_text(encoding="utf-8")
     import tomllib
     hooks = tomllib.loads(text)["hooks"]
-    assert [h["event"] for h in hooks] == ["PreToolUse", "SessionStart", "UserPromptSubmit"]
+    assert [h["event"] for h in hooks] == ["PreToolUse", "SessionStart", "UserPromptSubmit", "Stop"]
     assert hooks[2]["command"].endswith("recall --plain")
+    assert hooks[3]["command"].endswith("save --plain")
     assert (home / ".kimi-code" / "hooks" / "gm_memhook.py").exists()
     assert 'default_model = "k2"' in text
     from gray_matter import executor
     executor._scrub_kimi_config(dry_run=False)
     assert [h["event"] for h in tomllib.loads(cfg.read_text(encoding="utf-8"))["hooks"]] == ["PreToolUse"]
+
+
+def test_deploy_hook_codex_registers_the_memory_loop(env):
+    """The cowork plugin gives Codex SessionStart only: recall and the save
+    check are Codex's own hooks, in ~/.codex/hooks.json, Claude-shaped."""
+    home = env / "home"
+    (home / ".codex").mkdir(parents=True, exist_ok=True)
+    (home / ".codex" / "hooks.json").write_text(json.dumps({"hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": "mine.sh"}]}]}}), encoding="utf-8")
+    for _ in range(2):
+        _run_install({"installed": ["neuron"], "gm_present": True, "clients": ["codex"]})
+    cfg = json.loads((home / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    cmds = {e: [h["command"] for g in cfg["hooks"][e] for h in g["hooks"]] for e in cfg["hooks"]}
+    assert "mine.sh" in cmds["Stop"]
+    assert sum("gm_memhook" in c for c in cmds["Stop"]) == 1 and cmds["Stop"][-1].endswith(" save")
+    assert sum("gm_memhook" in c for c in cmds["UserPromptSubmit"]) == 1
+    assert "\\" not in cmds["UserPromptSubmit"][0]       # forward slashes: any shell runs it
+    assert (home / ".codex" / "hooks" / "gm_memhook.py").exists()
+    from gray_matter import executor
+    executor._scrub_claude_settings(False, home / ".codex" / "hooks.json")
+    cfg = json.loads((home / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    assert [h["command"] for g in cfg["hooks"]["Stop"] for h in g["hooks"]] == ["mine.sh"]
+    assert not cfg["hooks"].get("UserPromptSubmit")

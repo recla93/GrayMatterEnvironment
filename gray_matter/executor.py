@@ -690,23 +690,35 @@ def _save_user_json(p: Path, data) -> None:
 
 
 def _deploy_opencode(src: Path, dry_run: bool) -> tuple[list[str], str]:
-    """Copy the .mjs plugin next to opencode.json + add it to `plugin` array."""
-    dest = _opencode_dir() / "plugins" / src.name
+    """Install the plugin as plugins/<name>/ (the .mjs + a package.json) and
+    list it in opencode.json as "./plugins/<name>".
+
+    A DIRECTORY, because OpenCode 2.x loads a local plugin only that way: a file
+    path ("plugins/x.mjs") was resolved as an npm package and never loaded
+    (NpmInstallFailedError in its log, measured 2026-11-10). The old file and
+    every older entry for it are replaced, not left next to the new one.
+    KEEP IN SYNC with clients/deploy_hooks.py::deploy_opencode."""
+    name = src.stem
+    dest = _opencode_dir() / "plugins" / name
     if not dry_run:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        # index.mjs: OpenCode 2.2.6 loads the directory's index.* and ignores
+        # package.json `main` (a plugin named otherwise was never even tried).
+        shutil.copy2(src, dest / "index.mjs")
+        (dest / "package.json").write_text(json.dumps(
+            {"name": name, "version": "1.0.0", "type": "module", "main": "./index.mjs"},
+            indent=2), encoding="utf-8")
+        (dest.parent / src.name).unlink(missing_ok=True)      # the pre-2.x single file
         cfgp = _opencode_dir() / "opencode.json"
         try:
             cfg = json.loads(cfgp.read_text(encoding="utf-8-sig")) if cfgp.exists() else {}
         except (json.JSONDecodeError, OSError):
             return [str(dest)], "opencode.json unreadable — add plugin manually"
-        plugins = cfg.setdefault("plugin", [])
-        # "./plugins/x": la stessa forma che scrive il deployer standalone
-        # (clients/deploy_hooks.py). Due forme per lo stesso file facevano
-        # appendere una seconda entry a chi installava GM e poi un peer.
-        rel = f"./plugins/{src.name}"
-        if not any(src.name in p for p in plugins if isinstance(p, str)):
-            plugins.append(rel)
+        plugins = cfg.get("plugin") if isinstance(cfg.get("plugin"), list) else []
+        rel = f"./plugins/{name}"
+        new = [p for p in plugins if not (isinstance(p, str) and name in p)] + [rel]
+        if new != plugins:
+            cfg["plugin"] = new
             _save_user_json(cfgp, cfg)
     return [str(dest)], "plugin copied + registered in opencode.json"
 
@@ -757,7 +769,40 @@ def _deploy_codex(src: Path, dry_run: bool) -> tuple[list[str], str]:
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text(clients._toml_upsert_section(text, section, ["enabled = true"]),
                        encoding="utf-8")
-    return [str(cache)], "plugin mirrored + enabled in config.toml"
+    deployed, note = [str(cache)], "plugin mirrored + enabled in config.toml"
+    # The plugin brings SessionStart only. The memory loop proper (recall before
+    # the answer, the save check after) are Codex's own hooks, Claude-shaped:
+    # same JSON in, same hookSpecificOutput / decision:block out.
+    memhook_dest = codex_home / "hooks" / _MEMHOOK
+    deployed.append(str(memhook_dest))
+    if dry_run:
+        return deployed, note + " + UserPromptSubmit/Stop in hooks.json"
+    memhook_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(Path(__file__).with_name("memhook.py"), memhook_dest)
+    hooks_file = _codex_hooks_file()
+    try:
+        hcfg = json.loads(hooks_file.read_text(encoding="utf-8-sig")) if hooks_file.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return deployed, note + "; hooks.json unreadable — memory hooks not registered"
+    changed = False
+    for event, mode in _MEMHOOK_EVENTS:
+        changed |= _upsert_hook_group(hcfg, event, None, _MEMHOOK[:-3],
+                                      f"{_shell_path(sys.executable)} -I {_shell_path(memhook_dest)} {mode}")
+    if changed:
+        _save_user_json(hooks_file, hcfg)
+    return deployed, note + " + UserPromptSubmit/Stop in hooks.json (trust them once in Codex: /hooks)"
+
+
+def _codex_hooks_file() -> Path:
+    return Path(os.path.expanduser("~")) / ".codex" / "hooks.json"
+
+
+def _shell_path(p) -> str:
+    """A path every shell runs as the first word: forward slashes, quoted only
+    when it has a space. Codex does not say which shell runs a hook on Windows,
+    and a quoted first word is a string, not a command, in PowerShell."""
+    s = str(p).replace("\\", "/")
+    return f'"{s}"' if " " in s else s
 
 
 def _kimi_dir() -> Path:
@@ -780,20 +825,21 @@ def _deploy_kimi(src: Path, dry_run: bool) -> tuple[list[str], str]:
     as [[hooks]] in ~/.kimi-code/config.toml.
 
     Kimi appends a hook's stdout to the context on exit 0, so the memhook runs
-    with --plain (text, not Claude's JSON). Stop/save is not deployed: it reads
-    a Claude Code transcript, which Kimi does not write."""
+    with --plain (text, not Claude's JSON; Stop blocks with exit 2 + stderr).
+    Kimi writes no transcript: the save check asks the daemon instead."""
     dest = _kimi_dir() / "hooks" / src.name
     memhook_dest = dest.parent / _MEMHOOK
     deployed = [str(dest), str(memhook_dest)]
     if dry_run:
-        return deployed, "hooks copied + SessionStart/UserPromptSubmit registered"
+        return deployed, "hooks copied + SessionStart/UserPromptSubmit/Stop registered"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
     shutil.copy2(Path(__file__).with_name("memhook.py"), memhook_dest)
     cfg = _kimi_dir() / "config.toml"
     text = cfg.read_text(encoding="utf-8-sig") if cfg.exists() else ""
     blocks = [("SessionStart", f'"{sys.executable}" "{dest}"', 10),
-              ("UserPromptSubmit", f'"{sys.executable}" -I "{memhook_dest}" recall --plain', 10)]
+              ("UserPromptSubmit", f'"{sys.executable}" -I "{memhook_dest}" recall --plain', 10),
+              ("Stop", f'"{sys.executable}" -I "{memhook_dest}" save --plain', 10)]
     new = _kimi_drop_ours(text).rstrip("\n")
     for event, cmd, timeout in blocks:
         # json.dumps: a TOML basic string with the same escapes (\" and \\).
@@ -804,7 +850,7 @@ def _deploy_kimi(src: Path, dry_run: bool) -> tuple[list[str], str]:
         if cfg.exists():
             shutil.copyfile(cfg, cfg.with_suffix(".toml.bak"))
         cfg.write_text(new, encoding="utf-8", newline="\n")
-    return deployed, "hooks copied + SessionStart/UserPromptSubmit registered in config.toml"
+    return deployed, "hooks copied + SessionStart/UserPromptSubmit/Stop registered in config.toml"
 
 
 def _scrub_kimi_config(dry_run: bool) -> None:
@@ -979,15 +1025,16 @@ def execute_install(state: dict | None = None, *, assets_root=None,
 # Uninstall executor
 # --------------------------------------------------------------------------
 
-def _scrub_claude_settings(dry_run: bool) -> None:
-    """Drop OUR hook entries from ~/.claude/settings.json (only ours).
+def _scrub_claude_settings(dry_run: bool, settings: "Path | None" = None) -> None:
+    """Drop OUR hook entries from ~/.claude/settings.json (only ours), or from
+    another file with the same shape (Codex's hooks.json).
 
     All three events we register, not just SessionStart: the reminder lives
     under UserPromptSubmit and PreCompact, and an uninstall that cleans one
     event out of three leaves two commands pointing at a file it just deleted —
     an error on every single user prompt, forever.
     """
-    settings = _claude_dir() / "settings.json"
+    settings = settings or _claude_dir() / "settings.json"
     try:
         # utf-8-sig: a BOM'd settings.json (common on Windows editors) failed
         # json.loads, the hook entry survived every uninstall.
@@ -1072,6 +1119,7 @@ def _remove_hook(client: str, path: str, dry_run: bool) -> dict:
         _scrub_opencode_config(dry_run)
     elif client == "codex":
         _scrub_codex_plugins(dry_run)
+        _scrub_claude_settings(dry_run, _codex_hooks_file())
     elif client == "kimi":
         _scrub_kimi_config(dry_run)
     return {"action": "remove_hook", "ok": ok, "client": client, "path": path}

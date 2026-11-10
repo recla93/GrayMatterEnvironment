@@ -12,8 +12,9 @@ status: idea — niente è implementato
 >   semantic, procedural, meta. Questa scheda lo confronta con quello che GM fa oggi.
 > - **Come funziona.** Ogni strato si **legge** quando l'agente pianifica e si **scrive** dopo il
 >   turno. Il meta-strato lavora fuori linea, sugli altri quattro.
-> - **A cosa serve.** A vedere cosa manca e in che ordine farlo. Due cose mancano: un episodico che
->   non si cancella e uno strato procedurale.
+> - **A cosa serve.** A vedere cosa manca e in che ordine farlo. Manca lo strato procedurale.
+>   L'episodico che non si cancella c'è dal 2026-11-06: i fatti dell'ADR-015 (aggiornamento del
+>   2026-11-10).
 
 > [!info] Da dove nasce
 > Uno schema esterno («The 5 layers of agent memory») confrontato con il codice il 2026-11-03. È una
@@ -36,31 +37,31 @@ status: idea — niente è implementato
 | Strato | In GM oggi | Stato |
 |---|---|---|
 | 1 Working | contesto dell'LLM + blackboard (`cervello/focus`, `cervello/mode`) | c'è |
-| 2 Episodic | tabella `episodes` di Neuron | **non è append-only** |
+| 2 Episodic | tabella `facts` di Neuron (ADR-015): append-only, `supersedes` | c'è |
 | 3 Semantic | grafo dei concetti di Neuron + NeuRAG, collegati da `promote` | c'è, senza attributi tipizzati |
 | 4 Procedural | — | manca |
 | 5 Meta | tick in idle del daemon, `sleep_maybe`, decadimento della salienza, `_graveyard`, dedup semantica, `bridges.decay` | a pezzi |
 
-### 2.1 Il buco che blocca gli altri: lo strato 2
+### 2.1 Lo strato 2: chiuso dall'ADR-015
 
-Riscontro sul codice:
+Il 2026-11-03 era il buco che bloccava gli altri: `EPISODES_PER_NODE = 5` cancellava il sesto
+episodio di un nodo. Riscontro sul codice al 2026-11-10:
 
-- `neuron/src/neuron/models.py` — `episodes` ha chiave `(context, keyword, turn)`: un episodio è
-  legato alla keyword, non al turno in cui è nato.
-- `neuron/src/neuron/models.py` — `EPISODES_PER_NODE = 5`: oltre il quinto, il più vecchio viene
-  cancellato.
+- i fatti stanno nella tabella `facts`, con `fact_concepts` per i concetti. Non si cancellano e non
+  si modificano: un aggiornamento è un fatto nuovo con `supersedes`, il vecchio resta `superseded`
+  (ADR-015 D4);
+- `EPISODES_PER_NODE = 5` limita solo quanti fatti per concetto `pre_turn` **mostra**
+  (`recent_facts`), non quanti se ne conservano;
+- la tabella `episodes` resta come indice derivato dei fatti attivi.
 
-È lo stesso punto aperto di CERVELLO.md: si dimentica per **età**, non per valore.
-
-Gli strati 3 e 4 si costruiscono **leggendo gli episodi**. Se gli episodi spariscono, non hanno
-materiale.
+Gli strati 3 e 4 si costruiscono **leggendo i fatti**, e ora il materiale non sparisce.
 
 ## 3. Il percorso
 
 In ordine di dipendenza. Ogni passo regge da solo.
 
-1. **Episodico append-only.** Un log dei turni che non si cancella. Il limite di cinque resta su
-   **cosa si mostra** nel `pre_turn`, non su cosa si conserva. Passo piccolo, sblocca il resto.
+1. ~~**Episodico append-only.**~~ Fatto con l'ADR-015: i fatti non si cancellano, il limite di
+   cinque resta solo su cosa mostra il `pre_turn`.
 2. **Una misura.** recall@k, MRR e costo per turno su turni reali. Il parere esterno del 26/10
    segnala che manca una misura end-to-end del beneficio. Senza, ogni strato nuovo si può solo
    sperare che aiuti.
@@ -82,5 +83,5 @@ In ordine di dipendenza. Ogni passo regge da solo.
 - **La mappa anatomica non cambia.** Neuron resta l'ippocampo, NeuRAG la neocorteccia. Lo schema
   mette lo strato semantico nel lobo temporale e GM lo divide fra i due: dove l'analogia si rompe,
   vince il codice.
-- **Prima la solidità.** IDEAS.md mette davanti a tutto una suite solida. Il passo 1 è il solo da
-  considerare prima di avere la misura del passo 2.
+- **Prima la solidità.** IDEAS.md mette davanti a tutto una suite solida. Con il passo 1 fatto, il
+  prossimo è la misura del passo 2: ogni strato nuovo si giudica su quella.

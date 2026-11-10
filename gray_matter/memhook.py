@@ -71,13 +71,19 @@ def session_memory(transcript: str) -> tuple[bool, list]:
 
 def recall(payload: dict) -> str:
     prompt = str(payload.get("prompt") or "")
+    session = str(payload.get("session_id") or "")
     if not worth_recalling(prompt):
+        # Tells the daemon this turn needs no save check (hosts without a transcript).
+        if session:
+            _ipc({"action": "turn", "session": session, "worth": False})
         return ""
     profile_shown, ids = session_memory(str(payload.get("transcript_path") or ""))
+    # Nothing read from the transcript (none, or a host whose format is not
+    # Claude Code's): the daemon's own per-session record decides the profile.
+    profile = None if not (profile_shown or ids) else not profile_shown
     # No ping first: without a daemon the connection is refused at once, and _ipc gives ''.
-    return fit(_ipc({"action": "recall", "prompt": prompt[:300],
-                     "session": str(payload.get("session_id") or ""),
-                     "profile": not profile_shown, "exclude": ids}),
+    return fit(_ipc({"action": "recall", "prompt": prompt[:300], "session": session,
+                     "profile": profile, "exclude": ids}),
                BUDGET + (0 if profile_shown else PROFILE_BUDGET))
 
 
@@ -166,6 +172,13 @@ def save(payload: dict) -> str:
     if payload.get("stop_hook_active"):
         return ""
     prompt, wrote, work, chars = last_turn(_entries(str(payload.get("transcript_path") or "")))
+    if not prompt:
+        # No Claude Code transcript (Kimi, Codex): the daemon saw every store_turn.
+        # Codex hands the answer over; Kimi nothing, so its turn counts as substantive.
+        if _ipc({"action": "saved", "session": str(payload.get("session_id") or "")}) != "no":
+            return ""
+        answer = payload.get("last_assistant_message")
+        return REMIND if answer is None or len(str(answer)) >= SUBSTANTIVE_CHARS else ""
     if wrote or not worth_recalling(prompt):
         return ""
     if work == 0 and chars < SUBSTANTIVE_CHARS:
@@ -185,6 +198,10 @@ def main(argv: list) -> None:
     if not text:
         return
     if "--plain" in argv:   # hosts that append raw stdout to the context (Kimi)
+        if mode == "save":  # ...and block on exit 2, the reason on stderr
+            sys.stderr.buffer.write(text.encode("utf-8"))
+            sys.stderr.flush()
+            sys.exit(2)
         sys.stdout.buffer.write(text.encode("utf-8"))
         return
     out = ({"decision": "block", "reason": text} if mode == "save" else

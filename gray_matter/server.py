@@ -1305,6 +1305,22 @@ def _norm(s: str) -> str:
 
 
 _HOOK_SEEN: dict = {}            # session -> (kb pointers shown, fact ids shown: recalled or flashed)
+# The save check for hosts with no readable transcript (Kimi, Codex, OpenCode):
+# every store_turn of every client passes through the daemon, so it can tell
+# whether a fact landed since this session's message arrived. shortcut: one
+# clock for all sessions, so another client's save hides a missed one; key it
+# by session if the hosts ever pass their session id to the MCP call.
+_HOOK_TURN: dict = {}            # session -> time its last message was recalled
+_FACT_AT = [0.0]                 # time of the last store_turn that carried a fact
+
+
+def _saved_since(session: str) -> str:
+    """'yes' / 'no' for the session's current turn, 'unknown' when the daemon
+    never saw its message (restarted, or no recall hook)."""
+    t = _HOOK_TURN.get(session)
+    if t is None:
+        return "unknown"
+    return "yes" if _FACT_AT[0] >= t else "no"
 _FACT_ID = re.compile(r"#([0-9a-f]{8})\b")
 
 
@@ -1378,6 +1394,7 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     # The hook reads both from the transcript (memhook.session_memory); an older
     # hook sends neither, and the daemon's own per-session record stands in.
     first = (session not in _HOOK_SEEN) if profile is None else bool(profile)
+    _HOOK_TURN[session] = time.time()
     shown, flashed = _HOOK_SEEN.setdefault(session, (set(), set()))
     flashed.update(str(i) for i in (exclude or []))
     q = " ".join(prompt.split())[:300]
@@ -1655,6 +1672,9 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     try:
                         result = await _call_server_async(srv, tool_name, tool_args)
                         response = {"result": result}
+                        if tool_name == "store_turn" and isinstance(tool_args, dict) and (
+                                tool_args.get("facts") or str(tool_args.get("episode") or "").strip()):
+                            _FACT_AT[0] = time.time()
                     except Exception as e:
                         response = {"error": str(e)}
                 elif action == "recall":
@@ -1668,6 +1688,13 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                             msg.get("profile"), msg.get("exclude"))}
                     except Exception as e:
                         response = {"error": str(e)}
+                elif action == "turn":
+                    # A message the recall hook skipped (ack, command): no save check for it.
+                    if not msg.get("worth"):
+                        _HOOK_TURN.pop(str(msg.get("session") or ""), None)
+                elif action == "saved":
+                    # memhook save, for hosts whose transcript it cannot read.
+                    response = {"result": _saved_since(str(msg.get("session") or ""))}
                 elif action == "schemas":
                     # Same reason: the bootstrap must not spawn a local worker
                     # just to learn the tool list.
