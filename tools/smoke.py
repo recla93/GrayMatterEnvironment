@@ -163,18 +163,13 @@ def _():
     return ("PASS" if ok else "FAIL"), f"{before} -> {after} | {out[:80]!r}"
 
 
-@check("write", "stimulus: never the same fact twice in three stores")
+@check("write", "store_turn result: no stimulus (removed 2026-11-12)")
 def _():
     if not ISOLATED:
         return NOT_HERE
-    import re
-    # Concepts the copied graph already has: a stimulus follows their links.
-    # A new concept has none, and the check would pass on nothing.
-    stim = [i for n in range(3) for i in re.findall(
-            r"🧠[^\n]*#([0-9a-f]{8})", store(f"Smoke probe {n}: stimulus repetition", ("release", "isolamento")))]
-    if not stim:
-        return "SKIP", "no stimulus shown: nothing to compare"
-    return ("PASS" if len(stim) == len(set(stim)) else "FAIL"), f"stimuli {stim}"
+    # Concepts the copied graph already has: with them the old code always found one.
+    out = store("Smoke probe: a save carries no stimulus", ("release", "isolamento"))
+    return ("FAIL", out[-160:]) if "🧠" in out else ("PASS", "no 🧠 in the save result")
 
 
 def fact_ids(graphs: Path) -> set:

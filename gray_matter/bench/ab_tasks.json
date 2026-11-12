@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "note": "A/B pilot (PIANO fase 0). Each memory task needs one real fact (id = the fact in the memory as of 2026-11-12); `expect` = distinctive words, '|' separates alternatives, matched case-insensitively. Control tasks are ones memory cannot help: they measure its pure cost.",
+  "tasks": [
+    {"id": "t01", "fact": "41d86ea5", "prompt": "Dove vive dal 10/11 la memoria di Gray Matter su questo PC, e perche' e' stata spostata fuori da AppData?", "expect": ["msix", "appdata"]},
+    {"id": "t02", "fact": "427aa9fb", "prompt": "Perche' al primo avvio del daemon di Gray Matter dopo l'install il richiamo risponde 'no context' per oltre un minuto?", "expect": ["vettori|vector", "background|sfondo|scalda|warm"]},
+    {"id": "t03", "fact": "ca77b3c4", "prompt": "Su Windows, perche' un secondo daemon Gray Matter dello stesso utente non riusciva ad autenticare i suoi client, e come si e' risolto?", "expect": ["pipe", "GM_INSTANCE"]},
+    {"id": "t04", "fact": "634034cd", "prompt": "Per isolare la suite Gray Matter in un test quali variabili d'ambiente servono, e perche' GM_HOME da sola non basta?", "expect": ["NS_GRAPHS_DIR", "NEURAG_HOME", "venv_suite|venv"]},
+    {"id": "t05", "fact": "76edcbf2", "prompt": "Perche' su OpenCode 2.2.6 il plugin neuron-handshake non si caricava mai?", "expect": ["npm|NpmInstallFailedError", "cartella|directory|folder"]},
+    {"id": "t06", "fact": "63d97118", "prompt": "Perche' il plugin OpenCode della memoria smetteva di fare il recall dopo un install?", "expect": ["listening|flag", "ricaricamento|reload"]},
+    {"id": "t07", "fact": "daeb73b6", "prompt": "Quanto costa la memoria di Gray Matter in token secondo il ledger, e quanta parte dei fatti mostrati viene usata?", "expect": ["0,4|0.4", "34"]},
+    {"id": "t08", "fact": "fda9b916", "prompt": "Cosa e' successo il 10/11 con il test di uninstall con purge_data, e come si e' rimediato?", "expect": ["purge_data|cancell|delet", "backup"]},
+    {"id": "t09", "fact": "72445067", "prompt": "Perche' l'abitudine #2e4390da nel profilo della memoria non e' davvero dell'utente?", "expect": ["opencode", "test"]},
+    {"id": "t10", "fact": "bbdb66b5", "prompt": "Perche' lo stimolo di Neuron dopo store_turn mostrava fatti fuori tema?", "expect": ["same turn|same-turn", "co-occorrenza|cooccorrenza|co-occurrence"]},
+    {"id": "t11", "fact": "0101454a", "prompt": "Come si esegue da Python un comando hook di Kimi Code senza che fallisca per le virgolette?", "expect": ["shell=True|shell:true|shell=true"]},
+    {"id": "t12", "fact": "85b6e059", "prompt": "Quanto impiega a caldo l'hook di recall di Gray Matter e come si divide quel tempo?", "expect": ["500", "220"]},
+    {"id": "t13", "fact": "2d3a67c0", "prompt": "Da dove veniva il 'Failed to fetch' della GUI di Gray Matter il 9/11?", "expect": ["Stop-VenvProcesses", "install.ps1"]},
+    {"id": "t14", "fact": "50c5cc77", "prompt": "Perche' in questo repo non si devono mettere in stage pezzi di un file con git apply --unidiff-zero, e cosa verificare prima del commit?", "expect": ["contesto|context", "ast.parse"]},
+    {"id": "t15", "fact": "83af4ba9", "prompt": "Cosa limita oggi EPISODES_PER_NODE=5 in Neuron, dopo l'ADR-015?", "expect": ["pre_turn", "facts|fatti"]},
+    {"id": "t16", "fact": "951bdb73", "prompt": "Come fa il richiamo di Neuron a portare l'ultima parola su un argomento quando ci sono fatti vecchi e nuovi simili?", "expect": ["_with_newer|piu' recente|più recente|newer", "0.60|0,60"]},
+    {"id": "t17", "fact": "96d730bd", "prompt": "Come decide il daemon di Gray Matter se un turno ha salvato i suoi fatti, per i client senza transcript leggibile?", "expect": ["_FACT_AT", "saved"]},
+    {"id": "t18", "fact": "bbfb19d8", "prompt": "Perche' la via CLI gm-neuron non serve a provare il controllo di salvataggio del daemon?", "expect": ["call", "_FACT_AT"]},
+    {"id": "t19", "fact": "ef20bee5", "prompt": "Perche' 'opencode run' da solo non basta per provare il promemoria di fine turno del plugin della memoria?", "expect": ["serve", "password|OPENCODE_PASSWORD"]},
+    {"id": "t20", "fact": "8c283615", "prompt": "NeuRAG ha gia' una ricerca ibrida? Come combina i risultati, e il reranker cross-encoder e' attivo?", "expect": ["BM25", "RRF"]},
+    {"id": "c01", "control": true, "prompt": "Scrivi una funzione Python che restituisce i numeri primi minori di n.", "expect": ["def "]},
+    {"id": "c02", "control": true, "prompt": "Spiega in 3 righe la differenza tra TCP e UDP.", "expect": ["connession|connection"]},
+    {"id": "c03", "control": true, "prompt": "Cos'e' un lookahead positivo in un'espressione regolare? Un esempio breve.", "expect": ["(?="]},
+    {"id": "c04", "control": true, "prompt": "Converti 72 gradi Fahrenheit in Celsius, mostrando il calcolo.", "expect": ["22"]},
+    {"id": "c05", "control": true, "prompt": "Enuncia il teorema CAP in tre righe.", "expect": ["consisten", "partition"]}
+  ]
+}

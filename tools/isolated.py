@@ -95,11 +95,17 @@ def purge() -> None:
             sys.exit(f"{ROOT} exists without {MARKER}: not mine, not deleting it")
         # A stopped daemon and its workers let go of daemon.log and the graphs
         # a few seconds after `stop` returns (Windows: open files cannot go).
-        for _ in range(30):
+        # The marker goes LAST: a purge cut halfway must leave a folder that is
+        # still recognisably ours, or the next `up` refuses to touch it.
+        for attempt in range(31):
             try:
-                shutil.rmtree(ROOT)
-                return
+                for child in ROOT.iterdir():
+                    if child.name != MARKER:
+                        shutil.rmtree(child) if child.is_dir() else child.unlink()
+                break
             except PermissionError:
+                if attempt == 30:
+                    raise
                 time.sleep(1)
         shutil.rmtree(ROOT)
 

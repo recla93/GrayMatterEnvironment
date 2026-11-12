@@ -99,6 +99,23 @@ fuori tema.
    fatto nella risposta; un giudice LLM solo se serve).
 4. **Uscita.** `V(richiamo utile)` in IET e in chiamate risparmiate, con l'intervallo di confidenza.
 
+**Primo risultato (12/11, `gray_matter/bench/ab.py`, log in `gray_matter/bench/results/ab-2026-11-12-partial.log`).**
+OpenCode `big-pickle`, agente `plan` nel repo, una corsa per compito. 13 compiti di memoria validi su 20:
+il modello gratuito ha esaurito la quota dal t14 (429), controlli non arrivati.
+
+| per compito | CON | SENZA | delta [IC 95% bootstrap] |
+|---|---|---|---|
+| correttezza | 1,00 | 1,00 | +0,0 [−0,1, +0,1] |
+| chiamate di esplorazione | 10,0 | 17,5 | **−7,5 [−11,5, −3,2]** (−43%) |
+| tempo (s) | 60,5 | 86,8 | **−26,3 [−59,6, −3,3]** |
+| token (input+output) | 37,4k | 32,9k | +4,4k [−5,0k, +13,7k] |
+| chiamate alla memoria | 2,2 | 0 | — |
+
+Lettura: nel repo i fatti si trovano anche leggendo i file, quindi la memoria non cambia la correttezza;
+cambia il **lavoro**: meno esplorazione in 11 compiti su 13 e meno tempo. I token sono in pari: la memoria
+costa quanto l'esplorazione che risparmia. Da fare: ripetizioni (`--reps 3`) e lo scenario fuori dal repo
+(`--outside`), con un modello che non esaurisca la quota.
+
 ### Livello 3 — continuo (dopo)
 
 Il ledger gira sulle sessioni nuove (anche OpenCode e Kimi) e si moltiplica per `V`: il risparmio

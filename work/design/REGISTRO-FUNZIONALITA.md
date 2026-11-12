@@ -27,7 +27,9 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 | Ultima parola su un argomento (`_with_newer`) | base | caso vero risolto; bench rumore +0,09, richiamo invariato | `test_fact_newer`, copia del grafo, dal vivo | 10/11 |
 | Fatti già visti esclusi prima del top-3 | base | ? (nessuna misura dedicata) | `test_fact_newer` | 10/11 |
 | Profilo user/habit a inizio sessione | base | ? uso nel ledger: 29% | prova dal vivo | 10/11 (inquinato da un test, corretto con #72445067) |
-| Stimolo 🧠 | sperimentale | uso 21% (il più basso); rumore bench 0,80 → 0,65 dopo il fix della ripetizione | `test_stimulus_v2` | 10/11 — **aperto**: mostra fatti non pertinenti seguendo i link "same turn" della sessione; il cooldown si azzera a ogni riavvio |
+| Stimolo 🧠 | sperimentale | uso 21% (il più basso); rumore bench 0,80 → 0,65 dopo il fix della ripetizione | `test_stimulus_v2` | 12/11: **tolto dalla risposta di `store_turn`** (resta in `pre_turn`; bench rumore 0,95 → 1,0 perché i salvataggi non mettono più fatti in cooldown). Aperto: fatti non pertinenti via link "same turn"; cooldown azzerato a ogni riavvio |
+| Gist dei fatti (riga inglese per il modello, testo intero con `pre_turn(topic="#id")`) | sperimentale | −64% token per fatto (tiktoken, 5 fatti veri); ? quota di fatti con gist | `test_search_recall` (gist) | 12/11 |
+| Inglese come lingua pivot dei fatti + controllo morbido | sperimentale | bench con fatti inglesi e domande italiane: richiamo 0,545 → 0,515 (1 fatto su 33), fuori tema 4 → 1 (extract); −19% token | `test_pivot_language`, `make_en.py` | 12/11 |
 | Spreading activation | sperimentale | ? non misurata da sola | `test_spreading` | ? |
 | Link "same turn" automatici | sperimentale | ? — creano i percorsi dello stimolo fuori tema | ? | ? |
 | Salienza, trust, decadimento, cimitero | sperimentale | ? | suite | ? |
@@ -63,8 +65,9 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 
 ## Mancano per tutti
 
-- **L'A/B controfattuale**: senza, nessuna riga sa se fa risparmiare. L'istanza isolata c'è
-  (`tools/isolated.py`, 12/11): manca l'A/B stesso.
+- **L'A/B controfattuale**: primo risultato il 12/11 (13 compiti, una corsa): con la memoria −43%
+  di chiamate di esplorazione e −26 s per compito, correttezza e token in pari. Mancano le ripetizioni
+  e lo scenario fuori dal repo ([MISURA](MISURA-RISPARMIO-2026-11-10.md), livello 2).
 - **Il gate prima del push** c'è dal 12/11: `python tools/gate.py && git push`.
 
 ## Dopo (idee parcheggiate, non nel codice)
