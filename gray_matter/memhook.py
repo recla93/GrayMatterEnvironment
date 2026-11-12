@@ -97,7 +97,7 @@ def recall(payload: dict) -> str:
 SUBSTANTIVE_CHARS = 600   # an answer longer than this is a turn of substance
 REMIND = ("[memory] This turn saved no fact. If there is something worth not "
           "repeating (progress, decisions, fixes, details, ideas, the user and their "
-          "habits), call store_turn(facts=[{kind, text, concepts}]) and then stop. "
+          "habits), call store_turn(facts=[{kind, text, concepts}], English only) and then stop. "
           "If there is nothing, stop without adding anything.")
 
 

@@ -463,7 +463,7 @@ GM_INSTRUCTIONS = (
     "base) behind one proxy — their tools are served here pass-through.\n"
     "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying (fold "
     "the returned context in silently), then store_turn(facts=[{kind, text, "
-    "concepts}]) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits. "
+    "concepts}], English only) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits. "
     "gray_matter_pulse(topic) merges memory + knowledge + flash in one call.\n"
     "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
     "supersedes=<#id>; links typed, never a "
