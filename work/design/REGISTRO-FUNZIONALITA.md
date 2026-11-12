@@ -41,7 +41,7 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 | Recall senza contorno (`_trim_for_hook`) | base | 0 fatti persi su 10, −7% caratteri | `test_memhook`, dal vivo | 10/11 |
 | Controllo di salvataggio (Stop / `saved`) | base | ? effetto sui fatti salvati non misurato | `test_memhook`, dal vivo no/unknown/yes | 10/11 |
 | Hook Claude Code | base | — | dal vivo (questa sessione) | 10/11 |
-| Plugin OpenCode 2.x | base | — | dal vivo: recall dopo il ricaricamento, promemoria, niente loop | 10/11 |
+| Plugin OpenCode 2.x | base | — | dal vivo: recall dopo il ricaricamento, promemoria, niente loop; `smoke --only oc-turn` sull'istanza (promemoria → risposta, salvataggio nella copia) | 12/11 |
 | Hook Kimi Code | sperimentale | — | comandi eseguiti con l'input di Kimi; **Kimi vero no** | 10/11 |
 | Hook Codex | sperimentale | — | comandi in cmd e PowerShell; **app Codex no** (serve `/hooks`) | 10/11 |
 | Flash ⚡ | sperimentale | uso 38% | ? | ? |
@@ -50,6 +50,7 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 | Pulse, brainstorm | sperimentale | ? uso: rari nelle sessioni | ? | ? |
 | Control center (GUI) | ? | ? | ? | ? |
 | Ledger del risparmio | base (misura) | — | `test_ledger` | 10/11 |
+| Istanza isolata (`tools/isolated.py`) | base (prove) | fatto di prova: 1 nella copia, 0 nella memoria vera; hook con l'env isolato → solo il daemon isolato | `isolated.py check`, `test_ipcauth` (pipe per istanza), smoke 10/10 sull'istanza | 12/11 |
 
 ## NeuRAG
 
@@ -62,10 +63,9 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 
 ## Mancano per tutti
 
-- **L'A/B controfattuale**: senza, nessuna riga sa se fa risparmiare. Richiede un'istanza della
-  suite isolata (copia della memoria, daemon proprio).
-- **La prova d'uso automatica** prima di ogni push (recall, `saved`, hook Kimi/Codex, turno
-  OpenCode), sulla stessa istanza isolata.
+- **L'A/B controfattuale**: senza, nessuna riga sa se fa risparmiare. L'istanza isolata c'è
+  (`tools/isolated.py`, 12/11): manca l'A/B stesso.
+- **Il gate prima del push** c'è dal 12/11: `python tools/gate.py && git push`.
 
 ## Dopo (idee parcheggiate, non nel codice)
 

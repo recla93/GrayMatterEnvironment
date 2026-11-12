@@ -5,14 +5,18 @@
     python tools/smoke.py --json     # machine-readable
     python tools/smoke.py --only kimi,codex
 
-It never writes a fact: the recall it triggers only touches the daemon's
-per-session record (fresh `smoke-*` sessions). The "saved: yes" path needs a
-store_turn and is NOT here; it belongs to the isolated instance (TODO).
+On the real suite it never writes a fact: the recall it triggers only touches
+the daemon's per-session record (fresh `smoke-*` sessions). The groups that
+write run only on the isolated instance and SKIP elsewhere:
+
+    python tools/isolated.py run -- python tools/smoke.py
+    python tools/isolated.py run -- python tools/smoke.py --only oc-turn   # ~1 min, a model
 
 Groups: daemon (ping, workers), recall (shape, chrome trimmed, off-topic),
-save (saved/turn IPC), claude, kimi, codex, opencode (deployed hooks, run with
-each host's input), cohesion (byte-identical copies and deployed files equal
-to the repo: catches a stale deploy).
+save (saved/turn IPC), write (saved: yes, stimulus not repeated), oc-turn (a
+real OpenCode turn: reminder, then the fact; opt-in), claude, kimi, codex,
+opencode (deployed hooks, run with each host's input), cohesion (byte-identical
+copies and deployed files equal to the repo: catches a stale deploy).
 """
 from __future__ import annotations
 
@@ -38,7 +42,7 @@ results: list = []
 def check(group: str, name: str):
     def deco(fn):
         def run(only):
-            if only and group not in only:
+            if (only and group not in only) or (not only and group in OPT_IN):
                 return
             t0 = time.monotonic()
             try:
@@ -130,6 +134,120 @@ def _():
     third = ipc({"action": "saved", "session": s}).get("result")
     ok = (first, second, third) == ("unknown", "no", "unknown")
     return ("PASS" if ok else "FAIL"), f"{first} / {second} / {third}"
+
+
+# --- write (isolated instance only) ---------------------------------------------
+# These store facts: they run only under tools/isolated.py (GM_INSTANCE set), and
+# SKIP on the real memory. Facts go through `call`, the path of a real MCP client.
+
+ISOLATED = bool(os.environ.get("GM_INSTANCE"))
+NOT_HERE = ("SKIP", "writes: run through `python tools/isolated.py run -- python tools/smoke.py`")
+
+
+def store(text: str, concepts=("smoke probe",)) -> str:
+    fact = {"kind": "fact", "text": f"{text} (smoke {RUN})", "concepts": list(concepts)}
+    r = ipc({"action": "call", "server": "neuron", "tool": "store_turn", "args": {"facts": [fact]}}, 60)
+    return str(r.get("result") or r)
+
+
+@check("write", "saved: no after a recall, yes after a store_turn")
+def _():
+    if not ISOLATED:
+        return NOT_HERE
+    s = f"smoke-{RUN}-w"
+    ipc({"action": "recall", "prompt": ON_TOPIC, "session": s, "profile": False, "exclude": []})
+    before = ipc({"action": "saved", "session": s}).get("result")
+    out = store("Smoke probe: the save check turns to yes")
+    after = ipc({"action": "saved", "session": s}).get("result")
+    ok = (before, after) == ("no", "yes") and "saved" in out
+    return ("PASS" if ok else "FAIL"), f"{before} -> {after} | {out[:80]!r}"
+
+
+@check("write", "stimulus: never the same fact twice in three stores")
+def _():
+    if not ISOLATED:
+        return NOT_HERE
+    import re
+    # Concepts the copied graph already has: a stimulus follows their links.
+    # A new concept has none, and the check would pass on nothing.
+    stim = [i for n in range(3) for i in re.findall(
+            r"🧠[^\n]*#([0-9a-f]{8})", store(f"Smoke probe {n}: stimulus repetition", ("release", "isolamento")))]
+    if not stim:
+        return "SKIP", "no stimulus shown: nothing to compare"
+    return ("PASS" if len(stim) == len(set(stim)) else "FAIL"), f"stimuli {stim}"
+
+
+def fact_ids(graphs: Path) -> set:
+    import sqlite3
+    ids = set()
+    for db in graphs.glob("graph_*.db"):
+        c = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            ids |= {r[0] for r in c.execute("SELECT id FROM facts")}
+        finally:
+            c.close()
+    return ids
+
+
+OPT_IN = {"oc-turn"}   # slow (a model over the network): only with --only oc-turn
+
+
+@check("oc-turn", "OpenCode turn: unsaved -> reminder answered, nothing in the real memory")
+def _():
+    if not ISOLATED:
+        return NOT_HERE
+    import secrets
+    import socket
+    oc = shutil.which("opencode")
+    if not oc:
+        return "SKIP", "opencode not on PATH"
+    exe = Path(oc).parent / "node_modules/@opencode/cli/bin/opencode.exe"   # the npm shim would survive a kill
+    oc = str(exe) if exe.exists() else oc
+    env = dict(os.environ, OPENCODE_PASSWORD=secrets.token_hex(16))       # private server, this run only
+    port = 4097
+    url = f"http://127.0.0.1:{port}"
+    copy, real = Path(os.environ["NS_GRAPHS_DIR"]), SUITE / "neuron" / "graphs"
+    copy0, real0 = fact_ids(copy), fact_ids(real)
+    srv = subprocess.Popen([oc, "serve", "--hostname", "127.0.0.1", "--port", str(port)], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    msgs = []
+    try:
+        for _ in range(60):
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.5).close()
+                break
+            except OSError:
+                time.sleep(0.5)
+        # "No tools" makes the turn end unsaved: the plugin must remind, the model then saves.
+        prompt = ("Rispondi a memoria, senza chiamare nessuno strumento: in almeno 20 righe, con un elenco "
+                  "puntato dei rischi, perche' una suite di memoria per LLM dovrebbe avere un'istanza isolata per i test.")
+        r = subprocess.run([oc, "run", "--server", url, "--format", "json", "-m", "opencode/big-pickle", prompt],
+                           env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        sid = next((json.loads(ln)["sessionID"] for ln in r.stdout.splitlines()
+                    if ln.startswith("{") and json.loads(ln).get("sessionID")), None)
+        if not sid:
+            return "FAIL", f"run rc {r.returncode}: {r.stdout[-160:]}"
+        for _ in range(30):                       # the reminder, then the model's answer to it
+            time.sleep(5)
+            e = subprocess.run([oc, "session", "export", sid, "--server", url], env=env, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=60)
+            try:
+                msgs = json.loads(e.stdout[e.stdout.find("{"):]).get("messages") or []
+            except ValueError:
+                continue
+            rem = [i for i, m in enumerate(msgs) if str(m.get("text") or "").startswith("[memory]")]
+            if rem and msgs[-1].get("type") == "idle" and len(msgs) - 1 > rem[-1]:
+                break
+    finally:
+        subprocess.run(["taskkill", "/PID", str(srv.pid), "/T", "/F"] if os.name == "nt" else ["kill", str(srv.pid)],
+                       capture_output=True)
+    rem = [i for i, m in enumerate(msgs) if str(m.get("text") or "").startswith("[memory]")]
+    answered = bool(rem) and any(m.get("type") == "assistant" for m in msgs[rem[-1]:])
+    new_copy, new_real = len(fact_ids(copy) - copy0), len(fact_ids(real) - real0)
+    # Saving after the reminder is the model's call ("if there is nothing, stop"):
+    # the suite owns the reminder and where a save lands, so copy is reported, not required.
+    ok = answered and new_real == 0
+    return ("PASS" if ok else "FAIL"), f"reminder {bool(rem)}, answered {answered}, new facts: copy {new_copy}, real {new_real}"
 
 
 # --- clients ------------------------------------------------------------------
