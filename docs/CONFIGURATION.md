@@ -40,6 +40,7 @@
 | Variable | Default | Where read | Purpose |
 |---|---|---|---|
 | `GM_HOME` | `<suite>/graymatter` — `%LOCALAPPDATA%\GrayMatterEnvironment\graymatter` (Windows), `~/.local/share/GrayMatterEnvironment/graymatter` (Linux/macOS) | `paths.py` | Root directory for all GM data (see [Data](DATA.md)) |
+| `GM_INSTANCE` | (unset) | `ipcauth.py` | Windows: names a second daemon of the same user (its own IPC pipe). Set by `tools/isolated.py`; leave unset otherwise |
 | `GM_PREWARM` | `"1"` if `prewarm` is True | `server.py` | Disable worker pre-warming at startup (`"0"` to skip) |
 | `GM_NEURON_CLIENTS` | (auto-detected) | `executor.py` | Override path to Neuron client assets directory |
 | `GM_GUI_BROWSER` | (unset) | `webgui.py` | If set, open the control center in the system browser instead of its own window |

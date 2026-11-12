@@ -189,9 +189,15 @@ def own_identity() -> str:
 
 
 def channel_address() -> str:
-    """Where this user's daemon hands out tokens. One per user, by construction."""
+    """Where this user's daemon hands out tokens. One per user, by construction.
+
+    GM_INSTANCE names a second daemon of the same user (tools/isolated.py): the
+    pipe name is per user, so without it that daemon cannot hold the channel and
+    its clients get tokens from the real one, which it rejects. POSIX needs no
+    suffix: the socket already lives under GM_HOME."""
     if _WIN:
-        return r"\\.\pipe\gray-matter-" + own_identity()
+        inst = os.environ.get("GM_INSTANCE", "").strip()
+        return r"\\.\pipe\gray-matter-" + own_identity() + (f"-{inst}" if inst else "")
     from gray_matter import paths
     return str(paths.gm_home() / "run" / "ipc.sock")
 

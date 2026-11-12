@@ -88,6 +88,16 @@ def test_the_legacy_secret_file_is_removed(tmp_path, monkeypatch):
     assert not (tmp_path / "ipc-token").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="the pipe name is per user only on Windows")
+def test_a_named_instance_gets_its_own_pipe(monkeypatch):
+    """tools/isolated.py runs a second daemon of the same user: same pipe name =
+    it cannot serve, and its clients would take tokens from the real daemon."""
+    monkeypatch.delenv("GM_INSTANCE", raising=False)
+    real = A.channel_address()
+    monkeypatch.setenv("GM_INSTANCE", "isolated")
+    assert A.channel_address() == real + "-isolated"
+
+
 # --- the channel, end to end -------------------------------------------------
 
 @pytest.fixture
