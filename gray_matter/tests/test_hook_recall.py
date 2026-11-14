@@ -149,7 +149,7 @@ def test_a_long_memory_context_does_not_cut_the_flash(srv, monkeypatch):
 def test_the_daemon_warms_neurons_model_and_recall_vectors():
     """ADR-016 D6: `status` loaded the graph, not the model nor the vectors, and
     the first recall after a start waited 44 s. forgotten(facts) loads both and
-    has no side effect (pre_turn would consume the staged stimulus)."""
+    has no side effect."""
     import gray_matter.server as S
     tool, args = S._WARM_TOOL["neuron"]
     assert (tool, args.get("facts")) == ("forgotten", True)

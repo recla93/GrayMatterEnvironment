@@ -149,7 +149,7 @@ def neurag_config() -> Path:
 
 def gm_bridges() -> Path:    return gm_home() / "bridges.db"   # was bridges.json (migrated once)
 def backups_dir() -> Path:  return _user_base() / "backups"    # daily suite-level copies (backup.py)
-def gm_state() -> Path:      return gm_home() / "state.db"    # blackboard (TTL + versioni)
+def gm_state() -> Path:      return gm_home() / "state.db"    # leftover of the blackboard removed 2026-11-14: uninstall still cleans it
 
 
 def migrate_to_suite_root(*, dry_run: bool = False) -> list[dict]:

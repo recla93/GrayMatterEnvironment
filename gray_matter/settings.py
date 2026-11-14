@@ -21,8 +21,6 @@ DEFAULTS = {
     "flash_min_gap": 3,           # pulses between flashes (anti-spam)
     # stimulus_safety_net / _gap: gone with the safety net (ADR-016 D3). A
     # config.json that still names them loads fine: unknown keys are skipped.
-    # Off since 2026-11-14: brainstorm is no longer announced (I/O contract).
-    "brainstorm_hint": False,     # pre_turn on a problem/bug/decision → "call gray_matter_brainstorm"
     "cache_ttl_seconds": 60,      # context cache TTL
     "cache_max_size": 100,        # context cache LRU cap
     "prewarm": True,              # pre-warm workers at start (D2)
@@ -53,9 +51,6 @@ DEFAULTS = {
 HELP = {
     "flash_min_gap": "Quante pulse passano fra due flash (richiami "
                      "serendipitosi). Più alto = meno interruzioni.",
-    "brainstorm_hint": "Se topic o keywords di pre_turn parlano di bug, errori, "
-                       "dilemmi o decisioni, GM aggiunge una riga: chiama "
-                       "gray_matter_brainstorm prima di rispondere.",
     "cache_ttl_seconds": "Per quanto una risposta di contesto resta valida in "
                          "cache. Più alto = meno lavoro ripetuto, dati più vecchi.",
     "cache_max_size": "Quante risposte di contesto tenere in cache (LRU).",

@@ -27,7 +27,9 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 | Ultima parola su un argomento (`_with_newer`) | base | caso vero risolto; bench rumore +0,09, richiamo invariato | `test_fact_newer`, copia del grafo, dal vivo | 10/11 |
 | Fatti già visti esclusi prima del top-3 | base | ? (nessuna misura dedicata) | `test_fact_newer` | 10/11 |
 | Profilo user/habit a inizio sessione | base | ? uso nel ledger: 29% | prova dal vivo | 10/11 (inquinato da un test, corretto con #72445067) |
-| Stimolo 🧠 | sperimentale | uso 21% (il più basso); rumore bench 0,80 → 0,65 dopo il fix della ripetizione | `test_stimulus_v2` | 12/11: **tolto dalla risposta di `store_turn`** (resta in `pre_turn`; bench rumore 0,95 → 1,0 perché i salvataggi non mettono più fatti in cooldown). Aperto: fatti non pertinenti via link "same turn"; cooldown azzerato a ogni riavvio |
+| Stimolo 🧠 | **parcheggiata** (14/11) | uso 21% (il più basso); fatti fuori tema via link "same turn"; serve un giudice di pertinenza | — | 14/11: tolto anche da `pre_turn` e dal sonno ([PARCHEGGIO](PARCHEGGIO.md)) |
+| Modalità focus | **parcheggiata** (14/11) | mai attiva: nessuno scriveva il focus | — | 14/11 ([PARCHEGGIO](PARCHEGGIO.md)) |
+| Drift link | da togliere | 0 nei grafi veri | `test_drift` | 14/11: rimozione rimandata, tocca il modello dei link ([PARCHEGGIO](PARCHEGGIO.md)) |
 | Gist dei fatti (riga inglese per il modello, testo intero con `pre_turn(topic="#id")`) | sperimentale | −64% token per fatto (tiktoken, 5 fatti veri); ? quota di fatti con gist | `test_search_recall` (gist) | 12/11 |
 | Inglese come lingua pivot dei fatti + controllo morbido | sperimentale | bench con fatti inglesi e domande italiane: richiamo 0,545 → 0,515 (1 fatto su 33), fuori tema 4 → 1 (extract); −19% token | `test_pivot_language`, `make_en.py` | 12/11 |
 | Spreading activation | sperimentale | ? non misurata da sola | `test_spreading` | ? |
@@ -49,7 +51,11 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 | Flash ⚡ | sperimentale | uso 38% | ? | ? |
 | Puntatore KB 📚 | sperimentale | ? uso non misurato | ? | ? |
 | Bridge Neuron ↔ NeuRAG | sperimentale | 0 bridge su questo PC; automatici spenti (ADR-016 D4) | `selfcheck` | ? |
-| Pulse, brainstorm | sperimentale | ? uso: rari nelle sessioni | ? | ? |
+| Pulse | sperimentale | ? uso: rari nelle sessioni; non annunciato dal 14/11 | ? | ? |
+| Brainstorm | **tolto** (14/11) | 1 chiamata vera in 53 sessioni, nulla usato | — | 14/11 ([PARCHEGGIO](PARCHEGGIO.md)) |
+| Blackboard (`state_*`) | **tolto** (14/11) | 0 chiavi | — | 14/11 ([PARCHEGGIO](PARCHEGGIO.md)) |
+| Contratto di I/O: 4 tool annunciati | base | schemi 11,6k → 5,65k caratteri (−51%) | `test_tool_diet`, prova MCP sul gateway installato | 14/11 ([CONTRATTO-IO](CONTRATTO-IO-2026-11-14.md)) |
+| Grafo che si ripara dal `-tshm` vecchio | base | 2 giorni di scritture sul ripiego (12-14/11) evitati | `test_second_opener`, copia del grafo rotto vero | 14/11 |
 | Control center (GUI) | ? | ? | ? | ? |
 | Ledger del risparmio | base (misura) | — | `test_ledger` | 10/11 |
 | Istanza isolata (`tools/isolated.py`) | base (prove) | fatto di prova: 1 nella copia, 0 nella memoria vera; hook con l'env isolato → solo il daemon isolato | `isolated.py check`, `test_ipcauth` (pipe per istanza), smoke 10/10 sull'istanza | 12/11 |

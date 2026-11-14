@@ -210,10 +210,6 @@ _flashed: set = set()          # concepts already flashed this session (cooldown
 _calls_since_flash: int = 0
 FLASH_MIN_GAP = _cfg["flash_min_gap"]   # min pulses between flashes (anti-spam)
 
-# Stimulus safety-net (design §Decisioni 3): il motore degli stimoli è di Neuron
-# (piggyback 🧠 sui suoi tool); se l'LLM smette di far passare stimoli per N
-# turni-tool, GM lo rilancia LUI sul prossimo pass-through. Toggle/tuning in
-BRAINSTORM_HINT = _cfg["brainstorm_hint"]
 
 # Quanto contesto GM inietta. Il punto del progetto è far RISPARMIARE token, e
 # fino a qui la quantità era un effetto collaterale: il blocco proattivo (bridge,
@@ -311,23 +307,6 @@ def _fit(budget: int, blocks: list[str]) -> tuple[str, int]:
     return "\n\n".join(kept), dropped
 
 
-def _inject_neuron_mode(arguments: dict) -> None:
-    """Modalità operative dal blackboard: se il talamo ha scritto `cervello/mode`
-    e `cervello/focus`, li inietta nelle chiamate a Neuron (get_context/pre_turn).
-    L'agente può sempre sovrascriverli passandoli esplicitamente. Best-effort:
-    blackboard assente o rotto → la chiamata passa senza modalità (= semantic)."""
-    try:
-        from gray_matter.state import state_get
-        entry = state_get("cervello/mode")
-        if entry and "mode" not in arguments:
-            arguments["mode"] = entry["value"]
-        focus = state_get("cervello/focus")
-        if focus and "focus" not in arguments:
-            arguments["focus"] = focus["value"]
-    except Exception:  # noqa: BLE001
-        pass
-
-
 async def _bridge_blocks(topic: str, neurag_tags: set, limit: int) -> list[str]:
     """Cross-store bridges for this topic, one per block, strongest first.
 
@@ -367,30 +346,6 @@ _KB_HINT_SHOWN: set = set()     # sections already pointed at this session: once
                                 # knowledge_query the model already chose to make or not.
 
 
-# Un tool ricorda l'altro: `around`/`brainstorm` sono letture che nessun loop
-# chiama da solo, quindi il momento giusto glielo dice pre_turn. La parola
-# arriva dal modello stesso (topic/keywords), non dal testo dell'utente.
-# ponytail: lista di parole, non un classificatore — un embedding se i buchi si accumulano.
-_PROBLEM_WORDS = frozenset({
-    "bug", "debug", "fix", "error", "errore", "issue", "crash", "fail", "failure",
-    "fallisce", "fallito", "dilemma", "decision", "decisione", "problem", "problema",
-    "why", "perche", "perché", "regression", "regressione", "broken", "rotto"})
-
-
-def _brainstorm_hint(arguments: dict) -> str:
-    """One line on a pre_turn whose topic/keywords name a problem: point the
-    model at gray_matter_brainstorm. Empty otherwise — the common case."""
-    if not BRAINSTORM_HINT:
-        return ""
-    text = " ".join([str(arguments.get("topic", "")),
-                     *map(str, arguments.get("keywords") or [])]).lower()
-    words = set(re.findall(r"[a-zà-ù]+", text))
-    if not (words & _PROBLEM_WORDS):
-        return ""
-    return ("\n💡 Looks like a problem or a decision: gray_matter_brainstorm(seed) "
-            "before answering — the seed is the problem in one sentence.")
-
-
 async def _knowledge_hint(arguments: dict, shown: "set | None" = None) -> str:
     """The KB addendum for a pre_turn: one vector pointer (_kb_vector_pointer)
     plus the bridges already persisted for the topic. Empty when NeuRAG is off,
@@ -412,39 +367,6 @@ async def _knowledge_hint(arguments: dict, shown: "set | None" = None) -> str:
     blocks.extend(await _bridge_blocks(topic, set(), _KB_HINTS_PER_TURN))
     extra, _dropped = _fit(PROACTIVE_BUDGET, blocks)
     return ("\n\n" + extra) if extra else ""
-
-
-async def _tool_brainstorm(args: dict) -> list[TextContent]:
-    """Brain (GM, thalamus): what surrounds a problem, with its history.
-
-    Neuron `around` gives the mid-band nodes — related but not obvious — each
-    with its facts ("chose X because Y") and the reasons on its links: a past
-    decision, a bug already solved once. NeuRAG gives the nearest chunks: a
-    practice, a spec. Nothing is scored here: both sides carry their own
-    measure, and this tool no longer invents one. The previous version took
-    the TAIL of an ordinary search and labelled rank as distance — the 8th
-    nearest chunk of 6000 called "distance 1.0" (seen live 2026-09-14).
-    For dilemmas and decisions; a dormant node is marked so the caller can
-    confirm() it (or recall() it if archived)."""
-    seed = str(args.get("seed", "")).strip()
-    n = min(max(int(args.get("n", 5) or 5), 1), 10)
-    if not seed:
-        return [TextContent(type="text", text=(
-            "gray_matter_brainstorm: needs a non-empty 'seed' — the problem, the "
-            "dilemma or the decision. Returns the non-obvious neighbourhood in memory "
-            "(with its facts and reasons) and the nearest documents."))]
-    parts = [f"Leads around '{seed}'"]
-    try:
-        parts.append(await _call_server_async("neuron", "around", {"topic": seed, "n": n}))
-    except Exception as exc:  # noqa: BLE001 — no neuron: knowledge remains
-        parts.append(f"memory: unavailable ({exc})")
-    try:
-        parts.append(await _call_server_async("neurag", "knowledge_query",
-                                              {"query": seed, "top_n": min(n, 3)}))
-    except Exception as exc:  # noqa: BLE001 — no neurag: memory remains
-        parts.append(f"knowledge: unavailable ({exc})")
-    parts.append("Dormant → confirm(keywords) to raise it; archived → recall(keyword).")
-    return [TextContent(type="text", text="\n\n".join(parts))]
 
 
 _is_sleeping: bool = False
@@ -498,7 +420,7 @@ async def list_tools() -> list[Tool]:
     await _ensure_subservers()
     tools = []
 
-    # Gray Matter's own tools (pulse, status, bridge, blackboard, brainstorm) are
+    # Gray Matter's own tools (pulse, status, bridge) are
     # upkeep: callable by name, announced only with GM_TOOLS=all. The model sees
     # the I/O contract (work/design/CONTRATTO-IO-2026-11-14.md): pre_turn,
     # store_turn, switch_context, knowledge_query.
@@ -534,51 +456,6 @@ async def list_tools() -> list[Tool]:
                 "rationale": {"type": "string", "description": "Why they connect"},
             },
             "required": ["neuron_concept", "neurag_node"],
-        },
-    ))
-    own.append(Tool(
-        name="gray_matter_state_set",
-        description="Blackboard (GM, thalamus): publish key=value with an optional TTL in seconds. Keys are 'org/component/name'. Returns the entry with its version.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "key": {"type": "string", "description": "Key, e.g. 'cervello/mode'"},
-                "value": {"description": "Arbitrary JSON value"},
-                "ttl": {"type": "number", "description": "Expiry in seconds (default: never)"},
-            },
-            "required": ["key", "value"],
-        },
-    ))
-    own.append(Tool(
-        name="gray_matter_state_get",
-        description="Blackboard: read key. None if missing or expired — state decays on its own.",
-        inputSchema={
-            "type": "object",
-            "properties": {"key": {"type": "string"}},
-            "required": ["key"],
-        },
-    ))
-    own.append(Tool(
-        name="gray_matter_state_delta",
-        description="Blackboard: changes from version `since` onwards, filtered by key prefix (expired entries included).",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "prefix": {"type": "string", "description": "Key prefix (default '')"},
-                "since_version": {"type": "integer", "description": "Version to list changes from (default 0)"},
-            },
-        },
-    ))
-    own.append(Tool(
-        name="gray_matter_brainstorm",
-        description="Brain (GM, thalamus): what surrounds a problem, with its history. Mid-band memory nodes (related but not obvious) with their facts and link rationales — a past decision, a bug solved once — plus the nearest knowledge chunks. For dilemmas, problems and decisions. Requires 'seed'.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "seed": {"type": "string", "description": "The problem, dilemma or decision to think around"},
-                "n": {"type": "integer", "description": "Memory nodes to show (default 5, max 10); knowledge chunks capped at 3"},
-            },
-            "required": ["seed"],
         },
     ))
 
@@ -642,7 +519,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             # a question whose fact pre_turn put first).
             n_args = {"topic": topic, "max_tokens": MEMORY_MAX_TOKENS,
                       "exclude": sorted(_flashed)}
-            _inject_neuron_mode(n_args)
             tasks.append(_call_server_async("neuron", "pre_turn", n_args))
             labels.append("neuron")
 
@@ -744,26 +620,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text="Bridge saved." if created
                             else "Bridge reinforced (it already existed), or an endpoint was invalid.")]
 
-    if name == "gray_matter_state_set":
-        from gray_matter.state import state_set
-        entry = state_set(arguments["key"], arguments.get("value"),
-                          arguments.get("ttl"))
-        return [TextContent(type="text", text=json.dumps(entry))]
 
-    if name == "gray_matter_state_get":
-        from gray_matter.state import state_get
-        entry = state_get(arguments["key"])
-        return [TextContent(type="text", text=json.dumps(entry) if entry
-                            else "state: None (absent or expired)")]
-
-    if name == "gray_matter_state_delta":
-        from gray_matter.state import state_delta
-        delta = state_delta(arguments.get("prefix", ""),
-                            int(arguments.get("since_version", 0)))
-        return [TextContent(type="text", text=json.dumps(delta))]
-
-    if name == "gray_matter_brainstorm":
-        return await _tool_brainstorm(arguments)
 
     # A write to episodic memory can make a cached pulse stale: drop the entries
     # for the just-written topic so the next pulse rebuilds fresh (targeted, not a
@@ -780,9 +637,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if server is None:
         return [TextContent(type="text", text=f"Tool '{name}' not found in any registered server.")]
 
-    # Modalità dal blackboard: il talamo decide, Neuron esegue (parametro).
-    if server.name == "neuron" and name in ("get_context", "pre_turn"):
-        _inject_neuron_mode(arguments)
     # ADR-015 D7.1 for clients without the hook: a stdio gateway lives as long
     # as its client's session, so its first pre_turn carries the profile.
     global _PROFILE_SENT
@@ -797,7 +651,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # The KB travels on the call the model really makes (see _knowledge_hint).
     is_pre = server.name == "neuron" and name == "pre_turn"
     kb = (await _knowledge_hint(arguments) if is_pre else "")
-    bs = _brainstorm_hint(arguments) if is_pre else ""
     # The flash travels on the same call (ADR-014 phase 4): the model calls
     # pre_turn, not pulse, and a spontaneous recall cannot wait for a call
     # nobody makes. For clients with the hook, "recall" already gives it.
@@ -805,7 +658,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if is_pre and PROACTIVE_BUDGET > 0:
         flash, _c = await _maybe_flash(str(arguments.get("topic", "")))
         flash = f"\n\n{flash}" if flash else ""
-    return [TextContent(type="text", text=(result or "(empty)") + kb + bs + flash)]
+    return [TextContent(type="text", text=(result or "(empty)") + kb + flash)]
 
 
 # Persistent workers: one long-lived subprocess per server (imported once, model
@@ -822,7 +675,7 @@ _neurag_links_built: bool = False  # auto-build links once when links=0 and node
 _WARM_TOOL = {
     # ADR-016 D6: load the model AND the recall vectors at startup, not at the
     # first message (44 s on a cold cache, 2026-11-08). forgotten(facts) has no
-    # side effect; pre_turn would consume the staged stimulus.
+    # side effect.
     "neuron": ("forgotten", {"facts": True, "near": "warmup", "top_n": 1}),
     "neurag": ("knowledge_query", {"query": "warmup", "top_n": 1}),
 }
@@ -1390,7 +1243,7 @@ _HEADER = re.compile(r"^\[neuron\] (ctx=\S+).*$")
 _META_SEGMENT = re.compile(r"^(links:|nodes:|\(vector fallback\)$)")
 
 
-def _trim_for_hook(ctx: str, has_flash: bool) -> str:
+def _trim_for_hook(ctx: str) -> str:
     """What the HOOK injects of a pre_turn answer: the facts, not the tool's chrome.
 
     Measured on 91 real recalls (ledger, 2026-11-10): ~22% was text repeated on
@@ -1401,15 +1254,11 @@ def _trim_for_hook(ctx: str, has_flash: bool) -> str:
         names the context a `switch_context` would leave;
       - graph metadata segments (links:, nodes:), often cut mid-word by the budget;
       - "no relevant context" notes: nothing to act on.
-    And the 🧠 stimulus is the least used part (21%): with a ⚡ flash in the
-    same recall it goes, one serendipity per message is enough.
     The pre_turn TOOL answer is untouched: an MCP-only client still gets it all."""
     out = []
     for line in ctx.splitlines():
         s = line.strip()
         if s.startswith("→ ") or s.startswith("⚠ no relevant context"):
-            continue
-        if has_flash and s.startswith("🧠 "):
             continue
         m = _HEADER.match(s)
         if m:
@@ -1427,7 +1276,7 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
                        exclude: "list | None" = None) -> str:
     """ADR-014: what the UserPromptSubmit hook injects, composed in ONE IPC call.
 
-    Context, KB pointer, brainstorm hint, plus the flash. The KB search needs only
+    Context, KB pointer, plus the flash. The KB search needs only
     the message, so it starts FIRST and overlaps everything else (it is the slow
     piece, ~320 ms; NeuRAG and Neuron have separate locks). The hook process
     stays a courier: start, one request, print."""
@@ -1449,21 +1298,20 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     # if the dry-run log shows recall missing concepts the message names.
     args = {"topic": q, "profile": first,      # ADR-015 D7.1: user/habit once per session
             "exclude": sorted(flashed)}
-    _inject_neuron_mode(args)
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
         _maybe_flash(args["topic"], flashed),
         kb_task)
     from gray_matter.memhook import BUDGET, PROFILE_BUDGET
     _note_facts(ctx, flashed)
-    ctx = _trim_for_hook(ctx or "", bool(flash))
+    ctx = _trim_for_hook(ctx or "")
     # Episodes -> knowledge: bridges matching the message, or the facts just
     # shown (a promoted fact has its `#id <-> node` bridge). Nothing when none.
     links = ""
     if PROACTIVE_BUDGET > 0:
         shown_ids = " ".join(_FACT_ID.findall(ctx or ""))
         links = "".join(f"\n{b}" for b in await _bridge_blocks(f"{q} {shown_ids}", set(), 2))
-    extra = kb + links + _brainstorm_hint(args) + (f"\n\n{flash}" if flash else "")
+    extra = kb + links + (f"\n\n{flash}" if flash else "")
     # The hook cuts at memhook.BUDGET from the END: three long facts filled it
     # and the flash and the KB pointer, last, were cut away (live, 2026-11-08).
     # Room for them first, then the memory context gets what is left; the

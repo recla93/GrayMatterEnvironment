@@ -154,9 +154,9 @@ DOCS: "dict[tuple[str, str], tuple[str, str, str, str]]" = {
 
     # ── Gray Matter — regolazione e rete ─────────────────────────────────
     ("gray-matter", "config"): (
-        "Configurazione del gateway: cache (TTL, dimensione), stimoli (flash rate, rete di sicurezza, hint brainstorm), tetti di token per memoria e conoscenza, prewarm, tool sganciati.",
+        "Configurazione del gateway: cache (TTL, dimensione), stimoli (flash rate), tetti di token per memoria e conoscenza, prewarm, tool sganciati.",
         "Per regolare il comportamento senza toccare il codice. Parti da action=list per vedere cosa esiste.",
-        "Gateway configuration: cache (TTL, size), stimuli (flash rate, safety net, brainstorm hint), token caps for memory and knowledge, prewarm, unmanaged tools.",
+        "Gateway configuration: cache (TTL, size), stimuli (flash rate), token caps for memory and knowledge, prewarm, unmanaged tools.",
         "To tune behaviour without touching code. Start with action=list to see what exists.",
     ),
     ("gray-matter", "cloud"): (
