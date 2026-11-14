@@ -151,6 +151,26 @@ def test_full_suite_announces_both():
     assert "pre_turn" in text and "knowledge_query" in text
 
 
+@pytest.mark.parametrize("settings, wired", [
+    ('{"hooks": {"UserPromptSubmit": [{"command": "py gm_memhook.py recall"}]}}', True),
+    ('{"hooks": {}}', False),
+    (None, False),                                          # no settings.json at all
+])
+def test_with_the_recall_hook_the_model_is_not_asked_for_pre_turn(monkeypatch, tmp_path, settings, wired):
+    """2026-11-14: the hook injects each message's recall and the text still said
+    'call pre_turn BEFORE replying': 7-12 duplicate recalls per session."""
+    if settings is not None:
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".claude" / "settings.json").write_text(settings, encoding="utf-8")
+    m = _hook()
+    monkeypatch.setattr(m.Path, "home", classmethod(lambda cls: tmp_path))
+    assert m._recall_hook_wired() is wired
+    text = m.handshake("gray-matter", {"gray-matter", "neuron"})
+    assert ("already injected" in text) is wired
+    assert ("BEFORE replying" in text) is not wired
+    assert "store_turn" in text and "not what git" in text
+
+
 @pytest.mark.parametrize("installed", [
     {"gray-matter", "neuron", "neurag"},        # memory block
     {"gray-matter", "neurag"},                  # knowledge block
