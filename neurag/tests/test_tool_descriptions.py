@@ -41,7 +41,8 @@ def test_an_empty_vault_tells_the_model_not_to_bother(monkeypatch):
 
 def test_an_unreadable_vault_points_at_the_diagnostic(monkeypatch):
     note = _note(monkeypatch, {"corrupt": True, "chunks": 0, "nodes": 0})
-    assert "knowledge_status" in note
+    # knowledge_status is no longer announced (I/O contract): point at the GUI.
+    assert "not readable" in note and "control center" in note
 
 
 def test_a_broken_stat_costs_the_sentence_not_the_handshake(monkeypatch):

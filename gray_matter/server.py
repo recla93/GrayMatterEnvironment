@@ -464,7 +464,7 @@ GM_INSTRUCTIONS = (
     "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying (fold "
     "the returned context in silently), then store_turn(facts=[{kind, text, "
     "concepts}], English only) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits. "
-    "gray_matter_pulse(topic) merges memory + knowledge + flash in one call.\n"
+    "knowledge_query(query) searches the user's own documents.\n"
     "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
     "supersedes=<#id>; links typed, never a "
     "self-link; a near-duplicate fact is flagged when stored; never store "
@@ -498,8 +498,12 @@ async def list_tools() -> list[Tool]:
     await _ensure_subservers()
     tools = []
 
-    # Gray-Matter's own tools
-    tools.append(Tool(
+    # Gray Matter's own tools (pulse, status, bridge, blackboard, brainstorm) are
+    # upkeep: callable by name, announced only with GM_TOOLS=all. The model sees
+    # the I/O contract (work/design/CONTRATTO-IO-2026-11-14.md): pre_turn,
+    # store_turn, switch_context, knowledge_query.
+    own: list[Tool] = []
+    own.append(Tool(
         name="gray_matter_pulse",
         description="The richer explicit read: Neuron's facts for the topic (as pre_turn), NeuRAG's knowledge excerpts, saved bridges and a flash, in one call.",
         inputSchema={
@@ -514,12 +518,12 @@ async def list_tools() -> list[Tool]:
             "required": ["topic"],
         },
     ))
-    tools.append(Tool(
+    own.append(Tool(
         name="gray_matter_status",
         description="Show Gray-Matter status: registered servers, cache, counters.",
         inputSchema={"type": "object", "properties": {}},
     ))
-    tools.append(Tool(
+    own.append(Tool(
         name="gray_matter_bridge",
         description="Persist a cross-store bridge: a link between a Neuron concept and a NeuRAG knowledge node the orchestrator found to relate. Recalled in future pulses on either endpoint.",
         inputSchema={
@@ -532,43 +536,40 @@ async def list_tools() -> list[Tool]:
             "required": ["neuron_concept", "neurag_node"],
         },
     ))
-    # The blackboard (state_*) is GM's plumbing: callable by name, announced
-    # only with GM_TOOLS=all — ~1k chars of schema per session the loop never uses.
-    if os.environ.get("GM_TOOLS", "core").lower() == "all":
-        tools.append(Tool(
-            name="gray_matter_state_set",
-            description="Blackboard (GM, thalamus): publish key=value with an optional TTL in seconds. Keys are 'org/component/name'. Returns the entry with its version.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Key, e.g. 'cervello/mode'"},
-                    "value": {"description": "Arbitrary JSON value"},
-                    "ttl": {"type": "number", "description": "Expiry in seconds (default: never)"},
-                },
-                "required": ["key", "value"],
+    own.append(Tool(
+        name="gray_matter_state_set",
+        description="Blackboard (GM, thalamus): publish key=value with an optional TTL in seconds. Keys are 'org/component/name'. Returns the entry with its version.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Key, e.g. 'cervello/mode'"},
+                "value": {"description": "Arbitrary JSON value"},
+                "ttl": {"type": "number", "description": "Expiry in seconds (default: never)"},
             },
-        ))
-        tools.append(Tool(
-            name="gray_matter_state_get",
-            description="Blackboard: read key. None if missing or expired — state decays on its own.",
-            inputSchema={
-                "type": "object",
-                "properties": {"key": {"type": "string"}},
-                "required": ["key"],
+            "required": ["key", "value"],
+        },
+    ))
+    own.append(Tool(
+        name="gray_matter_state_get",
+        description="Blackboard: read key. None if missing or expired — state decays on its own.",
+        inputSchema={
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    ))
+    own.append(Tool(
+        name="gray_matter_state_delta",
+        description="Blackboard: changes from version `since` onwards, filtered by key prefix (expired entries included).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "prefix": {"type": "string", "description": "Key prefix (default '')"},
+                "since_version": {"type": "integer", "description": "Version to list changes from (default 0)"},
             },
-        ))
-        tools.append(Tool(
-            name="gray_matter_state_delta",
-            description="Blackboard: changes from version `since` onwards, filtered by key prefix (expired entries included).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "prefix": {"type": "string", "description": "Key prefix (default '')"},
-                    "since_version": {"type": "integer", "description": "Version to list changes from (default 0)"},
-                },
-            },
-        ))
-    tools.append(Tool(
+        },
+    ))
+    own.append(Tool(
         name="gray_matter_brainstorm",
         description="Brain (GM, thalamus): what surrounds a problem, with its history. Mid-band memory nodes (related but not obvious) with their facts and link rationales — a past decision, a bug solved once — plus the nearest knowledge chunks. For dilemmas, problems and decisions. Requires 'seed'.",
         inputSchema={
@@ -580,6 +581,9 @@ async def list_tools() -> list[Tool]:
             "required": ["seed"],
         },
     ))
+
+    if os.environ.get("GM_TOOLS", "core").lower() == "all":
+        tools.extend(own)
 
     # Tools from registered servers (F12: re-publish REAL schemas, fetched once
     # from each worker and cached; fall back to an empty schema if unavailable so

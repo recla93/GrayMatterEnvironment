@@ -21,7 +21,8 @@ DEFAULTS = {
     "flash_min_gap": 3,           # pulses between flashes (anti-spam)
     # stimulus_safety_net / _gap: gone with the safety net (ADR-016 D3). A
     # config.json that still names them loads fine: unknown keys are skipped.
-    "brainstorm_hint": True,      # pre_turn on a problem/bug/decision → "call gray_matter_brainstorm"
+    # Off since 2026-11-14: brainstorm is no longer announced (I/O contract).
+    "brainstorm_hint": False,     # pre_turn on a problem/bug/decision → "call gray_matter_brainstorm"
     "cache_ttl_seconds": 60,      # context cache TTL
     "cache_max_size": 100,        # context cache LRU cap
     "prewarm": True,              # pre-warm workers at start (D2)

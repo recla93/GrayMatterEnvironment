@@ -59,7 +59,11 @@ _ADMIN_TOOLS = frozenset({"knowledge_index", "knowledge_add_node", "knowledge_ad
                           "knowledge_health", "knowledge_link_graph", "knowledge_rebuild_links",
                           "knowledge_reindex", "knowledge_neighbors", "knowledge_related",
                           "knowledge_remove_node", "knowledge_rename_node", "knowledge_import",
-                          "knowledge_archive"})
+                          "knowledge_archive",
+                          # 2026-11-14, I/O contract: the model sees knowledge_query only;
+                          # ingest, status and skills are CLI/GUI work.
+                          "knowledge_confirm", "knowledge_ingest", "knowledge_ingest_status",
+                          "knowledge_skill", "knowledge_status", "knowledge_tree"})
 
 
 def _announced() -> list[Tool]:
@@ -108,8 +112,8 @@ def _vault_note() -> str:
         try:
             s = _get_db().status()
             if s.get("corrupt"):
-                _VAULT_STATS = " The vault is not readable right now — call " \
-                               "knowledge_status for the reason."
+                _VAULT_STATS = " The vault is not readable right now: do not search " \
+                               "it; the Gray Matter control center shows why."
             elif not s.get("chunks"):
                 _VAULT_STATS = " The vault is EMPTY: nothing to find until " \
                                "something is ingested, so do not search it yet."

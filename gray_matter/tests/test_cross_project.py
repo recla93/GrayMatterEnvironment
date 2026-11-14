@@ -642,8 +642,9 @@ class TestBrainstormHint:
     """pre_turn on a problem gets one line pointing at gray_matter_brainstorm;
     a neutral turn gets nothing; the knob switches it off."""
 
-    def test_fires_on_problem_words(self):
+    def test_fires_on_problem_words(self, monkeypatch):
         import gray_matter.server as srv
+        monkeypatch.setattr(srv, "BRAINSTORM_HINT", True)   # off by default since 2026-11-14
         assert "gray_matter_brainstorm" in srv._brainstorm_hint(
             {"topic": "bug nel daemon", "keywords": ["daemon"]})
         assert "gray_matter_brainstorm" in srv._brainstorm_hint(
