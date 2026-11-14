@@ -5,6 +5,8 @@
     python tools/gate.py --skip smoke     # a step left out is reported, never passed
 
 Steps, each in its own process:
+  deps          tools/deps.py --check: identical client twins, guidance only names the
+                I/O contract, removed names do not come back (seconds; runs first)
   suite:<tool>  pytest of neuron, gray_matter, neurag, one process each (never together)
   bench         neuron/bench --mode message, against the newest saved result of the
                 same set: recall and full not lower, noise and off-topic not higher
@@ -46,6 +48,12 @@ def step(name: str, fn) -> None:
 def run(cmd: list, timeout: int = 1800) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=REPO, env=CLEAN, capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=timeout)
+
+
+def deps():
+    p = run([sys.executable, "tools/deps.py", "--check"], timeout=120)
+    lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
+    return p.returncode == 0, ("; ".join(lines[:-1])[:400] or lines[-1]) if lines else p.stderr[-200:]
 
 
 def suite(tool: str):
@@ -111,10 +119,12 @@ def smoke(oc_turn: bool):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--oc-turn", action="store_true", help="add a real OpenCode turn to the smoke")
-    ap.add_argument("--skip", default="", help="comma-separated: suite, bench, smoke")
+    ap.add_argument("--skip", default="", help="comma-separated: deps, suite, bench, smoke")
     a = ap.parse_args(argv)
     skip = {s for s in a.skip.split(",") if s}
     sys.stdout.reconfigure(encoding="utf-8")
+    if "deps" not in skip:
+        step("deps", deps)
     if "suite" not in skip:
         for tool in ("neuron", "gray_matter", "neurag"):
             step(f"suite:{tool}", suite(tool))

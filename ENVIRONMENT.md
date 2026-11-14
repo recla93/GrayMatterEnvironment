@@ -63,7 +63,25 @@ The MCP server runs from the suite's venv, a copy made at install time. After a
 change, reinstall — the GUI "Ripara" button, or `install.ps1 -Force` — and
 restart the client: the workers keep the old code in memory until they restart.
 
-## 5. Where to commit, how to release
+## 5. Who depends on what you change
+
+Before renaming, removing or hiding a tool, an option, an env var or a shipped
+file, ask the repo who uses it:
+
+```
+python tools/deps.py <name> [<name> ...]
+```
+
+It reads the tree every time (nothing stored to go stale) and groups the hits
+by code, hooks, tests, scripts, docs and history. Strings, docs and copies are
+what the tests cannot see: on 2026-11-14 a removed tool was still described in
+three docs and one hook text existed in six copies. `python tools/deps.py
+--check` runs in the gate: twin files of `neurag/clients` and
+`neuron/src/neuron/clients` must be identical, guidance the model reads may
+only name the four tools of the I/O contract, and names removed on purpose
+(`work/design/PARCHEGGIO.md`, list `GONE` in the script) must not come back.
+
+## 6. Where to commit, how to release
 
 Commit here, never on the three mirrors: they receive only `mirror.yml`. The
 flow and the release tags are in the README, section "Development";
