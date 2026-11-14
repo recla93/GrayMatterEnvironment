@@ -34,8 +34,9 @@ strumenti di manutenzione di Neuron; `knowledge_ingest`, `knowledge_status`, `kn
 Tolti di conseguenza i testi che mandavano il modello verso tool non più visibili: "call `help`
 NOW" e "Full playbook: skill(...)" nel signpost di Neuron, "Once per session: help / skill /
 knowledge_skill" negli hook di sessione (Claude Code, Cowork, OpenCode), la riga 💡 brainstorm
-(`brainstorm_hint` ora spento di default), la riga "→ useful? confirm(...)" (`NEURON_CONFIRM_HINT`
-ora spento di default: le conferme esplicite erano l'1%).
+(brainstorm poi tolto del tutto, vedi [PARCHEGGIO](PARCHEGGIO.md)), la riga "→ useful? confirm(...)"
+(tolta: le conferme esplicite erano l'1%; l'uso di un fatto si conta in modo implicito, ADR-015 D8:
+mostrato da `pre_turn` e ripreso nel `store_turn` dopo, per concetto o per `#id`).
 
 ## 2. L'ingresso: il fatto
 

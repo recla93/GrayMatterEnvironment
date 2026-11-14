@@ -13,9 +13,9 @@ center use them.
 
 | Server | Announced by default | Announce everything |
 |---|---|---|
-| Neuron | 8 tools (the memory loop) | `NEURON_TOOLS=all` |
-| NeuRAG | 7 tools (ingest + search) | `NEURAG_TOOLS=all` |
-| Gray Matter | its 4 own tools + the announced tools of Neuron and NeuRAG, under their own names | `GM_TOOLS=all` adds the internal blackboard tools (`gray_matter_state_*`) |
+| Neuron | 3 tools: `pre_turn`, `store_turn`, `switch_context` | `NEURON_TOOLS=all` |
+| NeuRAG | 1 tool: `knowledge_query` | `NEURAG_TOOLS=all` |
+| Gray Matter | none of its own, plus the announced tools of Neuron and NeuRAG under their own names (I/O contract, 2026-11-14) | `GM_TOOLS=all` adds `gray_matter_pulse`, `_status`, `_bridge` |
 
 With the Gray Matter gateway (the default install) a client registers **only**
 `gray-matter`; Neuron and NeuRAG run behind it as workers and their tools are passed
@@ -36,17 +36,6 @@ knowledge excerpts, saved bridges and a flash, in one call.
 |---|---|---|---|---|
 | `topic` | string | yes | — | Topic to search for |
 | `top_n` | integer | no | 5 | Number of knowledge chunks (1-10) |
-
-### gray_matter_brainstorm
-
-What surrounds a problem, with its history: mid-band memory nodes (related but not
-obvious) with their facts and link rationales — a past decision, a bug solved once —
-plus the nearest knowledge chunks. For dilemmas, problems and decisions.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `seed` | string | yes | — | The problem, dilemma or decision, in one sentence |
-| `n` | integer | no | 5 | Memory nodes to show (max 10); knowledge chunks are capped at 3 |
 
 ### gray_matter_bridge
 
@@ -89,11 +78,10 @@ older one, nothing is evicted.
 | `profile` | boolean | no | false | Also return the active `user` and `habit` facts. Once per session; Gray Matter sets it for you |
 | `exclude` | string[] | no | — | Fact ids already shown this session, so they do not come back. Gray Matter sets it for you |
 | `fact_nodes` | integer | no | 3 | How many top-ranked nodes contribute facts (minimum 1) |
-| `mode` | `semantic` \| `focus` | no | `semantic` | `focus` boosts the active task |
-| `focus` | string | no | `""` | Active task for focus mode (injected by Gray Matter) |
 
-Each fact comes back with its id (`#0a1b2c3d`): pass it to `confirm` when it helped,
-or to `store_turn` as `supersedes` when you replace it.
+Each fact comes back with its id (`#0a1b2c3d`): pass it to `store_turn` as `supersedes`
+when you replace it. A shown fact that the next `store_turn` writes about (a shared
+concept) or cites by `#id` counts as used: no `confirm` call needed.
 
 ### store_turn
 
@@ -167,7 +155,6 @@ to the active one).
 | `get_context` | `topic`*, `keywords`, `depth` (1-3, 1), `max_tokens` (400), `format` (`full` \| `compact`), `profile` | Nodes and links around a topic. `pre_turn` covers it in the loop |
 | `find_candidates` | `keywords`*, `top_n` (8) | Existing similar keywords (vector search) |
 | `vector_search` | `keywords`*, `top_n` (8) | Semantic search over the concept embeddings |
-| `around` | `topic`*, `n` (8, max 20) | Mid-band nodes (similarity 0.30-0.75) with their facts and link reasons; raw material for `gray_matter_brainstorm` |
 | `forgotten` | `threshold` (5), `top_n` (10), `near`, `facts`, `exclude` | Concepts not touched for N turns; with `near` ranked by similarity; with `facts=true` dormant facts (what a flash shows) |
 | `dismiss` | `keywords`*, `penalty` (3), `trust_penalty` (0.5) | The recalled context was misleading: lower salience and trust |
 | `recall` | `keyword`*, `base_salience` (3) | Bring an archived (graveyard) concept back |

@@ -184,13 +184,14 @@ gray-matter uninstall --purge-data # wipes everything, no questions
 <details>
 <summary><strong>Gray Matter's own tools</strong></summary>
 
+Since 2026-11-14 these are not announced to the model (I/O contract: it sees `pre_turn`, `store_turn`,
+`switch_context`, `knowledge_query`); they stay callable by name, and `GM_TOOLS=all` announces them.
+
 | Tool | Description |
 |---|---|
 | `gray_matter_pulse(topic, top_n?)` | Combined memory + knowledge + bridges + flash in one call |
-| `gray_matter_brainstorm(seed, n?)` | What surrounds a problem, with its history: mid-band memory nodes (related but not obvious) with their facts and link rationales, plus the nearest knowledge chunks. For dilemmas, bugs and decisions |
 | `gray_matter_status()` | Server summary: version, flash counter, registered servers |
 | `gray_matter_bridge(neuron_concept, neurag_node, rationale?)` | Save a bridge; the NeuRAG end must be an existing node, by its exact name |
-| `gray_matter_state_set` / `gray_matter_state_get` / `gray_matter_state_delta` | Blackboard (internal): publish `key=value` with an optional TTL · read a key · changes since a version. Announced only with `GM_TOOLS=all` |
 
 </details>
 
@@ -199,10 +200,10 @@ gray-matter uninstall --purge-data # wipes everything, no questions
 
 Republished with their original names and schemas (`mcp__gray-matter__pre_turn`, …):
 
-`pre_turn`, `store_turn`, `confirm`, `status`, `switch_context`, `list_contexts`,
-`help`, `skill` — plus Neuron's admin tools (`get_context`, `find_candidates`,
-`forgotten`, `recall`, `dismiss`, `around`, `vector_search`, `merge`, `consolidate`,
-`prune`, `export`, `reset`, …) reachable by name.
+`pre_turn`, `store_turn`, `switch_context` announced; `confirm`, `status`,
+`list_contexts`, `help`, `skill` and Neuron's admin tools (`get_context`,
+`find_candidates`, `forgotten`, `recall`, `dismiss`, `vector_search`, `merge`,
+`consolidate`, `prune`, `export`, `reset`, …) reachable by name.
 
 </details>
 
@@ -218,17 +219,6 @@ Admin, reachable by name: `knowledge_archive`, `knowledge_neighbors`,
 `knowledge_add_node`, `knowledge_add_chunks`.
 
 Every parameter: [../docs/TOOLS.md](../docs/TOOLS.md).
-
-</details>
-
-<details>
-<summary><strong>A tool that reminds you of another tool</strong></summary>
-
-`around`/`brainstorm` are reads that no loop calls on its own. So the gateway
-tells the model when: a `pre_turn` whose topic or keywords name a bug, error,
-dilemma or decision gets one extra line — *call `gray_matter_brainstorm(seed)`
-before answering*. Knob `brainstorm_hint` (default on) switches it off; the
-session-start hook carries the same rule statically.
 
 </details>
 
@@ -361,7 +351,6 @@ and **environment variables** (set before starting the daemon).
 | Knob | Default | What it controls |
 |---|---|---|
 | `flash_min_gap` | `3` | Minimum pulses between serendipitous flashbacks (anti-spam) |
-| `brainstorm_hint` | `True` | On a `pre_turn` that names a bug, error, dilemma or decision, append *call `gray_matter_brainstorm`* |
 | `cache_ttl_seconds` | `60` | TTL for the context cache — raise if topics repeat quickly |
 | `cache_max_size` | `100` | LRU cap on cached pulse results |
 | `prewarm` | `True` | Pre-warm worker models at startup (set `False` to save memory) |
@@ -380,7 +369,7 @@ gray-matter config get flash_min_gap
 |---|---|---|
 | `GM_PREWARM` | `"1"` | Set `"0"` to disable worker pre-warming |
 | `GM_HOME` | `%LOCALAPPDATA%\GrayMatterEnvironment\graymatter` (Win) / `~/.local/share/GrayMatterEnvironment/graymatter` | Gray Matter's data folder |
-| `GM_TOOLS` | `core` | `all` also announces the blackboard tools (`gray_matter_state_*`) |
+| `GM_TOOLS` | `core` | `all` also announces Gray Matter's own tools (`gray_matter_pulse`, `_status`, `_bridge`) |
 | `GRAY_MATTER_BRIDGES` | `<GM_HOME>/bridges.db` | Override bridges store path |
 
 ### Hardcoded constants (edit in source)

@@ -42,3 +42,19 @@ def test_an_unannounced_tool_routes_by_name_prefix(gm):
 def test_an_announced_tool_still_routes_by_the_index(gm):
     _call(gm, "knowledge_query")
     assert gm._routed[-1] == ("neurag", "knowledge_query")
+
+
+def test_gray_matters_own_tools_are_announced_only_on_request(monkeypatch):
+    """I/O contract (2026-11-14): the model sees the loop, not GM's upkeep. A tool
+    added with tools.append instead of own.append would widen it silently."""
+    import gray_matter.server as S
+
+    async def _no_subservers():
+        return None
+    monkeypatch.setattr(S, "_ensure_subservers", _no_subservers)
+    monkeypatch.setattr(S._registry, "alive_servers", lambda: [])
+    monkeypatch.delenv("GM_TOOLS", raising=False)
+    assert [t.name for t in asyncio.run(S.list_tools())] == []
+    monkeypatch.setenv("GM_TOOLS", "all")
+    assert {t.name for t in asyncio.run(S.list_tools())} == {
+        "gray_matter_pulse", "gray_matter_status", "gray_matter_bridge"}

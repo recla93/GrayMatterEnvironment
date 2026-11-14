@@ -32,17 +32,6 @@ Save a bridge: a link between a Neuron concept and a NeuRAG node (its exact, exi
 |---|---|---|---|---|
 | `neuron_concept` | string | yes | — | Neuron concept/keyword |
 | `neurag_node` | string | yes | — | NeuRAG node, exact name |
-
-## gray_matter_brainstorm
-
-What surrounds a problem, with its history: mid-band memory nodes with their facts and link rationales, plus the nearest knowledge chunks.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `seed` | string | yes | — | The problem, dilemma or decision, in one sentence |
-| `n` | integer | no | 5 | Memory nodes (max 10); knowledge chunks capped at 3 |
-
-The blackboard tools `gray_matter_state_set` / `_get` / `_delta` are internal and announced only with `GM_TOOLS=all`.
 | `rationale` | string | no | `""` | Why they connect |
 
 ---
