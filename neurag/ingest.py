@@ -219,15 +219,18 @@ def auto_ingest(kg, root, godnode: "str | None" = None, say=None,
         nid = node_for.get(f.parent)
         if nid is None:
             continue
+        before = getattr(kg, "unchanged_files", 0)
         try:
             n = kg.index_into_node(f, nid)
         except Exception as exc:  # noqa: BLE001 — un file rotto non ferma il resto
             report["skipped"].append(f"{f.relative_to(root)}: {exc}")
             say(f"[!] saltato {f.relative_to(root)}: {exc}")
             continue
+        same = getattr(kg, "unchanged_files", 0) > before
         report["files"] += 1
         report["chunks"] += n
-        say(f"  {f.relative_to(root)} -> {n} chunk")
+        report["unchanged"] = report.get("unchanged", 0) + same
+        say(f"  {f.relative_to(root)} -> {n} chunk" + (" (invariato)" if same else ""))
 
     report["parked"] = kg.park_vanished(root)
     if report["parked"]:
@@ -236,8 +239,8 @@ def auto_ingest(kg, root, godnode: "str | None" = None, say=None,
     say("[link] ricostruzione dei collegamenti…")
     report["links"] = kg.rebuild_links()
     say(f"[ok] nodi +{report['nodes']}, file {report['files']}, "
-        f"chunk {report['chunks']}, ritirati {report['parked']}, "
-        f"saltati {len(report['skipped'])}")
+        f"chunk {report['chunks']}, invariati {report.get('unchanged', 0)}, "
+        f"ritirati {report['parked']}, saltati {len(report['skipped'])}")
     return report
 
 

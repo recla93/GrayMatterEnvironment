@@ -174,19 +174,85 @@ def enforce_budget(chunks: list[Chunk], max_chars: int,
     return out
 
 
+_FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.S)
+
+
+def _unquote(v: str) -> str:
+    return v.strip().strip("'\"").strip()
+
+
+def split_frontmatter(text: str) -> "tuple[dict, str]":
+    """YAML frontmatter -> (flat dict, body without it).
+
+    The stdlib subset Obsidian notes use: `key: value`, `key: [a, b]` and `- item`
+    block lists. Anything else is skipped, never raised: a note with odd YAML still
+    gets chunked, just without its metadata. PyYAML is only an optional extra here.
+    """
+    m = _FRONTMATTER.match(text)
+    if not m:
+        return {}, text
+    meta: dict = {}
+    key = None
+    for line in m.group(1).splitlines():
+        item = re.match(r"^\s*-\s+(.+)$", line)
+        if item and key is not None:
+            if not isinstance(meta[key], list):
+                meta[key] = []
+            meta[key].append(_unquote(item.group(1)))
+            continue
+        kv = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
+        if not kv:
+            continue
+        key, val = kv.group(1).lower(), kv.group(2).strip()
+        if val.startswith("[") and val.endswith("]"):
+            meta[key] = [_unquote(v) for v in val[1:-1].split(",") if _unquote(v)]
+        else:
+            meta[key] = _unquote(val)
+    return meta, text[m.end():]
+
+
+def _frontmatter_tags(meta: dict) -> list[str]:
+    """`tags:` as written by a human: the best triggers a note has (a list or `a, b`)."""
+    raw = meta.get("tags") or []
+    if isinstance(raw, str):
+        raw = re.split(r"[,\s]+", raw)
+    tags = [t.strip().lstrip("#").lower() for t in raw]
+    return [t for t in dict.fromkeys(tags) if len(t) >= 2 and t not in _STOP][:8]
+
+
 def chunk_markdown(filepath: Path) -> list[Chunk]:
     """One chunk per heading section, `section` carrying the full breadcrumb.
 
     The breadcrumb is not cosmetic: `db.add_chunk` embeds `section + text`, so a
     chunk under `Install > Windows > venv` encodes where it lives. Without it a
     paragraph saying "run the script" is unfindable by "windows install".
+
+    YAML frontmatter is metadata, not text: it used to be embedded raw into the
+    first chunk (`---\\ntags: [...]`). Now its `tags` join every chunk's tags,
+    its `title` names the part before the first heading instead of "intro", and
+    title + aliases + tags become one clean "card" chunk. The card is measured,
+    not decorative: dropping the block outright lost the note's best anchor
+    (work/design mini-bench 2026-11-15, BM25 only: recall@5 0.692 -> 0.615;
+    with the card and real embeddings: 0.923 -> 1.0).
     """
-    lines = filepath.read_text(encoding="utf-8-sig").split("\n")
+    meta, body = split_frontmatter(filepath.read_text(encoding="utf-8-sig"))
+    fm_tags = _frontmatter_tags(meta)
+    title = meta.get("title") if isinstance(meta.get("title"), str) else ""
+    lines = body.split("\n")
     chunks: list[Chunk] = []
     stack: list[tuple[int, str]] = []      # (level, title) — the heading path
-    current_section = "intro"
+    current_section = title or "intro"
     current_lines: list[str] = []
     chunk_index = 0
+    aliases = meta.get("aliases")
+    aliases = [aliases] if isinstance(aliases, str) else aliases or []
+    card = "\n".join(filter(None, [title, ", ".join(a for a in aliases if a),
+                                   "tags: " + ", ".join(fm_tags) if fm_tags else ""]))
+    if len(card) > MIN_CHUNK_CHARS:
+        # section "" so the embedding input is the card alone, not the title twice.
+        chunks.append(Chunk(text=card, source=str(filepath), section="",
+                            chunk_index=0, tags=fm_tags))
+        chunk_index = 1
 
     def flush():
         nonlocal chunk_index
@@ -194,7 +260,7 @@ def chunk_markdown(filepath: Path) -> list[Chunk]:
         if len(text) > MIN_CHUNK_CHARS:
             chunks.append(Chunk(text=text, source=str(filepath),
                                 section=current_section, chunk_index=chunk_index,
-                                tags=_phrase_tags(current_section)))
+                                tags=list(dict.fromkeys(fm_tags + _phrase_tags(current_section)))))
             chunk_index += 1
 
     for line in lines:

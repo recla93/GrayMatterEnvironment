@@ -68,6 +68,8 @@ Stati: **base** (resta, giustificata) · **sperimentale** (da misurare) · **spe
 | Peso per data, archivio (ADR-017 D1) | base | rumore italiano 27% → 10% | suite | 8/11 |
 | Reranker cross-encoder | spenta | recall invariato, MRR concetti peggio, 17× più lento | bench 31/07 | 31/07 |
 | Ingest: cartelle → nodi, tag dai titoli | da rifare | nodi = 57 cartelle, tag rumorosi ("con", "how", "dai") | — | 10/11 |
+| Frontmatter YAML: via dal testo, `tags` ai nodi, `title` come sezione, scheda pulita | sperimentale | work/design (13 domande, embedding): recall@5 0,923 → 1,0, MRR 0,795 → 0,833; bench in pari (0,933); solo BM25 senza scheda 0,692 → 0,615; ? effetto dei tag sui link | `test_frontmatter` | 15/11 |
+| Ingest: salta i file invariati (hash di file + modello + soglia + chunker) | base | re-ingest del corpus del bench 136 s → 0,3 s (un file cambiato: 0,6 s); bench in pari | `test_ingest_hash` | 15/11 |
 
 ## Mancano per tutti
 

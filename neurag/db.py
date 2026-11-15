@@ -560,6 +560,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_path   ON nodes(path);
 CREATE INDEX IF NOT EXISTS idx_chunks_node  ON chunks(node_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);
 
 CREATE TABLE IF NOT EXISTS node_links (
     source_id   INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -638,6 +639,9 @@ ADDED_COLUMNS = (
     # ADR-013 4a. '' = unknown; a LOCAL vault's existing nodes are then
     # stamped with its user by _ensure_columns (a default cannot be a name).
     ("nodes", "space", "TEXT DEFAULT ''"),
+    # What produced a source's chunks (file + model + ceiling + chunker), so an
+    # unchanged file is not re-chunked and re-embedded. NULL = unknown = re-ingest.
+    ("chunks", "src_hash", "TEXT"),
     # ADR-017 D1: the date of the DOCUMENT (YYYY-MM-DD), not of the ingest.
     # NULL on old rows = undated: neither favoured nor penalised.
     ("chunks", "doc_date", "TEXT"),
@@ -1498,6 +1502,13 @@ class KnowledgeGraph:
         old chunks under the old node and the vault held both versions (seen
         live 2026-09-14: docs/DATA.md twice, the stale one still answering)."""
         source = str(filepath)
+        src_hash = self._source_hash(Path(filepath))
+        have = self._conn.execute(
+            "SELECT COUNT(*), MIN(src_hash = ? AND node_id = ?) FROM chunks WHERE source = ?",
+            (src_hash, node_id, source)).fetchone()
+        if have[0] and have[1]:
+            self.unchanged_files = getattr(self, "unchanged_files", 0) + 1
+            return have[0]
         # chunk_tags has no FK cascade (pyturso 0.6.1, see delete_node), so the
         # join rows go first or a re-ingest leaves them pointing at dead ids.
         # Remoto: replace-per-file atomico (delete vecchi + insert nuovi).
@@ -1528,10 +1539,23 @@ class KnowledgeGraph:
         self.add_triggers(node_id, symbols)
         self.add_tags(node_id, symbols)   # tags drive build_tag_links; triggers drive lookup
         if count:
-            self._conn.execute("UPDATE chunks SET doc_date = ? WHERE source = ?",
-                               (doc_date(Path(filepath)), source))
+            self._conn.execute("UPDATE chunks SET doc_date = ?, src_hash = ? WHERE source = ?",
+                               (doc_date(Path(filepath)), src_hash, source))
             self._conn.commit()
         return count
+
+    def _source_hash(self, path: Path) -> str:
+        """Everything that decides a file's chunks and vectors: its bytes, the
+        embedding model, the chunk ceiling, and the chunker's own code (a chunker
+        change re-chunks the vault by itself, as a re-ingest always did).
+        shortcut: `_embed_input` lives here, not in the chunker, so changing it
+        does not invalidate; run `neurag reindex` after such a change."""
+        import hashlib
+        from neurag import chunker
+        h = hashlib.sha256(path.read_bytes())
+        h.update(repr((self.active_embed_signature(), self._max_chunk_chars)).encode())
+        h.update(Path(chunker.__file__).read_bytes())
+        return h.hexdigest()
 
     def index_directory_into_node(self, root: Path, node_id: int) -> int:
         total = 0
