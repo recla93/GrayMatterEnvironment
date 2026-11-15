@@ -642,6 +642,8 @@ ADDED_COLUMNS = (
     # What produced a source's chunks (file + model + ceiling + chunker), so an
     # unchanged file is not re-chunked and re-embedded. NULL = unknown = re-ingest.
     ("chunks", "src_hash", "TEXT"),
+    # Phase 2 categorisation: 'storia' for work history, else frontmatter `type`.
+    ("chunks", "doc_type", "TEXT DEFAULT ''"),
     # ADR-017 D1: the date of the DOCUMENT (YYYY-MM-DD), not of the ingest.
     # NULL on old rows = undated: neither favoured nor penalised.
     ("chunks", "doc_date", "TEXT"),
@@ -651,6 +653,33 @@ ADDED_COLUMNS = (
 # works on every score scale (cosine, bm25, rrf); at most +5%, halving yearly.
 RECENCY_BOOST = 0.05
 _DATE_IN_TEXT = re.compile(r"(20\d\d-[01]\d-[0-3]\d)")
+
+
+# Work history (CHANGELOG, HANDOFF, work/history) is episodic: what happened, not
+# how things are. It stays searchable but loses a near tie to the reference that
+# explains the same thing (bench 2026-11-15: HANDOFF.md above the answer in 3 of
+# 11 misses; 20% of the real KB's chunks are history).
+HISTORY_WEIGHT = 0.85
+_HISTORY_NAME = re.compile(r"changelog|handoff|stato-lavori|^todo-|history|diffrelease", re.I)
+_HISTORY_DIRS = {"history", "storia", "archive", "archivio"}
+_HISTORY_TYPES = {"storia", "history", "handoff", "changelog", "log", "diario"}
+
+
+def doc_type(path: Path) -> str:
+    """'storia' for work history (by name, by its own folder, or by frontmatter
+    `type`); otherwise the frontmatter `type` as written; else ''."""
+    from neurag.chunker import split_frontmatter
+    meta: dict = {}
+    if path.suffix.lower() == ".md":
+        try:
+            meta, _ = split_frontmatter(path.read_text(encoding="utf-8-sig", errors="replace")[:4000])
+        except OSError:
+            pass
+    t = str(meta.get("type") or "").strip().lower()
+    if (t in _HISTORY_TYPES or _HISTORY_NAME.search(path.name)
+            or path.parent.name.lower() in _HISTORY_DIRS):
+        return "storia"
+    return t
 
 
 def doc_date(path: Path) -> str:
@@ -1237,6 +1266,14 @@ class KnowledgeGraph:
                         if src and Path(src).is_file():
                             self._conn.execute("UPDATE chunks SET doc_date = ? WHERE source = ?",
                                                (doc_date(Path(src)), src))
+                if (table, column) == ("chunks", "doc_type"):
+                    # Same as doc_date: typed at once from the path; a source gone
+                    # from disk is still named, so its name can still type it.
+                    for (src,) in self._conn.execute(
+                            "SELECT DISTINCT source FROM chunks WHERE source IS NOT NULL").fetchall():
+                        if src:
+                            self._conn.execute("UPDATE chunks SET doc_type = ? WHERE source = ?",
+                                               (doc_type(Path(src)), src))
         self._conn.commit()
 
     def node_tag_names(self, node_id: int) -> list[str]:
@@ -1539,8 +1576,8 @@ class KnowledgeGraph:
         self.add_triggers(node_id, symbols)
         self.add_tags(node_id, symbols)   # tags drive build_tag_links; triggers drive lookup
         if count:
-            self._conn.execute("UPDATE chunks SET doc_date = ?, src_hash = ? WHERE source = ?",
-                               (doc_date(Path(filepath)), src_hash, source))
+            self._conn.execute("UPDATE chunks SET doc_date = ?, src_hash = ?, doc_type = ? WHERE source = ?",
+                               (doc_date(Path(filepath)), src_hash, doc_type(Path(filepath)), source))
             self._conn.commit()
         return count
 
@@ -2571,8 +2608,13 @@ class KnowledgeGraph:
             self._retrieve(query, max(top_n * 4, 20), node_id=node_id, deep=deep))
         # ADR-017 D1: a July document weighed what today's does; now the newer
         # one wins a near tie (stable sort: undated rows keep their order).
+        # A literal mention is evidence even in history: an identifier that only a
+        # CHANGELOG names (bench q5) must not lose to prose that lacks it.
+        q = query.strip().lower()
         results.sort(key=lambda r: -(r.get("score") or 0.0)
-                     * (1 + RECENCY_BOOST * recency(r.get("doc_date"))))
+                     * (1 + RECENCY_BOOST * recency(r.get("doc_date")))
+                     * (HISTORY_WEIGHT if r.get("doc_type") == "storia"
+                        and q not in (r.get("text") or "").lower() else 1.0))
         if diversify and len(results) > top_n:
             results = self._mmr(query, results, top_n)
         final = [_without_vector(r) for r in results[:top_n]]
@@ -2669,7 +2711,7 @@ class KnowledgeGraph:
             where += f" AND node_id IN ({','.join('?' * len(scope))})"
         if getattr(self, "_vector_sql", False) and self._vector_sql_ok:
             try:
-                sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, doc_date, "
+                sql = ("SELECT id, node_id, text, source, section, chunk_index, embedding, doc_date, doc_type, "
                        "1.0 - vector_distance_cos(embedding, ?) AS score "
                        f"FROM chunks WHERE {where} ORDER BY score DESC LIMIT ?")
                 rows = self._conn.execute(
