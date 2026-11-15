@@ -1,5 +1,34 @@
 # Changelog — NeuRAG
 
+## 1.9.0 (2026-11-15)
+- **`knowledge_query` mostra il chunk intero**, non i primi 200 caratteri: su 14
+  domande di dettaglio sulla KB vera la risposta è visibile 8 volte invece di 6,
+  per il 52% di caratteri in più. Restituire la sezione intera è stato misurato e
+  scartato: nessuna risposta in più, 3-4 volte i caratteri.
+- **L'archivio entra quando è la risposta migliore.** Se un chunk di un nodo
+  archiviato sta 1° o 2° su tutto il vault, viene aggiunto in coda, marcato
+  `[archive]`; i risultati attivi non cambiano. Sulle stesse 14 domande la
+  risposta visibile passa da 8 a 10, su 10 domande fuori tema nessuna riga in
+  più; costa una seconda ricerca (~0,3 s). `archive=true` resta per mettere
+  la storia in classifica con il resto.
+- **Frontmatter YAML letto.** Esce dal testo dei chunk; `tags` va ai nodi,
+  `title` diventa la sezione, `title`/`aliases`/`tags` formano una scheda
+  pulita del documento. Su `work/design` (13 domande) recall@5 0,923 → 1,0,
+  MRR 0,795 → 0,833; bench in pari.
+- **Il re-ingest salta i file invariati**: hash di file, modello, soglia dei
+  chunk e chunker. Il corpus del bench passa da 136 s a 0,3 s (un file
+  cambiato: 0,6 s). Un cambio del chunker reindicizza tutto, apposta.
+- **La storia di lavoro pesa meno.** CHANGELOG, HANDOFF, cartelle `history` e
+  frontmatter `type: storia|log|…` sono di tipo "storia" e valgono 0,85 in un
+  quasi pareggio, salvo che citino la domanda alla lettera (un identificatore
+  che solo un CHANGELOG nomina resta primo). Bench: MRR 0,793 → 0,812, recall
+  invariato.
+- **Contratto di I/O**: il modello vede solo `knowledge_query` fra i tool di
+  NeuRAG; gli altri restano chiamabili per nome (`NEURAG_TOOLS=all` li
+  annuncia). Hook e plugin OpenCode allineati a Neuron 6.11.0.
+- Noto: il bench a 30 domande misura recall@5 0,933 contro lo 0,967 salvato
+  (P5). Lo scarto c'era già prima di questa versione e non è ancora spiegato.
+
 ## 1.8.1 (2026-11-10)
 - **NeuRAG trova la suite dalla venv** in cui è installato
   (`<suite>/graymatter/.venv`), come Gray Matter 1.8.1: niente variabili

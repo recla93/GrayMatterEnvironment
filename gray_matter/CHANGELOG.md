@@ -1,5 +1,29 @@
 # Changelog — Gray Matter
 
+## 1.9.0 (2026-11-15)
+Con Neuron 6.11.0 e NeuRAG 1.9.0.
+- **Il ciclo della memoria su OpenCode, Kimi Code e Codex**: richiamo prima
+  della risposta e controllo di salvataggio a fine turno. Il daemon sa se una
+  sessione ha salvato un fatto dal suo ultimo messaggio (azione IPC `saved`),
+  per i client senza trascrizione leggibile.
+- **Il richiamo dell'hook porta i fatti, non il contorno**: via le righe "→",
+  le statistiche, i metadati dei link e le note "no relevant context". Sui 10
+  richiami veri catturati: 0 fatti persi, −7% di caratteri.
+- **Niente richiamo doppio, niente salvataggi di ciò che git registra.** Dove
+  l'hook inietta già il richiamo, le istruzioni non chiedono più `pre_turn`; il
+  promemoria di salvataggio esclude commit, test e contenuto dei file.
+- **Contratto di I/O**: il modello vede 4 tool (`pre_turn`, `store_turn`,
+  `switch_context`, `knowledge_query`), schemi −51%; `GM_TOOLS=all` annuncia
+  anche quelli di GM.
+- **Tolti** (in `work/design/PARCHEGGIO.md`, con la condizione per tornare):
+  `gray_matter_brainstorm` e il suo hint (1 chiamata vera in 53 sessioni), il
+  blackboard `state_*` (0 chiavi) e l'iniezione della modalità.
+- **Istanza isolata**: con `GM_INSTANCE` il daemon ha una pipe IPC sua, così
+  una copia di prova non prende il token del daemon vero.
+- **Misura**: `bench/ledger.py` (costo e uso della memoria dalle sessioni vere)
+  e `bench/ab.py` (stesso agente con e senza suite; primo pilota: −43% di
+  chiamate di esplorazione, −26 s per compito, correttezza e token in pari).
+
 ## 1.8.1 (2026-11-10)
 - **La suite si trova dalla sua venv.** Chi parte da `<suite>/graymatter/.venv`
   (server MCP, hook, GUI) usa i dati accanto alla venv, senza variabili
