@@ -67,7 +67,9 @@ def test_an_archived_node_leaves_the_default_search_and_comes_back_on_request(kg
     call = lambda args: asyncio.run(srv.call_tool("knowledge_query", args))[0].text  # noqa: E731
     out = call({"query": "how to cut a release", "archive": True})
     assert "[2024-01-01] [archive]" in out and "[2026-11-01]" in out, out
-    assert "2024-01-01" not in call({"query": "how to cut a release"})
+    # 2nd over the whole vault: appended after the active results, marked.
+    plain = call({"query": "how to cut a release"})
+    assert plain.index("[2026-11-01]") < plain.index("[2024-01-01] [archive]"), plain
     g.archive(ids["old"], restore=True)
     assert len({r["node_id"] for r in g.search("release", top_n=5, touch=False)}) == 2
 
@@ -82,3 +84,19 @@ def test_an_old_vault_is_dated_from_its_sources_without_a_reingest(tmp_path):
     g._conn.commit()
     g._ensure_columns()
     assert {r[0] for r in g._conn.execute("SELECT doc_date FROM chunks")} == {"2026-10-01"}
+
+
+def test_an_unrelated_archived_document_is_not_appended(tmp_path, monkeypatch):
+    pytest.importorskip("mcp")
+    import neurag.server as srv
+    g = KnowledgeGraph(db_path=tmp_path / "k.db")
+    root = g.add_node(name="Root", node_type="godnode")
+    for name, text in (("live", "# Release\nhow to cut a release of the suite, step by step\n"),
+                       ("past", "# Carbonara\nguanciale, eggs and pecorino, no cream ever\n")):
+        f = tmp_path / f"{name}.md"
+        f.write_text(text, encoding="utf-8")
+        g.index_into_node(f, g.add_node(name=name, node_type="fundamental", parent_id=root))
+    g.archive(g.get_node_by_name("past")["id"])
+    monkeypatch.setattr(srv, "_get_db", lambda: g)
+    out = asyncio.run(srv.call_tool("knowledge_query", {"query": "how to cut a release"}))[0].text
+    assert "[archive]" not in out and "Release" in out, out

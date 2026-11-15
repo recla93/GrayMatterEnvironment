@@ -119,7 +119,7 @@ newer document wins.
 Old material you want to keep but not see every time can be declared history:
 
 ```bash
-neurag archive "old-notes"            # out of normal search, never deleted
+neurag archive "old-notes"            # out of normal search (unless it is the best match), never deleted
 neurag archive "old-notes" --restore  # back again
 ```
 

@@ -188,7 +188,7 @@ Search the user's own indexed material.
 |---|---|---|---|---|
 | `query` | string | yes | — | Topic or question, **in the documents' language** (another language finds much less) |
 | `top_n` | integer | no | 5 | Results (1-10); 2-3 is usually enough, each costs ~100 tokens |
-| `archive` | boolean | no | false | Also search nodes declared history (see `knowledge_archive`) |
+| `archive` | boolean | no | false | Rank nodes declared history with the rest (see `knowledge_archive`); without it, a history chunk ranking 1st-2nd over the whole vault is still appended, marked `[archive]` |
 
 Every result shows its node, source and date; archived results are marked `[archive]`.
 

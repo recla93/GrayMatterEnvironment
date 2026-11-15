@@ -245,7 +245,7 @@ def _tools() -> list[Tool]:
                         "default": 5, "minimum": 1, "maximum": 10,
                     },
                     "archive": {"type": "boolean", "default": False,
-                                "description": "Also search what was declared history (how it was, not how it is)"},
+                                "description": "Rank history (how it was, not how it is) with the rest; without it, history ranking 1st-2nd overall is appended, marked [archive]"},
                 },
                 "required": ["query"],
             },
@@ -637,11 +637,20 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
                 body = []
                 for c in node_chunks[:top_n]:
                     body.append(f"  [{c['chunk_index']}] {c['source']} :: {c['section'] or ''}")
-                    body.append(f"       {c['text'][:200]}...")
+                    body.append(c["text"].strip())
                 lines.append(_as_data("\n".join(body)))
             return [TextContent(type="text", text="\n".join(lines))]
         # Fallback: semantic (embedder on) or lexical TF-IDF ranking
         top = db.search(query, top_n, deep=archive)
+        parked = lambda c: ((db.get_node(c["node_id"]) or {}).get("layer") or 2) > db.LAYER_ACTIVE  # noqa: E731
+        if not archive:
+            # An archived chunk that ranks 1st-2nd over the whole vault is appended,
+            # marked: 2 of 3 such rows were the answer on 14 detail questions over
+            # the real KB (in view 8 -> 10), 0 of 10 off-topic queries got one; no
+            # score of the active results tells when to look (2026-11-15).
+            seen = {c["id"] for c in top}
+            top += [c for c in db.search(query, 2, deep=True, touch=False)
+                    if c["id"] not in seen and parked(c)]
         if not top:
             return [TextContent(type="text", text="No results found.")]
         body = []
@@ -650,10 +659,13 @@ async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
             rel = f"  (cos {c['cos']:.2f})" if c.get("cos") is not None else ""
             # ADR-017 D1: how old the knowledge is, and whether it is history.
             when = f" [{c['doc_date']}]" if c.get("doc_date") else ""
-            if archive and ((db.get_node(c["node_id"]) or {}).get("layer") or 2) > db.LAYER_ACTIVE:
+            if parked(c):
                 when += " [archive]"
             body.append(f"  [{i+1}] {c['source']} :: {c['section'] or ''}{when}{rel}")
-            body.append(f"       {c['text'][:200]}...")
+            # Whole chunk (<= ~410 chars), not 200: on 14 detail questions over the
+            # real KB the answer was in view 8 times instead of 6 for +52% chars.
+            # Widening to the whole section added none (2026-11-15, registry).
+            body.append(c["text"].strip())
             body.append("")
         return [TextContent(type="text", text="\n".join(
             [f"Query: {query}", f"Top {len(top)} results:", _as_data("\n".join(body))]))]
