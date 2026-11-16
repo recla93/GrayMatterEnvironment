@@ -5,6 +5,12 @@
   (PS 5.1 turns it into a fatal error) closed `install.ps1` after NeuRAG's
   wheel, with no message in the log. Every pip call goes through `Invoke-Pip`;
   proven with a real install on 2026-11-16.
+- **The Stop hook reports which recalled facts the turn used.** A fact is used
+  when the reply (text and tool inputs, memory tools excluded) reuses two of
+  its distinctive words that neither the user's message nor the session before
+  the recall already held. On the real sessions it reports 17% of the facts
+  shown, against the 21% the ledger measures offline; the ledger now imports
+  the same rule. Claude Code only: the other hosts have no readable transcript.
 - **The gateway tells Neuron which client is writing** (`by` on `store_turn`):
   every fact records its author.
 

@@ -80,8 +80,9 @@ older one, nothing is evicted.
 | `fact_nodes` | integer | no | 3 | How many top-ranked nodes contribute facts (minimum 1) |
 
 Each fact comes back with its id (`#0a1b2c3d`): pass it to `store_turn` as `supersedes`
-when you replace it. A shown fact that the next `store_turn` writes about (a shared
-concept) or cites by `#id` counts as used: no `confirm` call needed.
+when you replace it. A fact counts as used when a later fact cites it by `#id`, or
+when the reply reused its distinctive words: Gray Matter's Stop hook reads the turn
+and reports it, no `confirm` call needed. Sharing a concept is not use.
 
 ### store_turn
 

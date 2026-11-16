@@ -165,6 +165,77 @@ def last_turn(entries: list) -> tuple[str, bool, int, int]:
     return prompt, wrote, work, chars
 
 
+# --- use: did the answer use what the recall showed? (ADR-015 D8) ------------
+#
+# Until 2026-11-16 a shown fact counted as used when the next store_turn shared a
+# CONCEPT with it: 50 of the 81 confirmed live facts had only that, topic overlap.
+# The reply is the evidence, and only this hook reads it. The same rule the
+# ledger applies offline (gray_matter/bench/ledger.py imports it from here).
+
+WORD = re.compile(r"[\w./\-]+", re.U)
+DATE = re.compile(r"\d{1,2}/\d{1,2}(/\d{2,4})?")
+# One recalled fact: "[kind] text (concept) #id". Not the profile's user/habit:
+# always shown, so being used proves nothing about the recall.
+RECALLED = re.compile(r"\[(?:idea|decision|fix|fact|progress)\]\s+(.+?)\s+#([0-9a-f]{8})\b")
+
+
+def distinctive(text: str) -> set:
+    """Words a model would not write by chance: long ones, or ones with a digit,
+    a dot, a slash or an underscore (paths, versions, ids, identifiers)."""
+    out = set()
+    for w in WORD.findall(text.lower()):
+        w = w.strip(".-/\\")
+        if DATE.fullmatch(w):            # every fact starts with one: it proves nothing
+            continue
+        if len(w) >= 8 or (len(w) >= 3 and re.search(r"[\d._/\\]", w)):
+            out.add(w)
+    return out
+
+
+def silently_used(fact_words: set, said: str, prompt: str = "") -> bool:
+    """The answer reuses the fact: two of its distinctive words, or all of them
+    when it has fewer than two. A word the user's own message already holds does
+    not count: the model had it without the memory. shortcut: lexical, it misses
+    a paraphrase; upgrade to embeddings if the A/B shows it undercounts."""
+    words = {w for w in fact_words if w not in prompt}
+    if not words:
+        return False
+    hit = sum(1 for w in words if w in said)
+    return hit >= min(2, len(words))
+
+
+def used_facts(entries: list) -> list:
+    """Ids of the facts recalled for the last user message that its turn used:
+    what the model wrote and passed to its tools, memory tools excluded (a
+    store_turn restating a fact is the self-confirmation this replaces).
+
+    A word the session already held BEFORE the recall proves nothing: the
+    model had it without the memory (project vocabulary, the files it is
+    working on). On the real sessions of 2026-11-16 the rule without this
+    reported 38% of the shown facts, against the ledger's 21%."""
+    prompt, shown, said, before = "", {}, [], []
+    for e in entries:
+        if _is_user_turn(e):
+            c = (e.get("message") or {}).get("content")
+            before += [prompt, *said]
+            prompt = c if isinstance(c, str) else " ".join(
+                b.get("text", "") for b in _blocks(e) if b.get("type") == "text")
+            shown, said = {}, []
+        elif e.get("type") == "attachment":
+            a = e.get("attachment") if isinstance(e.get("attachment"), dict) else {}
+            if a.get("type") == "hook_additional_context":
+                for text, fid in RECALLED.findall(" ".join(str(c) for c in a.get("content") or [])):
+                    shown.setdefault(fid, distinctive(text))
+        elif e.get("type") == "assistant":
+            for b in _blocks(e):
+                if b.get("type") == "text":
+                    said.append(str(b.get("text") or ""))
+                elif b.get("type") == "tool_use" and not _is_memory_tool(str(b.get("name", ""))):
+                    said.append(json.dumps(b.get("input"), ensure_ascii=False))
+    low, known = " ".join(said).lower(), " ".join([prompt, *before]).lower()
+    return sorted(fid for fid, words in shown.items() if silently_used(words, low, known))
+
+
 def save(payload: dict) -> str:
     """The reason to send the model back to work once, or "" to let it stop.
     Only for a real message (not an ack or a command) whose turn did work or
@@ -172,7 +243,11 @@ def save(payload: dict) -> str:
     Stop already follows our own block, and a second one would loop."""
     if payload.get("stop_hook_active"):
         return ""
-    prompt, wrote, work, chars = last_turn(_entries(str(payload.get("transcript_path") or "")))
+    entries = _entries(str(payload.get("transcript_path") or ""))
+    used = used_facts(entries)
+    if used:      # best-effort like the recall: no daemon, no signal
+        _ipc({"action": "call", "server": "neuron", "tool": "confirm", "args": {"facts": used}})
+    prompt, wrote, work, chars = last_turn(entries)
     if not prompt:
         # No Claude Code transcript (Kimi, Codex): the daemon saw every store_turn.
         # Codex hands the answer over; Kimi nothing, so its turn counts as substantive.

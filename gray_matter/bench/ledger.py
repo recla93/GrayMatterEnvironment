@@ -40,8 +40,6 @@ FACT_ID = re.compile(r"#([0-9a-f]{8})\b")
 MEMORY_MARKERS = ("[neuron]", "[NEURON]", "[NEURAG]", "<recalled-memory", "Gray-Matter", "📚 KB")
 # One line of memory shown to the model: "[kind] text (concepts) #id".
 FACT_LINE = re.compile(r"\[(?:idea|decision|fix|fact|progress|user|habit|detail)\]\s+(.+?)\s+#([0-9a-f]{8})\b")
-WORD = re.compile(r"[\w./\-]+", re.U)
-DATE = re.compile(r"\d{1,2}/\d{1,2}(/\d{2,4})?")
 SILENT_WINDOW = 1          # turns after the one that showed the fact
 EXPLORE = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "Agent", "Task", "LS", "Bash", "PowerShell"}
 
@@ -60,29 +58,13 @@ def _text(content) -> str:
     return str(content or "")
 
 
-def distinctive(text: str) -> set:
-    """Words a model would not write by chance: long ones, or ones with a digit,
-    a dot, a slash or an underscore (paths, versions, ids, identifiers)."""
-    out = set()
-    for w in WORD.findall(text.lower()):
-        w = w.strip(".-/\\")
-        if DATE.fullmatch(w):            # every fact starts with one: it proves nothing
-            continue
-        if len(w) >= 8 or (len(w) >= 3 and re.search(r"[\d._/\\]", w)):
-            out.add(w)
-    return out
-
-
-def silently_used(fact_words: set, said: str, prompt: str = "") -> bool:
-    """The answer reuses the fact: two of its distinctive words, or all of them
-    when it has fewer than two. A word the user's own message already holds does
-    not count: the model had it without the memory. shortcut: lexical, it misses
-    a paraphrase; upgrade to embeddings if the A/B shows it undercounts."""
-    words = {w for w in fact_words if w not in prompt}
-    if not words:
-        return False
-    hit = sum(1 for w in words if w in said)
-    return hit >= min(2, len(words))
+# The use rule lives in the hook that applies it live; loaded by path, as this
+# file is (a script, not a package module).
+import importlib.util as _ilu  # noqa: E402
+_spec = _ilu.spec_from_file_location("gm_memhook", Path(__file__).resolve().parents[1] / "memhook.py")
+_memhook = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_memhook)
+distinctive, silently_used = _memhook.distinctive, _memhook.silently_used
 
 
 def _is_user_turn(e: dict) -> bool:

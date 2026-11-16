@@ -215,3 +215,31 @@ def test_the_hook_keeps_the_facts_and_drops_the_chrome():
     for kept in ("#a5f74d04", "#f69a1bf9", "cache: neurag(↑)", "<recalled-memory", "</recalled-memory>"):
         assert kept in out, kept
     assert len(out) < len(LIVE_RECALL) * 0.8
+
+
+# --- use (ADR-015 D8, 2026-11-16): the reply is the evidence ----------------
+
+def _recalled(text):
+    return {"type": "attachment", "attachment": {"type": "hook_additional_context", "content": [text]}}
+
+
+def test_the_stop_hook_reports_the_recalled_facts_the_turn_used(tmp_path, monkeypatch):
+    """A fact is used when the turn reuses two of its distinctive words that the
+    user's message did not hold. Not the profile, not a memory tool restating
+    it, not a fact shown for an earlier message."""
+    sent = []
+    monkeypatch.setattr(mh, "_ipc", lambda msg: sent.append(msg) or "")
+    old = _recalled("facts: [fix] the deploy_hooks.py copy runs under claude_pzs8 (installer) #cccccccc")
+    recall = _recalled("profile: [habit] always run tools/gate.py before a push_release #dddddddd | "
+                       "facts: [fix] the installer writes deploy_hooks.py under claude_pzs8 (installer) #aaaaaaaa"
+                       " | [idea] unrelated something_else_entirely and another_thing (x) #bbbbbbbb")
+    restate = _tool("mcp__gray-matter__store_turn", facts=[{"text": "something_else_entirely another_thing"}])
+    _stop(tmp_path, USER, old, _assistant({"type": "text", "text": "nothing"}),
+          USER, recall, _assistant(_tool("Read", file_path="deploy_hooks.py")), RESULT,
+          _assistant({"type": "text", "text": "claude_pzs8 is the MSIX id; tools/gate.py push_release"}),
+          _assistant(restate))
+    assert sent == [{"action": "call", "server": "neuron", "tool": "confirm", "args": {"facts": ["aaaaaaaa"]}}]
+    sent.clear()
+    _stop(tmp_path, USER, recall, _assistant({"type": "text", "text": "deploy_hooks.py claude_pzs8"}),
+          stop_hook_active=True)
+    assert sent == [], "the Stop after our own reminder must not count the turn twice"
