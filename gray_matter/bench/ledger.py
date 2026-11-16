@@ -186,6 +186,7 @@ def analyze(path: Path, common: frozenset = frozenset()) -> dict:
             "mem_overhead_iet": round(overhead),
             "mem_share": round(overhead / iet_total, 4) if iet_total else 0.0,
             "mem_calls": mem_calls, "explore_calls": explore_calls, "other_calls": other_calls,
+            "arm": _memhook.arm(path.stem),      # ADR-021: the experiment's half, from the session id
             "facts_shown": len(shown), "facts_used": len(used), "facts_silent": len(silent),
             "use_rate": round(len(used) / len(shown), 3) if shown else None,
             "any_use_rate": round((len(used) + len(silent)) / len(shown), 3) if shown else None}
@@ -208,7 +209,13 @@ def totals(rows: list) -> dict:
             "explore_calls_per_turn": round(s("explore_calls") / turns, 2),
             "facts_shown": shown, "facts_used": used, "facts_silent": silent,
             "use_rate": round(used / shown, 3) if shown else None,
-            "any_use_rate": round((used + silent) / shown, 3) if shown else None}
+            "any_use_rate": round((used + silent) / shown, 3) if shown else None,
+            # ADR-021: the same rate per half. Equal halves while the bonus is off.
+            "any_use_rate_by_arm": {
+                str(a): (round(sum(r["facts_used"] + r["facts_silent"] for r in rows if r.get("arm") == a)
+                               / n, 3), n)
+                for a in (False, True)
+                if (n := sum(r["facts_shown"] for r in rows if r.get("arm") == a))}}
 
 
 COMMON_SHARE = 0.2        # a word in the answers of more than 1 session in 5 proves nothing

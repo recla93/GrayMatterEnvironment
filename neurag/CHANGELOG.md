@@ -1,6 +1,7 @@
 # Changelog — NeuRAG
 
-## Unreleased
+## 1.9.1 (2026-11-16)
+With Gray Matter 1.10.0 and Neuron 6.12.0.
 - **The bench gap is explained (0.933 against P5's 0.967).** It is all in q20, a
   concept question: rank 5 in P5, right on the cutoff, rank 9 today. Its `db.py`
   chunk comes only from BM25 (the vector side does not rank it), and two chunks

@@ -1302,8 +1302,10 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     # 2026-11-06: extracted topic -> wasapi/endpoint-audio, message -> release/
     # installer/daemon. ponytail: no keywords at all; graph-filtered ones only
     # if the dry-run log shows recall missing concepts the message names.
+    from gray_matter.memhook import arm
     args = {"topic": q, "profile": first,      # ADR-015 D7.1: user/habit once per session
-            "exclude": sorted(flashed)}
+            "exclude": sorted(flashed),
+            "arm": arm(session)}               # ADR-021: inert while NEURON_FACT_USE_BONUS is 0
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
         _maybe_flash(args["topic"], flashed),

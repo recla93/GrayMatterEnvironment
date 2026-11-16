@@ -1,6 +1,7 @@
 # Changelog — Gray Matter
 
-## Unreleased
+## 1.10.0 (2026-11-16)
+With Neuron 6.12.0 and NeuRAG 1.9.1.
 - **A redirected install no longer dies in silence.** A pip warning on stderr
   (PS 5.1 turns it into a fatal error) closed `install.ps1` after NeuRAG's
   wheel, with no message in the log. Every pip call goes through `Invoke-Pip`;
@@ -15,6 +16,10 @@
   A fact shown in its short form never counted as used (0 of 14 on the real
   sessions): the hook now asks Neuron for the text it stands for. With the used
   facts it sends the shown ones, for each fact's own use rate.
+- **Half of the sessions are marked for experiments** (`memhook.arm`, from the
+  session id): the hook passes it to Neuron's recall and the ledger reports
+  the use rate of each half. Inert until an experiment is switched on in
+  Neuron; today the halves read 20.9% and 20.8%.
 - **The gateway tells Neuron which client is writing** (`by` on `store_turn`):
   every fact records its author.
 

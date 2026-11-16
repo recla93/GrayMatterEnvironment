@@ -204,6 +204,14 @@ def silently_used(fact_words: set, said: str, prompt: str = "") -> bool:
     return hit >= min(2, len(words))
 
 
+def arm(session: str) -> bool:
+    """ADR-021: which half of the sessions an experiment applies to. From the
+    session id alone, so the daemon that ranks and the ledger that reads the
+    transcripts afterwards agree without storing anything."""
+    import hashlib
+    return int(hashlib.sha1(str(session).encode("utf-8")).hexdigest(), 16) % 2 == 1
+
+
 GIST = re.compile(r"\+ \([^()]*\)$")     # "<gist> + (concept)": a fact shown in its short form
 
 
