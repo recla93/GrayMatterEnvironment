@@ -75,3 +75,26 @@ def test_garbage_dim_does_not_crash_the_embedder(vault, monkeypatch):
 def teardown_module():
     """Leave the module in its real-environment state for the other tests."""
     importlib.reload(embedder)
+
+
+def test_the_model_is_loaded_once_per_process(vault, monkeypatch):
+    """Every KnowledgeGraph built its own embedder: 1.7 s of tokenizer and ONNX
+    session each time (the suite took 7 minutes for it; an ingest job loaded a
+    second model beside the server's). One per process, and a replaced class is
+    never served the old instance."""
+    e = _reload()
+    built = []
+
+    class Fake:
+        name = "fastembed"
+
+        def __init__(self):
+            built.append(self)
+    monkeypatch.setenv("NEURAG_EMBEDDER", "fastembed")
+    monkeypatch.setattr(e, "FastEmbedEmbedder", Fake)
+    assert e.get_embedder() is e.get_embedder() and len(built) == 1
+
+    class Other(Fake):
+        pass
+    monkeypatch.setattr(e, "FastEmbedEmbedder", Other)
+    assert isinstance(e.get_embedder(), Other) and len(built) == 2

@@ -11,6 +11,10 @@
   Measured with lexical-only runs (`NEURAG_EMBEDDER=null`, ~6 s each). P5 is
   also recorded on set v3, now v5. Code unchanged, q20's ground truth frozen; a
   new reference needs a full embedding run, deferred.
+- **The embedding model is loaded once per process.** Every `KnowledgeGraph`
+  built its own: 1.7 s of tokenizer and ONNX session each time, and an ingest
+  job loaded a second model beside the server's. The suite, where every test
+  opens a vault, goes from 7 minutes to 67 seconds with the same 443 tests.
 - **Compiled `.pyc` files no longer ship in the wheel.** A local
   `clients/__pycache__` matched the package data, and the setuptools warning it
   raised on stderr killed a redirected `install.ps1`.

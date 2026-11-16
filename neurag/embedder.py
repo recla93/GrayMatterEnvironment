@@ -178,6 +178,9 @@ def lexical_only_requested() -> bool:
             or _resolve_model().strip().lower() in ("none", "null"))
 
 
+_LOADED: dict = {}
+
+
 def get_embedder():
     """Return the embedder per NEURAG_EMBEDDER. auto = fastembed if present else null."""
     choice = os.environ.get("NEURAG_EMBEDDER", "auto").lower()
@@ -185,7 +188,14 @@ def get_embedder():
         return NullEmbedder()
     if choice in ("auto", "fastembed"):
         try:
-            return FastEmbedEmbedder()
+            # One loaded model per process: every KnowledgeGraph built a new one,
+            # 1.7 s each (tokenizer + ONNX session) — 51 of the 64 s of one test
+            # file, and the same wait for every vault a process opens. Keyed by
+            # the class too, so a replaced embedder (tests) is never served stale.
+            key = (FastEmbedEmbedder, _MODEL)
+            if key not in _LOADED:
+                _LOADED[key] = FastEmbedEmbedder()
+            return _LOADED[key]
         except Exception:
             if choice == "fastembed":
                 raise  # explicit request must not silently downgrade

@@ -689,7 +689,7 @@ def default_server_python() -> str:
     """Il python che DEVE lanciare il server: il venv installato se esiste
     (standalone NeuRAG o venv condiviso GM), altrimenti l'interprete corrente
     (che sta già eseguendo NeuRAG, quindi lo sa importare). Candidati in ordine:
-    NEURAG_HOME, layout suite attuale (GrayMatterEnvironment\<slug>), poi i due
+    NEURAG_HOME, layout suite attuale (GrayMatterEnvironment/<slug>), poi i due
     storici — specchio di ciò che gli installer creano davvero."""
     home = os.environ.get("NEURAG_HOME")
     bases = []
