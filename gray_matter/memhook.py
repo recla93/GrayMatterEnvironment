@@ -204,10 +204,19 @@ def silently_used(fact_words: set, said: str, prompt: str = "") -> bool:
     return hit >= min(2, len(words))
 
 
-def used_facts(entries: list) -> list:
-    """Ids of the facts recalled for the last user message that its turn used:
+GIST = re.compile(r"\+ \([^()]*\)$")     # "<gist> + (concept)": a fact shown in its short form
+
+
+def used_facts(entries: list, full=None) -> tuple:
+    """(shown, used): the ids of the facts recalled for the last user message,
+    and of those its turn used:
     what the model wrote and passed to its tools, memory tools excluded (a
     store_turn restating a fact is the self-confirmation this replaces).
+
+    `full(ids)`: the text of facts shown as a gist, as "[kind] text #id" lines.
+    A gist holds too few distinctive words to ever match: of 14 gists shown in
+    the real sessions none counted as used, against 18% of the full texts. The
+    model may answer from the gist alone; the full text is what it stands for.
 
     A word the session already held BEFORE the recall proves nothing: the
     model had it without the memory (project vocabulary, the files it is
@@ -225,15 +234,19 @@ def used_facts(entries: list) -> list:
             a = e.get("attachment") if isinstance(e.get("attachment"), dict) else {}
             if a.get("type") == "hook_additional_context":
                 for text, fid in RECALLED.findall(" ".join(str(c) for c in a.get("content") or [])):
-                    shown.setdefault(fid, distinctive(text))
+                    shown.setdefault(fid, text)
         elif e.get("type") == "assistant":
             for b in _blocks(e):
                 if b.get("type") == "text":
                     said.append(str(b.get("text") or ""))
                 elif b.get("type") == "tool_use" and not _is_memory_tool(str(b.get("name", ""))):
                     said.append(json.dumps(b.get("input"), ensure_ascii=False))
+    gists = sorted(fid for fid, text in shown.items() if GIST.search(text))
+    if gists and full:
+        shown.update({fid: text for text, fid in RECALLED.findall(full(gists) or "") if fid in shown})
     low, known = " ".join(said).lower(), " ".join([prompt, *before]).lower()
-    return sorted(fid for fid, words in shown.items() if silently_used(words, low, known))
+    return sorted(shown), sorted(
+        fid for fid, text in shown.items() if silently_used(distinctive(text), low, known))
 
 
 def save(payload: dict) -> str:
@@ -244,9 +257,12 @@ def save(payload: dict) -> str:
     if payload.get("stop_hook_active"):
         return ""
     entries = _entries(str(payload.get("transcript_path") or ""))
-    used = used_facts(entries)
-    if used:      # best-effort like the recall: no daemon, no signal
-        _ipc({"action": "call", "server": "neuron", "tool": "confirm", "args": {"facts": used}})
+    shown, used = used_facts(entries, lambda ids: _ipc({
+        "action": "call", "server": "neuron", "tool": "pre_turn",
+        "args": {"topic": " ".join("#" + i for i in ids)}}))
+    if shown:     # best-effort like the recall: no daemon, no signal
+        _ipc({"action": "call", "server": "neuron", "tool": "confirm",
+              "args": {"facts": used, "shown": shown}})
     prompt, wrote, work, chars = last_turn(entries)
     if not prompt:
         # No Claude Code transcript (Kimi, Codex): the daemon saw every store_turn.

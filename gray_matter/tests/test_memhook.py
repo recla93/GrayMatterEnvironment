@@ -238,8 +238,26 @@ def test_the_stop_hook_reports_the_recalled_facts_the_turn_used(tmp_path, monkey
           USER, recall, _assistant(_tool("Read", file_path="deploy_hooks.py")), RESULT,
           _assistant({"type": "text", "text": "claude_pzs8 is the MSIX id; tools/gate.py push_release"}),
           _assistant(restate))
-    assert sent == [{"action": "call", "server": "neuron", "tool": "confirm", "args": {"facts": ["aaaaaaaa"]}}]
+    assert sent == [{"action": "call", "server": "neuron", "tool": "confirm",
+                     "args": {"facts": ["aaaaaaaa"], "shown": ["aaaaaaaa", "bbbbbbbb"]}}]
     sent.clear()
     _stop(tmp_path, USER, recall, _assistant({"type": "text", "text": "deploy_hooks.py claude_pzs8"}),
           stop_hook_active=True)
     assert sent == [], "the Stop after our own reminder must not count the turn twice"
+
+
+def test_a_fact_shown_as_a_gist_is_judged_on_its_full_text(tmp_path, monkeypatch):
+    """A gist holds too few distinctive words to match (0 of 14 on the real
+    sessions): the hook asks Neuron for the text it stands for."""
+    sent = []
+
+    def ipc(msg):
+        sent.append(msg)
+        return ("[fix] the installer writes deploy_hooks.py under claude_pzs8 #aaaaaaaa"
+                if msg["tool"] == "pre_turn" else "")
+    monkeypatch.setattr(mh, "_ipc", ipc)
+    gist = _recalled("facts: [fix] fix: hook copy path + (installer) #aaaaaaaa")
+    _stop(tmp_path, USER, gist, _assistant({"type": "text", "text": "deploy_hooks.py sits under claude_pzs8"}))
+    assert [m["tool"] for m in sent] == ["pre_turn", "confirm"]
+    assert sent[0]["args"] == {"topic": "#aaaaaaaa"}
+    assert sent[1]["args"] == {"facts": ["aaaaaaaa"], "shown": ["aaaaaaaa"]}

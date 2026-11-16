@@ -11,6 +11,10 @@
   the recall already held. On the real sessions it reports 17% of the facts
   shown, against the 21% the ledger measures offline; the ledger now imports
   the same rule. Claude Code only: the other hosts have no readable transcript.
+- **The Stop hook judges a gist on its full text, and reports what was shown.**
+  A fact shown in its short form never counted as used (0 of 14 on the real
+  sessions): the hook now asks Neuron for the text it stands for. With the used
+  facts it sends the shown ones, for each fact's own use rate.
 - **The gateway tells Neuron which client is writing** (`by` on `store_turn`):
   every fact records its author.
 
