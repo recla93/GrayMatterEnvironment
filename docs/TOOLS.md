@@ -105,6 +105,13 @@ concept) or cites by `#id` counts as used: no `confirm` call needed.
 | `supersedes` | no | Id of the older fact this one replaces |
 
 A fact nearly identical to an existing one is saved and flagged, not merged.
+
+**Notes.** To comment or dispute a fact without replacing it, cite its `#id` in the
+text of a new fact. Both stay active, and recall shows the note next to the fact it
+is about (`#0a1b2c3d ↳#4e5f6a7b`); `pre_turn(topic="#4e5f6a7b")` opens it.
+
+**Author.** Each fact records the client that wrote it (`claude-code`, `opencode`, …)
+in its `source`; Gray Matter passes it, no parameter to fill in.
 Never store secrets or tokens.
 
 **`links[]`:** `{source, target, link_type, weight, rationale}` with `link_type` one of

@@ -645,6 +645,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                      "profile": not (_PROFILE_SENT or _client_has_memhook())}
         _PROFILE_SENT = True
 
+    if server.name == "neuron" and name == "store_turn":
+        try:      # who writes the fact: Neuron sees only this gateway as its client
+            arguments = {**arguments, "by": app.request_context.session.client_params.clientInfo.name or ""}
+        except Exception:  # noqa: BLE001 — no request context: Neuron falls back to "model"
+            pass
+
     result = await _call_server_async(server.name, name, arguments)
     if server.name == "neuron" and name == "pre_turn":
         _note_facts(result, _flashed)

@@ -1,5 +1,20 @@
 # Changelog — NeuRAG
 
+## Unreleased
+- **The bench gap is explained (0.933 against P5's 0.967).** It is all in q20, a
+  concept question: rank 5 in P5, right on the cutoff, rank 9 today. Its `db.py`
+  chunk comes only from BM25 (the vector side does not rank it), and two chunks
+  that do not answer it overtook it on words: the second-process docstring of
+  `tests/test_neurag_lock.py` (af4120c, 13.1 → 17.2) and the README edits
+  (14.7 → 16.9). Corpus drift, not code: today's code on the P5 corpus ranks
+  `db.py` 2nd lexically, as P5 did; P5's code on today's corpus ranks it 4th.
+  Measured with lexical-only runs (`NEURAG_EMBEDDER=null`, ~6 s each). P5 is
+  also recorded on set v3, now v5. Code unchanged, q20's ground truth frozen; a
+  new reference needs a full embedding run, deferred.
+- **Compiled `.pyc` files no longer ship in the wheel.** A local
+  `clients/__pycache__` matched the package data, and the setuptools warning it
+  raised on stderr killed a redirected `install.ps1`.
+
 ## 1.9.0 (2026-11-15)
 - **`knowledge_query` mostra il chunk intero**, non i primi 200 caratteri: su 14
   domande di dettaglio sulla KB vera la risposta è visibile 8 volte invece di 6,

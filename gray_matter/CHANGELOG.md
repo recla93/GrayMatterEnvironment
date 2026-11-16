@@ -1,5 +1,13 @@
 # Changelog — Gray Matter
 
+## Unreleased
+- **A redirected install no longer dies in silence.** A pip warning on stderr
+  (PS 5.1 turns it into a fatal error) closed `install.ps1` after NeuRAG's
+  wheel, with no message in the log. Every pip call goes through `Invoke-Pip`;
+  proven with a real install on 2026-11-16.
+- **The gateway tells Neuron which client is writing** (`by` on `store_turn`):
+  every fact records its author.
+
 ## 1.9.0 (2026-11-15)
 Con Neuron 6.11.0 e NeuRAG 1.9.0.
 - **Il ciclo della memoria su OpenCode, Kimi Code e Codex**: richiamo prima
