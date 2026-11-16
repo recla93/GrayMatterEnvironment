@@ -78,6 +78,11 @@ neurag = [
     "clients/**/*",
 ]
 
+# `clients/**/*` also matched a local clients/__pycache__: setuptools shipped the
+# .pyc files and printed a BuildBackendWarning on stderr, which killed install.ps1.
+[tool.setuptools.exclude-package-data]
+neurag = ["*.pyc"]
+
 [build-system]
 requires = ["setuptools>=77", "wheel"]   # 77: prima versione con license SPDX
 build-backend = "setuptools.build_meta"

@@ -31,6 +31,15 @@ param([switch]$Force, [switch]$Clear, [string]$EmbedModel = "",
       [string]$Client = "")
 if ($Clear) { $Force = $true }
 $ErrorActionPreference = "Stop"
+# Every pip call goes through here. When output is redirected (`*> log`, a GUI,
+# a CIM launch), PS 5.1 wraps each native stderr line in a NativeCommandError,
+# and under "Stop" that is FATAL: on 2026-11-15/16 a setuptools BuildBackendWarning
+# while building NeuRAG's wheel killed the install with no message in the log.
+# pip failures are judged by $LASTEXITCODE, as every caller already does.
+function Invoke-Pip {
+    $ErrorActionPreference = "Continue"     # function scope only
+    & $VPy -m pip @args
+}
 # The apps whose MCP servers the install stops: named at the end, so the user
 # restarts those instead of guessing (their connection does not come back alone).
 $script:ClientApps = @()
@@ -434,7 +443,7 @@ $VPy = Join-Path $Venv "Scripts\python.exe"
 $Ask = ([Environment]::UserInteractive -and -not $Force -and
         ($env:GM_YES -ne "1") -and ($args -notcontains "-Yes"))
 # pip self-upgrade is non-critical: never let it abort the install.
-& $VPy -m pip install --upgrade pip --quiet | Out-Null
+Invoke-Pip install --upgrade pip --quiet | Out-Null
 
 function Test-AlreadyInstalled([string]$pkg, [string]$dir) {
     $src = Get-SrcVersion $dir
@@ -617,7 +626,7 @@ if ($gmVer) {
         # (gia' soddisfatto) e installa solo cio' che manca. E' il caso vero di
         # "venv da riparare" — mcp sparito, fastembed a meta'.
         Write-Host "Repairing dependencies only (tools untouched)..."
-        & $VPy -m pip install $Here
+        Invoke-Pip install $Here
         if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: dependency repair failed." }
     }
     if ($choice -eq "clean") {
@@ -627,13 +636,13 @@ if ($gmVer) {
         & $PyExe @PyArgs -m venv $Venv
         if (-not (Test-Path (Join-Path $Venv "Scripts\python.exe"))) { & $PyExe @PyArgs -m virtualenv $Venv }
         $VPy = Join-Path $Venv "Scripts\python.exe"
-        & $VPy -m pip install --upgrade pip | Out-Null
+        Invoke-Pip install --upgrade pip | Out-Null
     }
     if ($choice -ne "skip" -and $choice -ne "deps") {
         Write-Host "$(if ($choice -eq "upgrade") { "Upgrading" } else { "Reinstalling" }) Gray-Matter..."
         $Repair = if ($choice -eq "upgrade") { @() } else { Get-RepairArgs -Always }
-        & $VPy -m pip install @Repair $Here
-        if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
+        Invoke-Pip install @Repair $Here
+        if ($LASTEXITCODE -ne 0) { Invoke-Pip install --no-cache-dir @Repair $Here }
         if ($LASTEXITCODE -ne 0) { Write-PipFailure "gray-matter (the required gateway)"; exit 1 }
         & $VPy -c "import sys;sys.stderr=sys.stdout;import gray_matter"
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter module not found after install"; exit 1 }
@@ -644,8 +653,8 @@ if ($gmVer) {
 } else {
     Write-Host "Installing Gray-Matter..."
     $Repair = Get-RepairArgs
-    & $VPy -m pip install @Repair $Here
-    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
+    Invoke-Pip install @Repair $Here
+    if ($LASTEXITCODE -ne 0) { Invoke-Pip install --no-cache-dir @Repair $Here }
     if ($LASTEXITCODE -ne 0) { Write-PipFailure "gray-matter (the required gateway)"; exit 1 }
     & $VPy -c "import sys;sys.stderr=sys.stdout;import gray_matter"
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gray-matter module not found after install"; exit 1 }
@@ -679,7 +688,7 @@ function Install-Peer([string]$dir, [string]$label) {
             # codice solo se davvero diverso. Prima questa voce eseguiva un
             # reinstall FORZATO del codice, l'opposto dell'etichetta.
             Write-Host "Repairing $label dependencies..."
-            & $VPy -m pip install @Find @Cons $dir
+            Invoke-Pip install @Find @Cons $dir
             if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: dependency repair failed - continuing." }
             return
         }
@@ -691,12 +700,12 @@ function Install-Peer([string]$dir, [string]$label) {
                 & $PyExe @PyArgs -m venv $Venv
                 if (-not (Test-Path (Join-Path $Venv "Scripts\python.exe"))) { & $PyExe @PyArgs -m virtualenv $Venv }
                 $VPy = Join-Path $Venv "Scripts\python.exe"
-                & $VPy -m pip install --upgrade pip | Out-Null
+                Invoke-Pip install --upgrade pip | Out-Null
                 # The peers sit in the same venv as GM, so a clean rebuild takes
                 # the gateway down with it - put it back before the peer.
                 $Repair = Get-RepairArgs
-                & $VPy -m pip install @Repair $Here
-                if ($LASTEXITCODE -ne 0) { & $VPy -m pip install --no-cache-dir @Repair $Here }
+                Invoke-Pip install @Repair $Here
+                if ($LASTEXITCODE -ne 0) { Invoke-Pip install --no-cache-dir @Repair $Here }
                 if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: gray-matter reinstall failed after venv rebuild."; return }
             }
             Write-Host "$(if ($choice -eq "upgrade") { "Upgrading" } else { "Reinstalling" }) $label..."
@@ -709,8 +718,8 @@ function Install-Peer([string]$dir, [string]$label) {
             # il cap di GM. "upgrade": pip liscio, la versione nuova risolve
             # da se' (e porta le dipendenze nuove).
             $Repair = if ($choice -eq "upgrade") { @() } else { Get-RepairArgs -Always }
-            & $VPy -m pip install @Find @Repair $dir
-            if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Repair $dir }
+            Invoke-Pip install @Find @Repair $dir
+            if ($LASTEXITCODE -ne 0) { Invoke-Pip install @Repair $dir }
             if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $label reinstall failed - continuing." }
         } else {
             Write-Host "Keeping $label $peerVer."
@@ -719,8 +728,8 @@ function Install-Peer([string]$dir, [string]$label) {
     }
     Write-Host "Installing $label ($dir)..."
     $Repair = Get-RepairArgs
-    & $VPy -m pip install @Find @Cons @Repair $dir
-    if ($LASTEXITCODE -ne 0) { & $VPy -m pip install @Cons @Repair $dir }
+    Invoke-Pip install @Find @Cons @Repair $dir
+    if ($LASTEXITCODE -ne 0) { Invoke-Pip install @Cons @Repair $dir }
     if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $label install failed - continuing." }
 }
 
@@ -878,7 +887,7 @@ function Test-PyModule([string]$module) {
 # non vuol dire "c'e' quella giusta", e la riparazione --no-deps non lo
 # aggiorna. Se la versione e' gia' quella, pip non fa niente.
 Write-Host "Enabling the Turso vector tier (best-effort)..."
-& $VPy -m pip install -q @Find "pyturso==0.8.3"
+Invoke-Pip install -q @Find "pyturso==0.8.3"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  pyturso not available here - running on the sqlite3 tier (still fully functional)."
 }
@@ -888,7 +897,7 @@ if ($LASTEXITCODE -ne 0) {
 # finestra nativa il control center è autosufficiente.
 if (-not (Test-PyModule "webview")) {
     Write-Host "Enabling the native GUI window (best-effort)..."
-    & $VPy -m pip install "pywebview>=5.0"
+    Invoke-Pip install "pywebview>=5.0"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  pywebview not available - the control center will open in the browser."
     }
@@ -897,7 +906,7 @@ if (-not (Test-PyModule "webview")) {
 # Best-effort semantic tier: fastembed (retrieval preciso, meno token).
 if (-not (Test-PyModule "fastembed")) {
     Write-Host "Enabling the semantic embedding tier (best-effort)..."
-    & $VPy -m pip install "fastembed>=0.5.0,<1.0"
+    Invoke-Pip install "fastembed>=0.5.0,<1.0"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  fastembed not available - lexical ranking only (still functional)."
     }
@@ -1135,7 +1144,7 @@ if ($Desk) {
 # then declares success over a venv whose servers crash on import. Say it here,
 # where the user is still reading, instead of at the next MCP startup.
 $prevEap3 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-$pipCheck = & $VPy -m pip check     # no 2>&1: PS 5.1 wraps native stderr in ErrorRecords
+$pipCheck = Invoke-Pip check     # no 2>&1: PS 5.1 wraps native stderr in ErrorRecords
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     if (-not ($pipCheck | Where-Object { "$_".Trim() })) {

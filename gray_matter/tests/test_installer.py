@@ -106,6 +106,7 @@ def test_record_install_writes_manifest(tmp_path):
 import re                                          # noqa: E402
 import shutil                                      # noqa: E402
 import subprocess                                  # noqa: E402
+import sys                                         # noqa: E402
 from pathlib import Path                           # noqa: E402
 
 _HERE = Path(__file__).resolve().parents[1]
@@ -191,6 +192,29 @@ def test_the_windows_installer_still_parses():
     r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="PowerShell not available")
+def test_a_pip_warning_on_stderr_does_not_kill_a_redirected_install(tmp_path):
+    """2026-11-15/16: run as `install.ps1 *> log`, the install died silently
+    while building NeuRAG's wheel. setuptools printed a BuildBackendWarning on
+    stderr; PS 5.1 wraps redirected native stderr in a NativeCommandError, and
+    under ErrorActionPreference=Stop that is fatal — no message in the log, the
+    window just closed. Every pip call must go through Invoke-Pip."""
+    body = _PS1[_PS1.index("function Invoke-Pip"):]
+    helper = body[:body.index("\n}\n") + 3]
+    outside = _PS1.replace(helper, "")
+    assert "-m pip" not in outside, "install.ps1: a pip call bypasses Invoke-Pip"
+
+    log = tmp_path / "out.log"
+    # An unknown option makes pip write to stderr and exit 2, like any warning.
+    ps = (f"$ErrorActionPreference = 'Stop'\n{helper}"
+          f"$VPy = '{sys.executable}'\n"
+          f"Invoke-Pip install --no-such-option *> '{log}'\n"
+          "'ALIVE ' + $LASTEXITCODE")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       capture_output=True, text=True, timeout=120)
+    assert "ALIVE 2" in r.stdout, r.stdout + r.stderr
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="sh not available")
