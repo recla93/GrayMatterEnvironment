@@ -252,3 +252,20 @@ concepts. Removed after a test of the whole sequence on an isolated instance
 (daemon stopped, rows deleted, daemon restarted, smoke 12/12); a restate-only
 turn now creates no links. Lesson: anything that writes goes to the isolated
 instance first, as the ADR index says.
+
+## Fable's need 5: the day beside an old fact (2026-11-17)
+
+`models.fact_age`: a recalled fact written `NEURON_FACT_DATE_DAYS` (2) or more
+days ago shows its day after its id, `#91f04dfe (14/11)`, unless what is shown
+already opens with a date (136 of 275 live facts do). Recall only: profile rules
+do not age, and the flash line keeps `#id` last for the gateway's pattern.
+
+- Cost, 209 real messages on a copy: 81 of 348 recalled facts get a day, ~8
+  characters each, inside the same budget.
+- Value, one fresh Haiku per case, the two facts of a real state change side by
+  side, both orders. Two bench pairs whose newer text already says it is newer
+  ("done", "too", "ADR-015"): 8/8 with and without the day. Four real changes
+  in neutral wording (recall K 3 -> 2, suite folder, gate 9 -> 3 minutes,
+  profile cap 600 -> 1000): with the day 8/8; without it 5/8, and with the
+  newer fact first 1/4 (the other three: "the memories disagree").
+  Without the day the model falls back on position: the last fact wins.

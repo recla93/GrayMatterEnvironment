@@ -36,3 +36,9 @@ Ultimo commit che contiene tutto ciò che è elencato qui: `8a53ca3` (branch `fe
 | Funzione | Perché non ora |
 |---|---|
 | **Drift link** (Neuron: `form_drift_link`, `drift_links`, i filtri `link_type == "drift"` in `get_context`, il campo `Link.target_context`) | Nei grafi veri sono zero, quindi oggi non fanno nulla. Toglierli tocca il modello dei link e quattro percorsi di `get_context`: è un cambio con un suo rischio e un guadagno di sole righe. Va fatto da solo, con i suoi test. |
+
+## Measured, not built yet
+
+| What | What it would do | Why not now | Condition to build it |
+|---|---|---|---|
+| **An explicit "nothing on this"** (Neuron `pre_turn`; Fable's need 4, PLAN-2026-11-16) | When no fact clears the floor, one line: `facts: none above 0.40 (best 0.33)`. Neuron's own `⚠ no relevant context` exists but the hook strips it (`gray_matter/server.py` `_trim_for_hook`) | Baseline 2026-11-17 over the real transcripts: 881 injections, 227 (26%) carry cache/files/links or profile lines and no fact, 43 say "no context". In turns without facts the model makes 0.07 memory lookups per turn (7 of 168 turns) and 5.1 exploring calls, against 0.03 and 4.7 with facts: a small possible gain, ~10 tokens on a third of the turns, and no quick test can measure it | A wider gap on new sessions (rerun the same count: turns without facts against turns with), or a case where the model clearly redid work because it read silence as "nothing stored" |
