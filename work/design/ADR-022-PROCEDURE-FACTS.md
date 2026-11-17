@@ -236,3 +236,19 @@ a commit, the release rule on 6 of 16, the other-session rule on 2 of 4, the
 same concept, so rules stay in the profile. Flash and pulse were considered and
 ruled out before measuring: the flash takes only idea/decision/fix, and pulse
 is called by the model.
+
+### Tokens, and what the gist restatement cost (2026-11-17)
+
+Profile on the copy: 846 characters for 6 facts before, 999 for 9 after (the
+cap left 154 characters unused before: the next fact did not fit). About 40
+tokens more, read on every request of a session; in return all six rules
+arrive. The average recall per message went from 976 to 962 characters,
+because those 16 facts are shown as gists there too (3174 -> 1320 characters
+for the 16).
+
+The 16 restatements were written straight to the real memory, and each
+store_turn linked all its keywords together: 81 links between unrelated
+concepts. Removed after a test of the whole sequence on an isolated instance
+(daemon stopped, rows deleted, daemon restarted, smoke 12/12); a restate-only
+turn now creates no links. Lesson: anything that writes goes to the isolated
+instance first, as the ADR index says.
