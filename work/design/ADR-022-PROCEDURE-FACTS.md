@@ -64,6 +64,28 @@ with `supersedes`: a list for the user to approve, not a job.
 3. D3; tests for the accepted and refused forms.
 4. D5 with the user.
 
+## Baseline (2026-11-17, step 1)
+
+`neuron/bench/recall_proc.json` v1: the 34 facts of `recall_en_all.json` plus
+seven procedures (`q1`-`q7`: reinstall, release, gate, commit, bench, isolated
+instance, deps), stored as `habit`; 14 real task messages from the transcripts,
+the 5 off-topic messages of the other sets.
+
+| Mode | recall | full | noise | off_topic | chars |
+|---|---|---|---|---|---|
+| message, procedures as `habit` | 45% (9/20) | 6/14 | 1.0/msg | 0 | 758/msg |
+
+Where it fails: the push messages (m6, m7, m8) lose the gate procedure to the
+`progress` and `habit` facts that share the concept `push`; the release-state
+messages (m5, m14) get old release `progress` instead of gate and release
+steps; the rename message (m12) gets ADR facts on `neuron`. In the bench
+`pre_turn` shows no profile, so `habit` competes in the normal recall; the
+session-start cost of habits is measured separately.
+
+```
+python neuron/bench/run.py --mode message --set neuron/bench/recall_proc.json -v
+```
+
 ## Traps
 
 - The profile shrinks when habits leave it: check `PROFILE_MAX_CHARS` still fits
