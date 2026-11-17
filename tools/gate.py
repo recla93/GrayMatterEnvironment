@@ -8,7 +8,8 @@ Steps, each in its own process:
   deps          tools/deps.py --check: identical client twins, guidance only names the
                 I/O contract, removed names do not come back (seconds; runs first)
   suite:<tool>  pytest of neuron, gray_matter, neurag, one process each (never together)
-  bench         neuron/bench --mode message, against the newest saved result of the
+  bench         neuron/bench --mode message, on recall.json and on the procedure
+                task set recall_proc.json (ADR-022), each against the newest saved result of the
                 same set: recall and full not lower, noise and off-topic not higher
   smoke         a FRESH isolated instance (copy of the real memory), the whole smoke
                 (writes included) and the isolation check; the instance is removed after
@@ -64,29 +65,33 @@ def suite(tool: str):
     return fn
 
 
-def baseline(version: int) -> "tuple[str, dict] | None":
+def baseline(version: int, set_name: str = "recall.json") -> "tuple[str, dict] | None":
     for f in sorted(RESULTS.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         d = json.loads(f.read_text(encoding="utf-8"))
         m = next((r for r in d.get("results", []) if r["mode"] == "message"), None)
-        if d.get("set_version") == version and m:
+        # results saved before 2026-11-17 name no set: they are recall.json's
+        if d.get("set", "recall.json") == set_name and d.get("set_version") == version and m:
             return f.name, m
     return None
 
 
-def bench():
-    p = run([sys.executable, "neuron/bench/run.py", "--mode", "message", "--json"])
-    if p.returncode != 0:
-        return False, p.stderr[-200:]
-    now = json.loads(p.stdout)
-    cur = now["results"][0]
-    base = baseline(now["set_version"])
-    if not base:
-        return False, f"no saved result for set v{now['set_version']} in {RESULTS}"
-    name, b = base
-    worse = [k for k in ("recall", "full") if cur[k] < b[k] - EPS]
-    worse += [k for k in ("noise", "off_topic") if cur[k] > b[k] + EPS]
-    nums = " ".join(f"{k} {cur[k]}/{b[k]}" for k in ("recall", "full", "noise", "off_topic"))
-    return not worse, (f"WORSE: {worse} | " if worse else "") + f"{nums} (now/{name})"
+def bench(set_name: str = "recall.json"):
+    def fn():
+        p = run([sys.executable, "neuron/bench/run.py", "--mode", "message", "--json",
+                 "--set", f"neuron/bench/{set_name}"])
+        if p.returncode != 0:
+            return False, p.stderr[-200:]
+        now = json.loads(p.stdout)
+        cur = now["results"][0]
+        base = baseline(now["set_version"], set_name)
+        if not base:
+            return False, f"no saved result for {set_name} v{now['set_version']} in {RESULTS}"
+        name, b = base
+        worse = [k for k in ("recall", "full") if cur[k] < b[k] - EPS]
+        worse += [k for k in ("noise", "off_topic") if cur[k] > b[k] + EPS]
+        nums = " ".join(f"{k} {cur[k]}/{b[k]}" for k in ("recall", "full", "noise", "off_topic"))
+        return not worse, (f"WORSE: {worse} | " if worse else "") + f"{nums} (now/{name})"
+    return fn
 
 
 def smoke(oc_turn: bool):
@@ -129,7 +134,8 @@ def main(argv=None) -> int:
         for tool in ("neuron", "gray_matter", "neurag"):
             step(f"suite:{tool}", suite(tool))
     if "bench" not in skip:
-        step("bench", bench)
+        step("bench", bench())
+        step("bench:procedures", bench("recall_proc.json"))   # ADR-022
     if "smoke" not in skip:
         step("smoke (isolated)", smoke(a.oc_turn))
     failed = [r for r in rows if not r[1]]
