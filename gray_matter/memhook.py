@@ -176,7 +176,7 @@ WORD = re.compile(r"[\w./\-]+", re.U)
 DATE = re.compile(r"\d{1,2}/\d{1,2}(/\d{2,4})?")
 # One recalled fact: "[kind] text (concept) #id". Not the profile's user/habit:
 # always shown, so being used proves nothing about the recall.
-RECALLED = re.compile(r"\[(?:idea|decision|fix|fact|progress)\]\s+(.+?)\s+#([0-9a-f]{8})\b")
+RECALLED = re.compile(r"\[(?:idea|decision|fix|fact|progress|procedure)\]\s+(.+?)\s+#([0-9a-f]{8})\b")
 
 
 def distinctive(text: str) -> set:

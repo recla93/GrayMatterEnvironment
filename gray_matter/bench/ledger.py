@@ -39,7 +39,7 @@ CHARS_PER_TOKEN = 4
 FACT_ID = re.compile(r"#([0-9a-f]{8})\b")
 MEMORY_MARKERS = ("[neuron]", "[NEURON]", "[NEURAG]", "<recalled-memory", "Gray-Matter", "📚 KB")
 # One line of memory shown to the model: "[kind] text (concepts) #id".
-FACT_LINE = re.compile(r"\[(?:idea|decision|fix|fact|progress|user|habit|detail)\]\s+(.+?)\s+#([0-9a-f]{8})\b")
+FACT_LINE = re.compile(r"\[(?:idea|decision|fix|fact|progress|user|habit|procedure|detail)\]\s+(.+?)\s+#([0-9a-f]{8})\b")
 SILENT_WINDOW = 1          # turns after the one that showed the fact
 EXPLORE = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "Agent", "Task", "LS", "Bash", "PowerShell"}
 

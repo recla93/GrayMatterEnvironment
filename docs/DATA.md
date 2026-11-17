@@ -127,7 +127,7 @@ Low-salience orphans are archived here (recoverable via `export`).
 |---|---|---|---|
 | `context` | TEXT | NOT NULL, DEFAULT `'default'` | |
 | `id` | TEXT | NOT NULL | Short id shown as `#0a1b2c3d` |
-| `kind` | TEXT | NOT NULL | `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit` |
+| `kind` | TEXT | NOT NULL | `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit`, `procedure` |
 | `text` | TEXT | NOT NULL | One sentence with its why |
 | `turn` | INTEGER | | Turn it was saved in |
 | `created_at` | TEXT | NOT NULL | |

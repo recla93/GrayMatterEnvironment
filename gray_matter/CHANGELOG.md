@@ -1,5 +1,9 @@
 # Changelog — Gray Matter
 
+## Unreleased
+- The use signal (Stop hook) and the ledger count Neuron's new `procedure`
+  facts: a recalled procedure that the reply uses is reported as used.
+
 ## 1.10.0 (2026-11-16)
 With Neuron 6.12.0 and NeuRAG 1.9.1.
 - **A redirected install no longer dies in silence.** A pip warning on stderr

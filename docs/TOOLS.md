@@ -101,9 +101,10 @@ and reports it, no `confirm` call needed. Sharing a concept is not use.
 | Field | Required | Description |
 |---|---|---|
 | `text` | yes | One sentence with its why, ideally under 400 characters |
-| `kind` | no (default `fact`) | `progress`, `decision`, `fix`, `fact`, `idea`, `user` (who the user is, what they want), `habit` (how they work) |
+| `kind` | no (default `fact`) | `progress`, `decision`, `fix`, `fact`, `idea`, `user` (who the user is, what they want), `habit` (how they work), `procedure` (steps of a task, in order, proven by an outcome; recalled by task, never in the profile) |
 | `concepts` | no (default: the turn's) | 1-5 concept **nouns** that index the fact — never verbs or filler |
 | `supersedes` | no | Id of the older fact this one replaces |
+| `evidence` | for `procedure` | The outcome that proved the steps (gate passed, smoke passed, user correction, commit). Kept in the fact's text; without it a procedure is stored as `fact` |
 
 A fact nearly identical to an existing one is saved and flagged, not merged.
 
