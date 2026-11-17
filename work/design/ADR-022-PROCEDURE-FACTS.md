@@ -213,3 +213,26 @@ characters of English tool output and an English ADR before the message, 6/6
 and 6/6 again. No difference to measure, so the clause is not installed. The
 drift seen here came from a long session of the assistant's own English work,
 not from the memory frame.
+
+## The profile after the migration (2026-11-17)
+
+The profile is capped by characters (`NEURON_PROFILE_MAX_CHARS`, 1000), newest
+first: 22 user/habit facts, 4888 characters, 6 with a gist, so 5-6 fit and the
+oldest rules (no commit before a usage test, tight releases, ask before writing
+to another session, gain/loss/worth) never reached a session.
+
+- `_profile_facts` puts the habits first, then the user facts, newest first in
+  each.
+- Restating a fact word for word with a gist fills a missing gist in place
+  (same id, same turn): a supersede would move it in the profile.
+
+On a copy of the real memory with gists for the 16 facts that had none: 9 facts
+fit instead of 6, all six habits among them.
+
+**Tried: task rules out of the profile, recalled when the task is named.** Over
+the 209 real messages: the commit rule came back on 1 of 13 messages that name
+a commit, the release rule on 6 of 16, the other-session rule on 2 of 4, the
+"who depends on it" rule on 0 of 4. A rule loses to the progress facts on the
+same concept, so rules stay in the profile. Flash and pulse were considered and
+ruled out before measuring: the flash takes only idea/decision/fix, and pulse
+is called by the model.
