@@ -63,6 +63,37 @@ The MCP server runs from the suite's venv, a copy made at install time. After a
 change, reinstall — the GUI "Ripara" button, or `install.ps1 -Force` — and
 restart the client: the workers keep the old code in memory until they restart.
 
+### Reinstalling the live suite from a terminal
+
+Three things decide whether the reinstall lands in the right place:
+
+- **`GM_HOME` set to the suite folder** (the folder that holds `graymatter/`,
+  the graphs and the registry). Without it `install.ps1` falls back to
+  `%LOCALAPPDATA%\GrayMatterEnvironment`; if a stale suite is still there, every
+  client is re-pointed at its venv (seen on 2026-11-14).
+- **Outside the MSIX container.** Claude Desktop is an MSIX app: whatever it
+  launches, Claude Code included, sees `%LOCALAPPDATA%` redirected into
+  `Packages\Claude_...\LocalCache`. From there, start the installer as a
+  process outside the container with `Win32_Process Create`.
+- **`GM_YES=1`**, so nothing waits on a prompt nobody can answer.
+
+```powershell
+$suite = "<suite folder>"     # e.g. $env:USERPROFILE\GrayMatterEnvironment
+$repo  = "<this repo>"
+$log   = "$suite\install-$(Get-Date -Format yyyy-MM-dd).log"
+$cmd   = "powershell -NoProfile -ExecutionPolicy Bypass -Command `"" +
+         "`$env:GM_HOME='$suite'; `$env:GM_YES='1'; " +
+         "& '$repo\gray_matter\install.ps1' -Force -Client detected " +
+         "-EmbedModel sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 " +
+         "*> '$log'`""
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+```
+
+The process runs detached: the install succeeded only when the log ends with
+`INSTALL COMPLETE`. The install stops the clients' memory connection, so
+restart them afterwards. Never run tests with `GM_HOME`, `NS_GRAPHS_DIR` or
+`NEURAG_HOME` pointing at the live suite.
+
 ## 5. Who depends on what you change
 
 Before renaming, removing or hiding a tool, an option, an env var or a shipped
