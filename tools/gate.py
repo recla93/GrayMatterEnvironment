@@ -11,6 +11,9 @@ Steps, each in its own process:
   bench         neuron/bench --mode message, on recall.json and on the procedure
                 task set recall_proc.json (ADR-022), each against the newest saved result of the
                 same set: recall and full not lower, noise and off-topic not higher
+  replay        tools/replay.py: the newest 300 real user messages through the hook recall,
+                working tree vs HEAD, each on its own copy of the live graphs; fails only
+                on a crash or when recalls go empty, the rest is a report to read
   smoke         a FRESH isolated instance (copy of the real memory), the whole smoke
                 (writes included) and the isolation check; the instance is removed after
 
@@ -94,6 +97,17 @@ def bench(set_name: str = "recall.json"):
     return fn
 
 
+def replay():
+    p = run([sys.executable, "-X", "utf8", "tools/replay.py", "--limit", "300", "--json"], timeout=900)
+    try:
+        r = json.loads(p.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return False, (p.stdout + p.stderr)[-300:]
+    return p.returncode == 0, (f"{r['changed']}/{r['messages']} changed, {r['chars_per_msg']:+} chars/msg, "
+                               f"ids lost {r['lost_ids']} gained {r['gained_ids']}, emptied {r['emptied']}, "
+                               f"notes {r['notes'][0]}->{r['notes'][1]} ({r['folder']})")
+
+
 def smoke(oc_turn: bool):
     def fn():
         iso = [sys.executable, "tools/isolated.py"]
@@ -124,7 +138,7 @@ def smoke(oc_turn: bool):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--oc-turn", action="store_true", help="add a real OpenCode turn to the smoke")
-    ap.add_argument("--skip", default="", help="comma-separated: deps, suite, bench, smoke")
+    ap.add_argument("--skip", default="", help="comma-separated: deps, suite, bench, replay, smoke")
     a = ap.parse_args(argv)
     skip = {s for s in a.skip.split(",") if s}
     sys.stdout.reconfigure(encoding="utf-8")
@@ -136,6 +150,8 @@ def main(argv=None) -> int:
     if "bench" not in skip:
         step("bench", bench())
         step("bench:procedures", bench("recall_proc.json"))   # ADR-022
+    if "replay" not in skip:
+        step("replay", replay)
     if "smoke" not in skip:
         step("smoke (isolated)", smoke(a.oc_turn))
     failed = [r for r in rows if not r[1]]
