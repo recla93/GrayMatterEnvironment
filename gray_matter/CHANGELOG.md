@@ -1,6 +1,10 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- The hook no longer injects Neuron's `cache:` line (warm concepts with ↑/·):
+  on the same seven failure scenarios a fresh model acted the same without it
+  (14/14), and it took ~56 characters on 160 of 191 real recalls. A recall
+  that held only that line injects nothing of it.
 - The use signal (Stop hook) and the ledger count Neuron's new `procedure`
   facts: a recalled procedure that the reply uses is reported as used.
 

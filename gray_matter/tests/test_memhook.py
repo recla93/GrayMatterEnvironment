@@ -210,11 +210,14 @@ def test_the_hook_keeps_the_facts_and_drops_the_chrome():
     from gray_matter import server as srv
     out = srv._trim_for_hook(LIVE_RECALL)
     assert out.splitlines()[0] == "[neuron] ctx=backend"
-    for gone in ("→", "turn=86", "links:", "nodes:", "vector fallback", "no relevant context"):
+    for gone in ("→", "turn=86", "links:", "nodes:", "vector fallback", "no relevant context", "cache:", "(↑)"):
         assert gone not in out, gone
-    for kept in ("#a5f74d04", "#f69a1bf9", "cache: neurag(↑)", "<recalled-memory", "</recalled-memory>"):
+    for kept in ("#a5f74d04", "#f69a1bf9", "<recalled-memory", "</recalled-memory>"):
         assert kept in out, kept
     assert len(out) < len(LIVE_RECALL) * 0.8
+    # a cache of several entries goes whole; a cache-only line goes with it
+    two = srv._trim_for_hook("cache: a b(↑) | c(·) | facts: [fix] x (y) #0a1b2c3d\ncache: d(↑)")
+    assert two == "facts: [fix] x (y) #0a1b2c3d", two
 
 
 # --- use (ADR-015 D8, 2026-11-16): the reply is the evidence ----------------

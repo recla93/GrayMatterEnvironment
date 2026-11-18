@@ -1246,7 +1246,9 @@ async def _kb_vector_pointer(text: str, shown: set) -> str:
 
 _HEADER = re.compile(r"^\[neuron\] (ctx=\S+).*$")
 # Graph metadata riding on the cache line: "links:a-[s]->b|..." and "nodes:x(0),...".
-_META_SEGMENT = re.compile(r"^(links:|nodes:|\(vector fallback\)$)")
+# The cache line too ("cache: a(↑) | b(·)"): without it a fresh model acted
+# the same on 7 failure scenarios (14/14, A/B 2026-11-18), ~56 chars a message.
+_META_SEGMENT = re.compile(r"^(links:|nodes:|\(vector fallback\)$|cache: |[^\[|]*\([↑·]\)$)")
 
 
 def _trim_for_hook(ctx: str) -> str:
@@ -1269,7 +1271,7 @@ def _trim_for_hook(ctx: str) -> str:
         m = _HEADER.match(s)
         if m:
             line = f"[neuron] {m.group(1)}"
-        elif " | " in line or s.startswith(("links:", "nodes:")):
+        elif " | " in line or s.startswith(("links:", "nodes:", "cache: ")):
             keep = [seg for seg in line.split(" | ") if not _META_SEGMENT.match(seg.strip())]
             if not keep:
                 continue
