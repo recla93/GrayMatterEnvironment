@@ -3,6 +3,7 @@
     python tools/replay.py                 # working tree vs HEAD
     python tools/replay.py --ref fa378d0   # working tree vs any git ref
     python tools/replay.py --show 5        # also print 5 changed recalls to read
+    python tools/replay.py --data-after DIR   # same code, live graphs vs the graphs in DIR
     python tools/replay.py --selftest
 
 What a client would get from the hook for each distinct user message of the
@@ -77,9 +78,9 @@ def messages(limit: int = 0) -> list[str]:
     return msgs[-limit:] if limit else msgs
 
 
-def copy_graphs(dst: Path) -> None:
+def copy_graphs(dst: Path, src: "Path | None" = None) -> None:
     dst.mkdir(parents=True)
-    src = SUITE / "neuron" / "graphs"
+    src = src or SUITE / "neuron" / "graphs"
     for p in src.glob("graph_*.db"):
         ro = sqlite3.connect(p.resolve().as_uri() + "?mode=ro", uri=True)
         out = sqlite3.connect(dst / p.name)
@@ -150,6 +151,8 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, default=0, help="only the newest N messages")
     ap.add_argument("--show", type=int, default=0, help="print N changed recalls, before and after")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
+    ap.add_argument("--data-after", help="graphs folder for the after side (a data change, e.g. "
+                                         "an isolated instance after tools/enrich.py); code = working tree on both")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--worker", nargs=4, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
@@ -164,11 +167,12 @@ def main(argv=None) -> int:
     msgs = messages(a.limit)
     (tmp / "messages.json").write_text(json.dumps(msgs, ensure_ascii=False), encoding="utf-8")
     ref_tree = tmp / "ref"
-    subprocess.run(["git", "worktree", "add", "--detach", "-q", str(ref_tree), a.ref], cwd=REPO, check=True)
+    if not a.data_after:
+        subprocess.run(["git", "worktree", "add", "--detach", "-q", str(ref_tree), a.ref], cwd=REPO, check=True)
     try:
         sides = {}
-        for side, code in (("before", ref_tree), ("after", REPO)):
-            copy_graphs(tmp / side / "graphs")
+        for side, code in (("before", REPO if a.data_after else ref_tree), ("after", REPO)):
+            copy_graphs(tmp / side / "graphs", Path(a.data_after) if a.data_after and side == "after" else None)
             out = tmp / f"{side}.json"
             p = subprocess.run([sys.executable, "-X", "utf8", __file__, "--worker", str(code),
                                 str(tmp / side / "graphs"), str(tmp / "messages.json"), str(out)],
@@ -180,12 +184,12 @@ def main(argv=None) -> int:
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(ref_tree)], cwd=REPO, capture_output=True)
     r = compare(sides["before"], sides["after"])
-    r.update(ref=a.ref, folder=str(tmp))
+    r.update(ref=a.data_after or a.ref, folder=str(tmp))
     emptied = r["emptied"] > EMPTIED_MAX * max(r["had_facts"], 1)
     if a.json:
         print(json.dumps(r))
     else:
-        print(f"replay vs {a.ref}: {r['changed']}/{r['messages']} recalls changed, "
+        print(f"replay vs {r['ref']}: {r['changed']}/{r['messages']} recalls changed, "
               f"{r['chars_per_msg']:+} chars/msg, ids lost on {r['lost_ids']} gained on {r['gained_ids']}, "
               f"emptied {r['emptied']}/{r['had_facts']}, notes {r['notes'][0]}->{r['notes'][1]}, "
               f"procedures {r['procedures'][0]}->{r['procedures'][1]}\nrecalls in {tmp}")
