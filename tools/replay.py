@@ -43,7 +43,9 @@ CLEAN = {k: v for k, v in os.environ.items()
          if k not in ("GM_HOME", "NS_GRAPHS_DIR", "NEURAG_HOME", "GM_PORT", "GM_INSTANCE")}
 EMPTIED_MAX = 0.05
 FACT_ID = re.compile(r"\) #([0-9a-f]{8})")          # "(concept) #id": a recalled fact, not a cited one
-SKIP = ("<", "[memory]", "Stop hook", "[Request", "Caveat:")
+# Hook reminders, harness notes, and prompts of tools/ask.py (A/B tests, not the user's).
+SKIP = ("<", "[memory]", "Stop hook", "[Request", "Caveat:", "[gm-ask]",
+        "You are a coding agent, on Windows", "Isolation check")
 
 
 def messages(limit: int = 0) -> list[str]:
