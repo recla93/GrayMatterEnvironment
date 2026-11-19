@@ -200,3 +200,90 @@ fine, promote is GM-only anyway (I2).
 **What "better" must mean:** a promoted concept is *found* by `knowledge_query`
 on the text of one of its facts, and `brainstorm` on a bug seed surfaces a
 past fix from the vault, not only from Neuron.
+
+## 8. Pattern recognition: an isolated analysis module (2026-11-19)
+
+**The idea (the user's).** A workbench to dig through data and find
+coincidences, recurring occurrences, cycles and footholds ("appigli"):
+financial and other numeric series, historical occurrences, cycles of events.
+It is **analysis of the data being worked**, not recall, and it must stay
+isolated so that neither side adds noise to the other: the analysis never
+reaches everyday recall, and the memory's stimuli, pulse and drift never touch
+the analysis.
+
+**Not the old pattern mode.** That one (removed 2026-09-13, 0 right
+predictions out of 155 turns) tried to predict the agent's next turn. Not
+PIANO-STRATI §G either (procedural layer: situation -> what followed -> outcome).
+
+**Shape: a separate GM module, not a Neuron context.** A context still shares
+Neuron's engine and its side effects. The module has its own database and two
+engines, with the results in one place:
+
+| Data | Engine | Finds |
+|---|---|---|
+| Relational: people, places, events, dates | graph (networkx; Neuron's typed links as the model) | links, co-occurrences, recurring event types, gaps |
+| Numeric series | statistics (below) | cycles, seasonality, recurring motifs, regime changes, lead-lag |
+| Both | event study: a series aligned around the events' dates | what changes before and after an event |
+
+**Storage.** SQLite as the store: one file, already in the suite. Turso only for
+cloud sync: locally it adds nothing over SQLite (0.8.3: no vector index, no
+full-text search). DuckDB for the analysis: column-oriented, it reads the
+SQLite file directly, no copy, and hands results to pandas. Dates in one form
+(ISO) plus derived columns (weekday, month, quarter) computed at load time.
+
+| Table | Holds |
+|---|---|
+| `series`, `observations(series_id, ts, value)` | numeric data |
+| `events(ts, kind, place, text)`, `entities`, `event_entities` | historical and relational data |
+| `hypotheses(statement, method, params, score, train_range, test_range, status)`, `evidence` | every pattern found, always as a hypothesis |
+| `attempts` | every search run, counted |
+
+**Libraries.** pandas (or polars); statsmodels (STL decomposition,
+autocorrelation, Granger, multiple-test correction) and scipy (periodogram,
+peaks) for cycles; **stumpy** (matrix profile) for recurring subsequences and
+anomalies, the core of "recurring occurrences"; ruptures for regime changes;
+a sequential-pattern miner (e.g. prefixspan) for "A then B within N days";
+networkx for the relational side. Heavy (several hundred MB with numba): an
+optional extra of the module, never in the base suite.
+
+**Noise is cut by method, not only by isolation.** In financial data the noise
+is in the data: search enough and something always "works".
+1. **Against chance:** each pattern is scored against shuffled data
+   (permutation test); what shows up shuffled too is noise.
+2. **Held-out data:** found on one part, checked on another.
+3. **The attempts log:** every search counted, so the multiple-comparison
+   correction (Benjamini-Hochberg) knows how many tries were made. Without it
+   no pattern is credible.
+4. **Calendar effects first:** weekday, month end, holidays are the commonest
+   false patterns and the cheapest to rule out.
+5. **A pattern is a hypothesis:** candidate -> tested -> confirmed / rejected,
+   with its evidence and typed links (supports / contradicts).
+
+**The model reasons, the code computes.** The model proposes hypotheses and
+reads results; it never sees the raw rows in its context. A thousand price
+rows cost a lot of tokens, a result with its score costs one line: in line
+with the suite's goal. Confirmed hypotheses move to NeuRAG with their
+evidence, through the existing bridges; rejected ones stay as `tried:` so
+they are not proposed again.
+
+**Repository.** A new folder in this monorepo (one more `prefix` in
+`mirror.yml`, published to its own public repo by `git subtree split`, like
+neuron, neurag and gray_matter), so it shares the gate, the isolated instance
+and the tests. Created when the work starts, not before.
+
+**Not investment advice.** The module is an analysis tool; a pattern it finds
+is a hypothesis to test, not a decision.
+
+**Gain / loss / worth it.**
+- Gain: a real new use of the suite, on mature libraries; the graph engine,
+  typed links, bridges and the blind judge already exist.
+- Loss: a new product, not an option: a module, a data ingest and a
+  statistics engine to maintain, while the direction is consolidation.
+- Worth it: yes as a direction, **after TODO P0-P3**. First prototype small:
+  SQLite + DuckDB + pandas + stumpy, one domain (historical investigations,
+  where the graph pays most).
+
+**What "better" must mean:** on a case whose answer the user already knows,
+built blind, the known connections come out on top, they survive the shuffled
+baseline and the held-out check, and a blind judge rates most of the other
+findings as worth a look, not noise.
