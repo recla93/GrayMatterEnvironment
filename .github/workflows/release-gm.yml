@@ -15,6 +15,14 @@ on:
 permissions:
   contents: write
 
+# pyturso has no win_amd64 wheel on PyPI: without this, pip compiles it from
+# source with the runner's Rust, and since 2026-11-18 a newer rustc fails on
+# turso_core 0.8.3 (E0308). pip reads PIP_FIND_LINKS like --find-links, so every
+# install below takes the wheel we vendor, the one install.ps1 installs. On the
+# Linux jobs the folder holds no matching wheel and pip goes to PyPI as before.
+env:
+  PIP_FIND_LINKS: ${{ github.workspace }}/neuron/vendor
+
 jobs:
   # --- 0. The gate ---------------------------------------------------------
   # A tag used to go straight to publish. The suite existed, the stale-release
