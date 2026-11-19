@@ -17,3 +17,15 @@ dist/
 # Future ideas stay on the developer's disk, never in the repository
 work/design/FutureGMIdeas.md
 work/design/IDEAS.md
+
+# Future work: design docs for work not started (copies in ../idee-future)
+work/design/ADR-011-GM-CONTAINER.md
+work/design/ADR-023-GM-CONSOLIDATION.md
+work/design/ADR-024-NEURAG-BENCH-AND-EMBEDDER.md
+work/design/PIANO-STRATI-2026-11-14.md
+work/design/CINQUE-STRATI-2026-11-03.md
+work/design/SUBCONSCIO-SPEC-2026-10-20.md
+work/design/MEMORIA-AGENTI-SPEC-2026-08-02.md
+work/design/STUDIO-MODELLO-GM-2026-11-05.md
+neuron/docs/design/00-neuron-bomb-roadmap.md
+neuron/docs/design/BACKLOG.md

@@ -7,8 +7,7 @@
 
 ## Context
 
-The procedural layer of the five-layer map
-([CINQUE-STRATI](CINQUE-STRATI-2026-11-03.md)) is missing. Two observations on
+The procedural layer of the five-layer map is missing. Two observations on
 2026-11-16:
 
 - To run the installer outside the MSIX container the assistant needed the exact
