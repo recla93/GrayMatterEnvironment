@@ -90,7 +90,7 @@ def propose(a) -> int:
     for i in range(0, len(facts), BATCH):
         part = facts[i:i + BATCH]
         body = "\n".join(f"#{f['id']} [{f['kind']}] {f['text']}" for f in part)
-        (tmp / f"b{i // BATCH:03d}.txt").write_text(PROMPT.format(max=GIST_MAX, facts=body), encoding="utf-8")
+        (tmp / f"b{i // BATCH:03d}.txt").write_text(PROMPT.format(max=a.max, facts=body), encoding="utf-8")
     subprocess.run([sys.executable, str(REPO / "tools" / "ask.py"), "--model", a.model, *map(str, sorted(tmp.glob("b*.txt")))])
     texts = {f["id"]: f for f in facts}
     good, bad = {}, {}
@@ -150,6 +150,9 @@ def main(argv=None) -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--context", default="backend")
     p.add_argument("--limit", type=int, default=0)
+    # The model overshoots the length it is asked for: 14 of 155 came back over
+    # GIST_MAX + 10 on 2026-11-18. Asking for less leaves the check where it is.
+    p.add_argument("--max", type=int, default=GIST_MAX, help="length asked of the model")
     q = sub.add_parser("apply")
     q.add_argument("file")
     a = ap.parse_args(argv)
