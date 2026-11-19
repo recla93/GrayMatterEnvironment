@@ -1427,6 +1427,18 @@ def _gm_answers_with_startup_grace(host: str, port: int,
     return False
 
 
+def _quiet_aborted_accept(loop, context: dict) -> None:
+    """The `shutdown` action closes the listening socket while an accept is
+    pending, and Windows' proactor reports that aborted accept (WinError 995)
+    as "Task exception was never retrieved" with a traceback, on every stop.
+    That one case is ours and expected; everything else goes to asyncio's
+    default handler."""
+    exc = context.get("exception")
+    if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 995:
+        return
+    loop.default_exception_handler(context)
+
+
 async def _ipc_listener(*, exit_on_busy: bool = True):
     """Background task: listens for incoming IPC connections (registrations, heartbeats).
 
@@ -1434,6 +1446,7 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
     (SystemExit escapes asyncio). A stdio instance (main) must instead keep
     serving MCP without a listener — its managed workers don't need the port."""
     loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_quiet_aborted_accept)
     # Singleton PRESERVATO ma porta DINAMICA: se su una porta candidata risponde
     # GIÀ un GM (probe `ping`), siamo un duplicato e moriamo. Se la porta è presa
     # da un processo ESTRANEO, si scala alla prima libera invece di non partire

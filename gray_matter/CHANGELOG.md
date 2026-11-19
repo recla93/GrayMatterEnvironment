@@ -1,6 +1,12 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **A quiet daemon log.** Each call to a tool the clients are not shown
+  (forgotten, confirm, export: the tool diet) wrote "Tool 'x' not listed, no
+  validation will be performed": 476 lines by 2026-11-19. The worker now drops
+  that one notice of the MCP library, and the daemon no longer prints a
+  traceback for the accept its own `stop` cancels (WinError 995). Every other
+  warning and error still reaches the log.
 - **The Graphs panel shows Neuron again.** The IPC client refused any
   response over 1 MB as "invalid response length", and Neuron's export passed
   it as the memory grew (1.40 MB on 2026-11-19, 527 facts): the panel showed

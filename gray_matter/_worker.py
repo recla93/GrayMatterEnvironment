@@ -37,7 +37,20 @@ _MUTATING = {"store_turn", "auto", "consolidate", "prune", "merge", "dedup",
 _mutations = 0
 
 
+class _UnlistedToolNotice:
+    """Drops ONE warning of the MCP library: "Tool 'x' not listed, no validation
+    will be performed". The daemon calls tools the clients are not shown on
+    purpose (forgotten, confirm, export: the tool diet of 2026-11-14), and each
+    call wrote that line: 476 of the daemon log's lines by 2026-11-19, burying
+    everything else. Every other record of that logger still goes through."""
+
+    def filter(self, record) -> bool:
+        return not str(record.msg).startswith("Tool '%s' not listed")
+
+
 def main() -> None:
+    import logging
+    logging.getLogger("mcp.server.lowlevel.server").addFilter(_UnlistedToolNotice())
     # Il worker tiene aperto lo store: se resta indietro quando il daemon muore,
     # è un writer di troppo sullo stesso DB. Si registra da solo perché il PID
     # che vede lo spawner è quello del redirector del venv, non il suo.
