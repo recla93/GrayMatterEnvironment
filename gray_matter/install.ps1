@@ -322,6 +322,24 @@ $OsBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
 # suite, come in paths.py: sotto ci vanno graymatter/, registry/, neuron/,
 # neurag/ — una cartella sola da guardare, copiare o cancellare.
 $GmBase = if ($env:GM_HOME) { $env:GM_HOME } else { Join-Path $OsBase "GrayMatterEnvironment" }
+# Inside an MSIX app (Claude Desktop and what it launches) writes under AppData
+# land in Packages\<app>\LocalCache: other clients never see the suite and
+# uninstalling the app deletes the memory. Probe: a file written to AppData
+# shows up in some package's LocalCache only from inside a container.
+# shortcut: stops instead of relocating; drop when the default base leaves AppData.
+if (-not $env:GM_HOME -and $env:LOCALAPPDATA) {
+    $probe = "gm-msix-probe-$PID.tmp"
+    New-Item -ItemType File (Join-Path $env:LOCALAPPDATA $probe) -Force | Out-Null
+    $box = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Packages") -Directory -ErrorAction SilentlyContinue |
+           Where-Object { Test-Path (Join-Path $_.FullName "LocalCache\Local\$probe") } | Select-Object -First 1
+    Remove-Item (Join-Path $env:LOCALAPPDATA $probe) -Force -ErrorAction SilentlyContinue
+    if ($box) {
+        throw ("This installer is running inside an app container ($($box.Name)): the suite would " +
+               "land in its private LocalCache, invisible to other clients and deleted with the app. " +
+               "Run install.ps1 from a normal PowerShell window, or set GM_HOME to a folder outside AppData " +
+               "(e.g. `$env:GM_HOME = `"$env:USERPROFILE\GrayMatterEnvironment`").")
+    }
+}
 $Venv = Join-Path $GmBase "graymatter\.venv"
 # Le due posizioni precedenti, nell'ordine in cui sono esistite. Un venv non e'
 # spostabile (pyvenv.cfg e gli script hanno path assoluti, e i client MCP

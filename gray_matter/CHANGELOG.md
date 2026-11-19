@@ -1,6 +1,13 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The installer refuses to run inside an app container.** Started from
+  Claude Desktop (an MSIX app), `install.ps1` put the suite in the app's
+  private `LocalCache`: invisible to every other client, and deleted with the
+  app. It now writes a probe file to AppData; if the file shows up in a
+  package's `LocalCache`, it stops and says to run it from a normal PowerShell
+  or to set `GM_HOME` outside AppData. Checked on 2026-11-20 from inside and
+  from outside the container.
 - **A quiet daemon log.** Each call to a tool the clients are not shown
   (forgotten, confirm, export: the tool diet) wrote "Tool 'x' not listed, no
   validation will be performed": 476 lines by 2026-11-19. The worker now drops
