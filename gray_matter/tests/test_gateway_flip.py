@@ -99,6 +99,16 @@ def test_prewarm_dismisses_local_workers_when_daemon_appears(monkeypatch):
     assert dismissed, "daemon apparso: i worker locali vanno dismessi, non lasciati sul DB"
 
 
+def test_daemon_prewarms_its_workers():
+    """The daemon owns the shared workers but never warmed them: the first hook
+    recall paid the model load (2.59 s measured, hook timeout 2.5 s) and the
+    session opener arrived empty (2026-11-19)."""
+    pytest.importorskip("mcp")
+    import inspect
+    from gray_matter import server
+    assert "_prewarm_workers()" in inspect.getsource(server.run_daemon)
+
+
 def test_ipc_shutdown_flushes_workers_before_exiting(monkeypatch):
     """`action: shutdown` usciva con os._exit(0), che salta atexit E la pulizia
     in fondo a _run(): i worker del daemon gli sopravvivevano come writer orfani

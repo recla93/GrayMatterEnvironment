@@ -1852,6 +1852,10 @@ def run_daemon() -> None:
             _heartbeat_monitor(),
             _sleep_monitor(),
             _reap_dead_workers(),
+            # The daemon owns the workers, so warming them is its job: without
+            # this the first hook recall paid the model load (~2.6 s, over the
+            # hook's 2.5 s timeout) and the session opener arrived empty.
+            _prewarm_workers(),
         )
     asyncio.run(_run())
 
