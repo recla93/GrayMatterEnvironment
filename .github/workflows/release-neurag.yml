@@ -1,13 +1,15 @@
 name: Release
 
-# Builds the Windows pyturso wheels (no win_amd64 on PyPI, so we compile them on
-# a GitHub runner that already has Rust + MSVC + Windows SDK), builds the NeuRAG
-# package, and publishes a GitHub Release with all artifacts attached.
+# Builds the NeuRAG package and publishes a GitHub Release with the wheel,
+# the sdist and the Windows pyturso wheel attached.
 #
-# NeuRAG vendors its OWN pyturso wheels (Neurag/vendor/) so it installs the Turso
-# tier with no compiler even when Neuron is not present — the environments are
-# decoupled. This job keeps that vendored set regenerated on every release /
-# pyturso bump. Keep the pin in sync with the [turso] extra in pyproject.toml.
+# The pyturso wheel is the one vendored in neurag/vendor/ (PyPI has no
+# win_amd64 wheel): the same file install.ps1 installs, so the Release and a
+# user's install cannot diverge. It is no longer compiled here: on 2026-11-18
+# a newer rustc on the runner stopped compiling turso_core 0.8.3 (E0308), and
+# the release would have died on a change outside this repo. A pyturso bump
+# rebuilds the wheel by hand (neurag/vendor/README.md); the guard below fails
+# the release when the pin and the vendored wheel disagree.
 on:
   push:
     tags: ["neurag-v*"]
@@ -58,30 +60,9 @@ jobs:
           echo "install.ps1=$ps1  install.sh=$sh  gray_matter/pyproject.toml=$gm"
           [ "$ps1" = "$sh" ] || { echo "::error::install.ps1 ($ps1) e install.sh ($sh) non concordano su GM_VERSION"; exit 1; }
           [ "$ps1" = "$gm" ] || { echo "::error::GM_VERSION e' $ps1 ma Gray Matter in questo albero e' $gm"; exit 1; }
-  # --- 1. Compile pyturso for Windows (no win_amd64 on PyPI → we build it) ---
-  build-pyturso-win:
-    needs: test                      # red tests, no release
-    runs-on: windows-latest          # already has Rust + MSVC + Windows SDK
-    # NIENTE working-directory qui, e nessun checkout: questo job compila
-    # pyturso da PyPI e non tocca un solo file del repo. Col working-directory
-    # ereditato dagli altri job alla migrazione nel contenitore, ogni run
-    # moriva prima di partire -- "the directory name is invalid" -- perche' la
-    # cartella non esiste su un runner senza checkout. wheelhouse/ nasce nella
-    # radice del workspace, dove upload-artifact la cerca gia'.
-    # Una sola build: da 0.7 pyturso esce abi3-py310, una wheel per 3.10-3.14.
-    steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip wheel "pyturso==0.8.3" --no-deps -w wheelhouse
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pyturso-win-abi3
-          path: wheelhouse/*.whl
-
   # --- 2. Build the NeuRAG package + 3. Publish the Release ---
   build-release:
-    needs: build-pyturso-win
+    needs: test                        # red tests, no release
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -102,21 +83,20 @@ jobs:
       - run: pip install build
       - run: python -m build           # dist/*.whl + dist/*.tar.gz
       - run: python -m pip install dist/*.whl && python -c "import neurag; print(neurag.__version__)"
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: pyturso-win-*
-          # Il path di download-artifact e' relativo alla RADICE del workspace:
-          # defaults.run.working-directory vale solo per gli step `run`. Con
-          # `path: dist` le wheel finivano in dist/ mentre `python -m build` --
-          # che il working-directory lo rispetta -- scriveva in neurag/dist/,
-          # ed e' li' che guarda il glob dei files. La Release usciva verde con
-          # solo wheel e sdist, senza le cinque pyturso: proprio gli artefatti
-          # per cui il matrix Windows esiste.
-          path: neurag/dist
-          merge-multiple: true
+      - name: Attach the vendored pyturso wheel (pin and wheel must agree)
+        shell: bash
+        run: |
+          set -eu
+          pin=$(grep -o 'pyturso==[0-9.]*' pyproject.toml | head -1 | cut -d= -f3)
+          whl=$(ls vendor/pyturso-*-win_amd64.whl)
+          echo "pin=$pin  vendored=$whl"
+          case "$whl" in vendor/pyturso-$pin-*) ;; *)
+            echo "::error::pyproject pins pyturso==$pin but vendor/ holds $whl: rebuild it (vendor/README.md)"; exit 1;;
+          esac
+          cp vendor/pyturso-*-win_amd64.whl dist/
       - uses: softprops/action-gh-release@v2
         with:
-          files: neurag/dist/*                # neurag wheel + sdist + pyturso win wheels
+          files: neurag/dist/*                # neurag wheel + sdist + the vendored pyturso win wheel
           generate_release_notes: true
 
       # Il tag arriva sul mirror SOLO ORA, a Release pubblicata. Finche' e'
