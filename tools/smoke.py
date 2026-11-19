@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -351,6 +352,40 @@ def _():
         if len(set(sums.values())) > 1:
             drift[name] = {k: v[:6] for k, v in sums.items()}
     return ("FAIL", drift) if drift else ("PASS", "all copies identical")
+
+
+HOOK_CONFIGS = (HOME / ".claude/settings.json", HOME / ".codex/hooks.json",
+                HOME / ".codex/config.toml", HOME / ".kimi-code/config.toml")
+DISTS = {"gray-matter": "gray-matter", "neuron": "neuron", "neurag": "neurag"}
+
+
+@check("cohesion", "registry = installed versions, hooks reach a live python, no stale suite")
+def _():
+    """The 2026-11-14 incident: an empty GM_HOME reinstalled the old suite under
+    %LOCALAPPDATA%, and nothing said so; the file-equality check above cannot see
+    a hook that points at a venv which is gone, or a registry that lies."""
+    code = ("import json,importlib.metadata as m,sys; "
+            "print(json.dumps({d: m.version(d) for d in sys.argv[1:]}))")
+    got = json.loads(subprocess.run([str(PY), "-I", "-c", code, *DISTS.values()],
+                                    capture_output=True, text=True, timeout=60).stdout)
+    bad = []
+    for key, dist in DISTS.items():
+        reg = json.loads((SUITE / "registry" / f"{key}.json").read_text(encoding="utf-8"))
+        if reg.get("version") != got.get(dist):
+            bad.append(f"{key}: registry {reg.get('version')} != installed {got.get(dist)}")
+        if not Path(reg.get("python") or "").is_file():
+            bad.append(f"{key}: registry python missing")
+    for cfg in (c for c in HOOK_CONFIGS if c.is_file()):
+        text = cfg.read_text(encoding="utf-8", errors="replace").replace("\\\\", "\\")
+        for exe in set(re.findall(r"[A-Za-z]:\\[^\"'\n]*?python\w*\.exe", text)):
+            if not Path(exe).is_file():
+                bad.append(f"{cfg.name}: dead {exe}")
+    if bad:
+        return "FAIL", "; ".join(bad)
+    stale = Path(os.environ.get("LOCALAPPDATA", "")) / "GrayMatterEnvironment"
+    if stale.is_dir() and stale.resolve() != SUITE.resolve():
+        return "WARN", f"an old suite is still in {stale} (live: {SUITE})"
+    return "PASS", ", ".join(f"{k} {v}" for k, v in got.items())
 
 
 def main(argv=None) -> int:
