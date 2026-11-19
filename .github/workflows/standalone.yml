@@ -59,9 +59,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/solo"
           cp -r "$GITHUB_WORKSPACE/${{ matrix.tool }}" "$RUNNER_TEMP/solo/"
           echo "  vicini di casa:"; ls "$RUNNER_TEMP/solo"
+      # --find-links vendor, come install.ps1: PyPI non ha la wheel win_amd64 di
+      # pyturso, e senza la nostra pip la compila da sorgente col Rust del
+      # runner. Il 2026-11-18 un rustc nuovo non compilava piu' turso_core 0.8.3
+      # (E0308 in fts/directory.rs): rosso senza che il repo fosse cambiato.
       - name: Install ONLY ${{ matrix.tool }}
         working-directory: ${{ runner.temp }}/solo/${{ matrix.tool }}
-        run: pip install -e .[dev]
+        run: pip install --find-links vendor -e .[dev]
 
       - name: Gray Matter non deve essere qui
         shell: bash
@@ -123,7 +127,7 @@ jobs:
 
       - name: Install neuron
         working-directory: ${{ runner.temp }}/duo/neuron
-        run: pip install -e .[dev]
+        run: pip install --find-links vendor -e .[dev]   # come sopra: la wheel di pyturso nostra
 
       - name: Install gray_matter
         working-directory: ${{ runner.temp }}/duo/gray_matter
