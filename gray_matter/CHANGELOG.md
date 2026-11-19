@@ -1,6 +1,12 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The daemon warms its workers at start.** Only the stdio gateway ran the
+  prewarm, and it skips it when a daemon exists: nobody warmed the shared
+  workers, so the first recall of a session paid the model load (2.59 s on a
+  daemon idle 90 s) against the hook's 2.5 s timeout and the session opener
+  arrived empty: 4 of 11 real Claude Code openers since 2026-11-09 had no
+  memory at all. After: 0.95 s cold, 1.04 s right after start.
 - The hook no longer injects Neuron's `cache:` line (warm concepts with ↑/·):
   on the same seven failure scenarios a fresh model acted the same without it
   (14/14), and it took ~56 characters on 160 of 191 real recalls. A recall
