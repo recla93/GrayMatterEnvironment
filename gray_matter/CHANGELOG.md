@@ -1,6 +1,11 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The Graphs panel shows Neuron again.** The IPC client refused any
+  response over 1 MB as "invalid response length", and Neuron's export passed
+  it as the memory grew (1.40 MB on 2026-11-19, 527 facts): the panel showed
+  NeuRAG's graph (96 KB) and never Neuron's. The cap is now 64 MB, still a
+  guard against a junk header.
 - **The daemon warms its workers at start.** Only the stdio gateway ran the
   prewarm, and it skips it when a daemon exists: nobody warmed the shared
   workers, so the first recall of a session paid the model load (2.59 s on a

@@ -62,6 +62,16 @@ def test_send_ipc_reassembles_a_response_split_across_segments(_point_cli_at):
     assert cli._send_ipc({"action": "status"}) == big
 
 
+def test_send_ipc_takes_a_response_past_one_megabyte(_point_cli_at):
+    """2026-11-19: the GUI's Graphs panel showed NeuRAG but never Neuron, whose
+    export (1.40 MB) was refused as "invalid response length" by a 1 MB cap."""
+    big = {"facts": ["x" * 100] * 15_000}
+    payload = json.dumps(big).encode("utf-8")
+    assert len(payload) > 1_000_000
+    _point_cli_at(_serve_once(payload))
+    assert cli._send_ipc({"action": "status"}) == big
+
+
 def test_send_ipc_reports_a_malformed_response_instead_of_raising(_point_cli_at):
     """Un frame che promette N byte di JSON e ne consegna spazzatura deve
     diventare un `{"error": ...}` gestibile, non un traceback."""

@@ -133,6 +133,7 @@ def gm_answers(host: str, port: int, timeout: float = 0.4) -> bool:
 IPC_TIMEOUT = 3.0
 IPC_TOOL_TIMEOUT = 60.0
 FAST_CONNECT = 0.5               # opt-in connect timeout for callers that must fail fast (see _send_raw)
+MAX_RESPONSE = 64 * 1024 * 1024  # bytes a response header may announce
 
 
 def _send_ipc(data: dict, timeout: float = IPC_TIMEOUT,
@@ -171,7 +172,10 @@ def _send_raw(data: dict, timeout: float, connect_timeout: "float | None" = None
             if not hdr:
                 return {"error": "no response"}
             resp_len = struct.unpack("!I", hdr)[0]
-            if resp_len <= 0 or resp_len > 1_000_000:
+            # A guard against a junk header, not a size budget: at 1 MB the GUI's
+            # Graphs panel lost Neuron for good once the memory's export passed it
+            # (1.40 MB on 2026-11-19, 527 facts). NeuRAG's was 96 KB, so it showed.
+            if resp_len <= 0 or resp_len > MAX_RESPONSE:
                 return {"error": "invalid response length"}
             resp_data = _recv_exact(s, resp_len)
             if not resp_data:
