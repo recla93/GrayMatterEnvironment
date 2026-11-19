@@ -201,89 +201,146 @@ fine, promote is GM-only anyway (I2).
 on the text of one of its facts, and `brainstorm` on a bug seed surfaces a
 past fix from the vault, not only from Neuron.
 
-## 8. Pattern recognition: an isolated analysis module (2026-11-19)
+## 8. Pattern recognition: an isolated analysis module (2026-11-19, draft)
+
+**Status: a draft to refine with the user.** The cycle below is agreed in
+principle; every stage still needs its definitions, thresholds and a measure.
 
 **The idea (the user's).** A workbench to dig through data and find
-coincidences, recurring occurrences, cycles and footholds ("appigli"):
-financial and other numeric series, historical occurrences, cycles of events.
-It is **analysis of the data being worked**, not recall, and it must stay
-isolated so that neither side adds noise to the other: the analysis never
-reaches everyday recall, and the memory's stimuli, pulse and drift never touch
-the analysis.
+coincidences, recurring occurrences, cycles and footholds ("appigli"): numeric
+series (markets, prices), historical occurrences, cycles of events, the
+behaviour of people and companies observed every day. It is **analysis of the
+data being worked**, not recall, and it stays isolated so that neither side
+adds noise to the other.
 
 **Not the old pattern mode.** That one (removed 2026-09-13, 0 right
-predictions out of 155 turns) tried to predict the agent's next turn. Not
-PIANO-STRATI §G either (procedural layer: situation -> what followed -> outcome).
+predictions out of 155 turns) predicted the agent's next turn from recurring
+concepts. Not PIANO-STRATI §G either (the agent's procedural layer).
 
-**Shape: a separate GM module, not a Neuron context.** A context still shares
-Neuron's engine and its side effects. The module has its own database and two
-engines, with the results in one place:
+### The user's method: a jigsaw puzzle
+
+> You start from the frame: its pieces have fewer sides to match and follow a
+> line. Once the frame is closed, you place the inner pieces: which one fits
+> the other? Is it anomalous, out of routine? Does it break a habit, does it
+> feel out of place? Then links form, and pieces that could not be seen
+> before connect, because the missing piece was exactly that one.
+>
+> An anomaly is not a sure link. When it links to other events that shift the
+> course slightly, they chain to everything else: that is where "something
+> smells here" starts the deep investigation into occurrences and
+> predictions. (The user predicts people, companies and things they observe
+> daily this way, without thinking about it.)
+
+This is a better method than "search every coincidence, then test it":
+comparing each piece with a solid frame makes few comparisons, each with a
+meaning, so the noise falls by construction.
+
+### The cycle (the backbone)
+
+| # | Stage | What it is | How (first idea) |
+|---|---|---|---|
+| 1 | **Frame** | The routine of each entity and series: typical values, cycles, usual sequences, the calendar | STL decomposition, baseline statistics, frequent sequences |
+| 2 | **Frame check** | A crooked frame makes everything look out of place, or nothing | held-out data |
+| 3 | **Out-of-place pieces** | A deviation from the frame, measured: how far, against what. Kept as an **open piece** (pending) until it fits or is discarded | stumpy (discords: the most unusual subsequences), residuals, ruptures (a habit that breaks) |
+| 4 | **The chain** | Small deviations, each below the threshold, that link in sequence: through a shared entity or closeness in time. The signal is the accumulation, not the peak | CUSUM on the series; anomaly chains on the graph |
+| 5 | **"Something smells"** | The chain crosses a threshold, calibrated on shuffled data (a chain that forms in noise too opens nothing) | an **investigation** object holding its chain of evidence |
+| 6 | **Investigation** | Past occurrences of similar chains, what followed them, the missing piece (a link the structure expects and is absent) | graph: communities, bridges, link prediction; event study |
+| 7 | **Prediction** | Written *before*: what, horizon, confidence | `predictions` table |
+| 8 | **Score** | At the horizon, how it went; a per-domain track record | where the user's instinct is reliable, where it is not |
+
+Every new piece is checked against the frame (stage 3) **and against the open
+pieces**: the most valuable alert is "piece X connects open anomalies A and B",
+the moment the user describes as seeing what could not be seen before.
+
+**Two rules that keep it honest.** An anomaly is not a pattern: it becomes
+one only when it connects or recurs, and the module keeps "out of place" and
+"connected" apart. The feeling of "out of place" stays the user's: the module
+measures and ranks, the user judges what matters.
+
+### Application: announcements that move markets (phase 2)
+
+The same cycle on one domain. Frame: how a person usually announces (time,
+channel, tone, topic) and how the market usually reacts. Event: who, exact
+time with time zone, channel, text, and the type and surprise classified by
+the model. Measure: abnormal return net of the market, per speaker x type,
+with a random-date placebo, confounding news excluded, pre-event drift noted,
+held-out years. Live: a feed -> classify -> match confirmed hypotheses ->
+alert with n and hit rate -> the outcome logged, so a pattern that stops
+working loses its score. Out-of-routine announcements are probably the ones
+that matter.
+
+Limits: markets move on big announcements in seconds; the value is context
+(what usually happens, how long it lasts, when it reverts) more than speed.
+Intraday prices and real-time news are mostly paid; one person makes few
+announcements of one type, so every alert shows n. History first, alerts
+second.
+
+### Engines and storage
 
 | Data | Engine | Finds |
 |---|---|---|
-| Relational: people, places, events, dates | graph (networkx; Neuron's typed links as the model) | links, co-occurrences, recurring event types, gaps |
-| Numeric series | statistics (below) | cycles, seasonality, recurring motifs, regime changes, lead-lag |
+| Relational: people, places, events, dates | graph (networkx; Neuron's typed links as the model) | links, chains, recurring event types, gaps, bridges |
+| Numeric series | statistics | routine, cycles, deviations, regime changes, lead-lag |
 | Both | event study: a series aligned around the events' dates | what changes before and after an event |
 
-**Storage.** SQLite as the store: one file, already in the suite. Turso only for
-cloud sync: locally it adds nothing over SQLite (0.8.3: no vector index, no
-full-text search). DuckDB for the analysis: column-oriented, it reads the
-SQLite file directly, no copy, and hands results to pandas. Dates in one form
-(ISO) plus derived columns (weekday, month, quarter) computed at load time.
+SQLite as the store: one file, already in the suite. Turso only for cloud sync:
+locally it adds nothing over SQLite (0.8.3: no vector index, no full-text
+search). DuckDB for the analysis: column-oriented, it reads the SQLite file
+directly and hands results to pandas. Dates in one form (ISO) plus derived
+columns (weekday, month, quarter) computed at load time.
 
 | Table | Holds |
 |---|---|
 | `series`, `observations(series_id, ts, value)` | numeric data |
-| `events(ts, kind, place, text)`, `entities`, `event_entities` | historical and relational data |
-| `hypotheses(statement, method, params, score, train_range, test_range, status)`, `evidence` | every pattern found, always as a hypothesis |
-| `attempts` | every search run, counted |
+| `events(ts, kind, place, text)`, `entities`, `event_entities` | relational data |
+| `frames` | the routine per entity / series, with its check |
+| `pieces` | deviations, open / connected / discarded |
+| `investigations`, `evidence` | chains that crossed the threshold |
+| `predictions` | what, horizon, confidence, outcome |
+| `attempts` | every search run, counted (multiple-comparison correction) |
 
-**Libraries.** pandas (or polars); statsmodels (STL decomposition,
-autocorrelation, Granger, multiple-test correction) and scipy (periodogram,
-peaks) for cycles; **stumpy** (matrix profile) for recurring subsequences and
-anomalies, the core of "recurring occurrences"; ruptures for regime changes;
-a sequential-pattern miner (e.g. prefixspan) for "A then B within N days";
-networkx for the relational side. Heavy (several hundred MB with numba): an
-optional extra of the module, never in the base suite.
+Libraries: pandas (or polars); statsmodels (STL, autocorrelation, CUSUM,
+Granger, Benjamini-Hochberg) and scipy for the series; stumpy for motifs and
+discords; ruptures for regime changes; a sequential-pattern miner for "A then
+B within N days"; networkx for the graph. Heavy (several hundred MB with
+numba): an optional extra of the module, never in the base suite.
 
-**Noise is cut by method, not only by isolation.** In financial data the noise
-is in the data: search enough and something always "works".
-1. **Against chance:** each pattern is scored against shuffled data
-   (permutation test); what shows up shuffled too is noise.
-2. **Held-out data:** found on one part, checked on another.
-3. **The attempts log:** every search counted, so the multiple-comparison
-   correction (Benjamini-Hochberg) knows how many tries were made. Without it
-   no pattern is credible.
-4. **Calendar effects first:** weekday, month end, holidays are the commonest
-   false patterns and the cheapest to rule out.
-5. **A pattern is a hypothesis:** candidate -> tested -> confirmed / rejected,
-   with its evidence and typed links (supports / contradicts).
+**The model reasons, the code computes.** The model classifies texts,
+proposes hypotheses and reads results; it never sees raw rows in its context.
+Confirmed hypotheses move to NeuRAG with their evidence through the existing
+bridges; rejected ones stay as `tried:` so they are not proposed again.
 
-**The model reasons, the code computes.** The model proposes hypotheses and
-reads results; it never sees the raw rows in its context. A thousand price
-rows cost a lot of tokens, a result with its score costs one line: in line
-with the suite's goal. Confirmed hypotheses move to NeuRAG with their
-evidence, through the existing bridges; rejected ones stay as `tried:` so
-they are not proposed again.
+### Repository and place in the suite
 
-**Repository.** A new folder in this monorepo (one more `prefix` in
-`mirror.yml`, published to its own public repo by `git subtree split`, like
-neuron, neurag and gray_matter), so it shares the gate, the isolated instance
-and the tests. Created when the work starts, not before.
+A new folder in this monorepo, one more `prefix` in `mirror.yml`, published
+to its own public repo like neuron, neurag and gray_matter: it shares the gate,
+the isolated instance and the tests. Created when the work starts.
+
+Neuron gains from it through the bridges (confirmed findings, the prediction
+track record), not by absorbing it: the isolation is what keeps both clean.
 
 **Not investment advice.** The module is an analysis tool; a pattern it finds
 is a hypothesis to test, not a decision.
 
+### To refine
+
+- What a frame is per domain, and how long it must be observed before it counts.
+- The distance that makes a piece "out of place", per kind of data.
+- What links two pieces into a chain (shared entity, time window, similarity).
+- The "something smells" threshold and its calibration on shuffled data.
+- What an investigation shows the user, and how a prediction is written.
+- The first domain and a case whose answer the user already knows.
+
 **Gain / loss / worth it.**
-- Gain: a real new use of the suite, on mature libraries; the graph engine,
-  typed links, bridges and the blind judge already exist.
-- Loss: a new product, not an option: a module, a data ingest and a
-  statistics engine to maintain, while the direction is consolidation.
+- Gain: a real new use of the suite with a clear method; less noise by
+  construction; an alert ("this piece connects the open ones") that no
+  coincidence search would give; a track record of the user's own intuition.
+- Loss: a new product, not an option: a module, ingest, frames per domain and
+  a statistics engine to maintain, while the direction is consolidation.
 - Worth it: yes as a direction, **after TODO P0-P3**. First prototype small:
-  SQLite + DuckDB + pandas + stumpy, one domain (historical investigations,
-  where the graph pays most).
+  SQLite + DuckDB + pandas + stumpy, one domain, stages 1-5 only.
 
 **What "better" must mean:** on a case whose answer the user already knows,
-built blind, the known connections come out on top, they survive the shuffled
-baseline and the held-out check, and a blind judge rates most of the other
-findings as worth a look, not noise.
+built blind, the known connections come out as chains above the threshold,
+they do not form on shuffled data, and the predictions written before score
+better than a naive "same as last time".
