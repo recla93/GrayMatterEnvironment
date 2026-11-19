@@ -13,3 +13,7 @@ dist/
 *.db-shm
 *.db-tshm
 *.bak
+
+# Future ideas stay on the developer's disk, never in the repository
+work/design/FutureGMIdeas.md
+work/design/IDEAS.md

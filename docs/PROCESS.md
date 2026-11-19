@@ -19,8 +19,10 @@ disagrees with the code is the doc's bug.
 |---|---|
 | What shipped, and why | `CHANGELOG.md` of each project |
 | What was decided, and what was rejected | the ADRs in `work/design/` |
-| What is set aside for later | `work/design/IDEAS.md` |
 | Everything else | `git log` |
+
+Ideas for future work are kept off the repository: it holds only work that is
+in progress, functional or present.
 
 A single hand-maintained compendium used to hold all of this. It went stale
 within a month, because nothing forced an update: retired on 2026-10-26. The
