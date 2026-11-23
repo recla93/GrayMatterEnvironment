@@ -110,6 +110,16 @@ def test_health_asks_the_daemon_what_really_runs(monkeypatch):
     assert got.get("neurag", ("", ""))[1] == ""
 
 
+def test_a_sleeping_worker_is_the_gateways_not_stopped(monkeypatch):
+    """Idle workers sleep until the next call. Shown as "stopped" they got a
+    Start button that launched a second server outside the gateway."""
+    from gray_matter import cli, webgui
+    monkeypatch.setattr(cli, "_send_ipc", lambda msg, timeout=0, connect_timeout=None:
+                        {"neuron": {"status": "sleeping"}, "neurag": {"status": "sleeping"}})
+    got = {t["key"]: (t["status"], t["via"]) for t in webgui.Api().health_state()["tools"]}
+    assert got.get("neuron") == ("sleeping", "gateway")
+
+
 def test_health_without_daemon_keeps_the_old_answer(monkeypatch):
     from gray_matter import cli, webgui
     monkeypatch.setattr(cli, "_send_ipc", lambda *a, **k: {"error": "down"})

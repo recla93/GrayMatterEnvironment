@@ -21,6 +21,10 @@
   `Include?` read ended the run under `set -e` without a tty. Proven by a live
   reinstall with `-NonInteractive`, no `-Yes`, no `-Force`: GM and NeuRAG
   refreshed, Neuron kept, `INSTALL COMPLETE`.
+- **Idle workers no longer read "stopped" in the control center.** The daemon
+  puts Neuron and NeuRAG to sleep when unused; the overview showed them
+  stopped, with a Start button that would launch a second server outside the
+  gateway. They now read "idle", managed by the gateway, with no button.
 - **A failed tool brings what memory knows about the error (P3.11).** The
   recall ran once per user message, so a stored fix arrived a message late: on
   2026-11-17 OpenCode's web search returned 402 and the model gave up with the

@@ -846,8 +846,14 @@ class Api:
             if daemon is not None:
                 if env["key"] == "gray-matter":
                     health["status"], via = "running", "daemon"
-                elif (daemon.get(env["key"]) or {}).get("status") == "alive":
-                    health["status"], via = "running", "gateway"
+                else:
+                    # "sleeping" = idle, woken by the next call: the panel read
+                    # it as "stopped" and offered a Start that would spawn a
+                    # second, unmanaged server next to the gateway's.
+                    st = (daemon.get(env["key"]) or {}).get("status")
+                    if st in ("alive", "sleeping"):
+                        health["status"] = "running" if st == "alive" else "sleeping"
+                        via = "gateway"
 
             tools.append({
                 "key": env["key"],

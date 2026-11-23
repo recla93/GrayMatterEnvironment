@@ -39,6 +39,7 @@
   .health-item .dot{width:7px;height:7px;border-radius:50%;margin:0}
   .health-item .val{color:var(--fg);font-family:var(--mono);font-size:11px}
   .health-item.running .dot{background:var(--ok)}
+  .health-item.sleeping .dot{background:var(--accent)}
   .health-item.stopped .dot,.health-item.unknown .dot{background:var(--dim)}
   .health-item.error .dot{background:var(--err)}
   .hb{width:20px;height:20px;border:none;border-radius:50%;cursor:pointer;font-size:10px;line-height:1;
@@ -456,7 +457,8 @@ const STRINGS = {
     ov_running: "attivo",
     ov_stopped: "fermo",
     ov_unknown: "stato sconosciuto",
-    ov_via_gateway: "attivo dentro il gateway Gray Matter",
+    ov_sleeping: "in attesa",
+    ov_via_gateway: "gateway (si avvia da solo)",
     ov_install: "Installa ",
     ov_open: "Comandi",
     ov_mem: "Memoria e conoscenza",
@@ -664,7 +666,8 @@ const STRINGS = {
     ov_running: "running",
     ov_stopped: "stopped",
     ov_unknown: "unknown state",
-    ov_via_gateway: "running inside the Gray Matter gateway",
+    ov_sleeping: "idle",
+    ov_via_gateway: "gateway (starts on demand)",
     ov_install: "Install ",
     ov_open: "Commands",
     ov_mem: "Memory and knowledge",
@@ -1659,7 +1662,7 @@ async function overviewView(body){
     const h = health[env.key] || {};
     const st = env.installed ? (h.status || "unknown") : "off";
     const c = card("", tdot(env.key), el("span", {}, env.label), el("span", {class:"sp"}),
-                   el("span", {class:"hint"}, env.installed ? T("ov_" + (st === "running" ? "running" : st === "stopped" ? "stopped" : "unknown")) : T("not_installed")));
+                   el("span", {class:"hint"}, env.installed ? T("ov_" + (["running", "sleeping", "stopped"].includes(st) ? st : "unknown")) : T("not_installed")));
     c.append(el("div", {class:"hint", style:"margin-bottom:6px"}, env.subtitle));
     if (env.installed){
       irow(c, L("Versione", "Version"), env.version || "?");
