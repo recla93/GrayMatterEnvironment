@@ -556,7 +556,8 @@ def test_the_install_wires_the_memory_hook(monkeypatch, tmp_path):
     hook = home / ".claude" / "hooks" / "gm_memhook.py"
     assert hook.exists() and str(hook) in deployed     # the uninstall deletes it
     body = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8-sig"))
-    for event, mode in (("UserPromptSubmit", "recall"), ("Stop", "save")):
+    for event, mode in (("UserPromptSubmit", "recall"), ("Stop", "save"),
+                        ("PostToolUseFailure", "failure")):       # P3.11
         ours = [c for c in _cmds(body, event) if "gm_memhook" in c]
         assert len(ours) == 1, f"{event}: {ours}"
         assert f' -I "{hook}" {mode}' in ours[0], ours[0]
@@ -584,7 +585,7 @@ def test_uninstall_scrubs_every_event_we_registered(monkeypatch, tmp_path):
     executor._scrub_claude_settings(dry_run=False)
 
     body = json.loads(settings.read_text(encoding="utf-8-sig"))
-    for event in ("SessionStart", "UserPromptSubmit", "PreCompact", "Stop"):
+    for event in ("SessionStart", "UserPromptSubmit", "PreCompact", "Stop", "PostToolUseFailure"):
         left = [c for c in _cmds(body, event)
                 if any(m in c for m in ("neuron_sessionstart_hook",
                                         "neuron_reminder_hook", "gm_memhook"))]

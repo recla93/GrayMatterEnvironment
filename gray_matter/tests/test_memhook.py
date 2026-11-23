@@ -113,6 +113,60 @@ def test_output_is_the_userpromptsubmit_shape(monkeypatch, capsys):
     assert out["hookSpecificOutput"]["additionalContext"] == "contesto"
 
 
+# --- PostToolUseFailure (P3.11): the recall on a failed tool ----------------
+
+PRE_TURN = ('[neuron] ctx=backend\n<recalled-memory note="x">\nfacts: [fix] 21/11: exit 255 is '
+            'Select-Object -First cutting the pipe (exit code) #47df9af4 | [fact] a fact about '
+            'tools (tool) #11111111 | [procedure] web search failing (HTTP 402 or quota): fetch '
+            'duckduckgo html (websearch) #3a69036b | links:a-[m]->b | nodes:a(0)\n</recalled-memory>')
+
+
+def test_a_failure_recalls_on_the_error_and_the_command(monkeypatch):
+    sent = []
+    monkeypatch.setattr(mh, "_ipc", lambda msg: sent.append(msg) or PRE_TURN)
+    out = mh.failure({"tool_name": "PowerShell", "error": "Exit code 255\nusage: cli",
+                      "tool_input": {"command": "python -m x --help | Select-Object -First 40"}})
+    assert sent[0]["tool"] == "pre_turn" and "Select-Object -First 40" in sent[0]["args"]["topic"]
+    assert "Exit code 255" in sent[0]["args"]["topic"] and "failed" not in sent[0]["args"]["topic"]
+    assert "#47df9af4" in out, "the fix sharing the exit code and the command"
+    assert "#3a69036b" not in out, "a procedure that shares nothing with this error"
+    assert "#11111111" not in out and "links:" not in out, "a plain fact and the graph are noise here"
+    assert out.startswith("<recalled-memory") and len(out) <= mh.FAIL_BUDGET
+    web = mh.failure({"tool_name": "websearch", "error": "HTTP 402 Payment Required",
+                      "tool_input": {"query": "pyturso wheel"}})
+    assert "#3a69036b" in web and "#47df9af4" not in web
+
+
+def test_a_fact_is_tied_to_the_error_not_to_the_project_vocabulary():
+    error = {"exit", "255"}
+    assert mh.tied({"255", "select-object"}, error)
+    assert not mh.tied({"select-object"}, {"select-object"}), "one plain word is not enough"
+    assert not mh.tied({"c:/users/recla/gme", "utf-8"}, {"exit"}), "paths and the command's own words"
+    assert mh.tied({"402"}, {"402"}), "a code counts twice"
+
+
+def test_a_failure_with_nothing_known_or_from_memory_says_nothing(monkeypatch):
+    sent = []
+    monkeypatch.setattr(mh, "_ipc", lambda msg: sent.append(msg) or "[neuron] nodes:a(0)")
+    assert mh.failure({"tool_name": "Bash", "error": "Exit code 1", "tool_input": {"command": "grep -rn foo ."}}) == ""
+    assert mh.failure({"tool_name": "mcp__gray-matter__store_turn", "error": "boom boom boom"}) == ""
+    assert mh.failure({"tool_name": "Bash", "error": "Exit code 1 aborted", "is_interrupt": True}) == ""
+    assert len(sent) == 1, "memory's own tools and interrupts never ask the daemon"
+
+
+def test_the_failure_output_is_the_posttoolusefailure_shape(monkeypatch):
+    import io
+    import sys
+    monkeypatch.setattr(mh, "failure", lambda p: "ricordo")
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b'{"error": "x"}')))
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="utf-8"))
+    mh.main(["memhook", "failure"])
+    sys.stdout.flush()
+    out = json.loads(buf.getvalue().decode("utf-8"))["hookSpecificOutput"]
+    assert out == {"hookEventName": "PostToolUseFailure", "additionalContext": "ricordo"}
+
+
 def test_recall_is_one_request_with_the_session(monkeypatch):
     sent = []
     monkeypatch.setattr(mh, "_ipc", lambda msg: sent.append(msg) or "x" * 5000)

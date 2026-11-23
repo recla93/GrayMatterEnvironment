@@ -546,6 +546,9 @@ _REMINDER_EVENTS = (("UserPromptSubmit", None), ("PreCompact", "manual|auto"))
 # would import the SOURCE and register that path instead.
 _MEMHOOK = "gm_memhook.py"
 _MEMHOOK_EVENTS = (("UserPromptSubmit", "recall"), ("Stop", "save"))
+# P3.11: the recall on a failed tool call. Claude Code only: Codex and Kimi have
+# no such event (OpenCode gets it from the plugin's `session.tool.failed`).
+_MEMHOOK_FAILURE = ("PostToolUseFailure", "failure")
 
 
 def _upsert_hook_group(cfg: dict, event: str, matcher: str | None,
@@ -628,7 +631,7 @@ def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
     memhook_dest = dest.parent / _MEMHOOK
     deployed = [str(dest), str(memhook_dest)]
     if dry_run:
-        return deployed, "hooks copied + SessionStart/UserPromptSubmit/Stop registered"
+        return deployed, "hooks copied + SessionStart/UserPromptSubmit/Stop/PostToolUseFailure registered"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
     shutil.copy2(Path(__file__).with_name("memhook.py"), memhook_dest)
@@ -648,7 +651,7 @@ def _deploy_claude_code(src: Path, dry_run: bool) -> tuple[list[str], str]:
         if _remove_hook_groups(cfg, event, _REMINDER_HOOK[:-3]):
             changed = True
             added.append(f"-{event}(old reminder)")
-    for event, mode in _MEMHOOK_EVENTS:
+    for event, mode in (*_MEMHOOK_EVENTS, _MEMHOOK_FAILURE):
         # -I: never import from the current folder (see memhook.py docstring).
         if _upsert_hook_group(cfg, event, None, _MEMHOOK[:-3],
                               f'"{sys.executable}" -I "{memhook_dest}" {mode}'):
@@ -1043,7 +1046,7 @@ def _scrub_claude_settings(dry_run: bool, settings: "Path | None" = None) -> Non
         return
     markers = ("neuron_sessionstart_hook", _REMINDER_HOOK[:-3], _MEMHOOK[:-3])
     dirty = False
-    for event in ("SessionStart", *(e for e, _ in _REMINDER_EVENTS), "Stop"):
+    for event in ("SessionStart", *(e for e, _ in _REMINDER_EVENTS), "Stop", _MEMHOOK_FAILURE[0]):
         groups = (cfg.get("hooks") or {}).get(event)
         if not groups:
             continue

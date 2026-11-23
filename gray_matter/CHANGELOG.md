@@ -1,6 +1,19 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **A failed tool brings what memory knows about the error (P3.11).** The
+  recall ran once per user message, so a stored fix arrived a message late: on
+  2026-11-17 OpenCode's web search returned 402 and the model gave up with the
+  DuckDuckGo procedure in memory. `memhook failure` now runs on Claude Code's
+  `PostToolUseFailure` (registered by the install, removed by the uninstall) and,
+  in the OpenCode plugin, on `session.tool.failed`, shown at the next model call
+  of the same turn. It searches the tool, the error and the command, and injects
+  at most two fixes, procedures or decisions that share with the error a
+  distinctive word, a code counting twice, paths not counting. Replayed on the
+  63 real tool errors of this PC since 2026-11-01: the ten `Select-Object -First`
+  exit-255 cases get their fix, one BOM traceback the BOM fix, the other 52
+  nothing; the 402 gets the DuckDuckGo procedure. Codex and Kimi have no such
+  event.
 - **The installer refuses to run inside an app container.** Started from
   Claude Desktop (an MSIX app), `install.ps1` put the suite in the app's
   private `LocalCache`: invisible to every other client, and deleted with the

@@ -1,5 +1,9 @@
 # Changelog — NeuRAG
 
+## Unreleased
+- **The OpenCode plugin recalls on a failed tool** (the same file as Neuron's,
+  see Gray Matter's changelog, P3.11).
+
 ## 1.9.1 (2026-11-16)
 With Gray Matter 1.10.0 and Neuron 6.12.0.
 - **The bench gap is explained (0.933 against P5's 0.967).** It is all in q20, a
