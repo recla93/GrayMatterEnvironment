@@ -201,6 +201,71 @@ The blind judge agrees with the author's reading except on one message: "Prima
 il gate unico", where it prefers the two gate results (state) to the smoke
 procedure plus one result. That was the one the author had marked as arguable.
 
+## Blind bench (2026-11-23)
+
+The set v3 was chosen and labelled by its author. This one is neither:
+
+- **Messages:** every distinct user message of this PC's Claude Code
+  transcripts from 2026-11-01 to 2026-11-23, all projects, no keyword filter
+  (a filter on task words would favour the concept bonus being measured): 141,
+  none shared with v3 (those came from the other PC).
+- **Labels:** a separate model saw only the procedures' text and each message,
+  with v3's rule ("the steps without which the task would be rebuilt"), and
+  wrote them before any run. 9 messages need a procedure; 132 need none.
+- **Memory:** v3's 41 facts plus the 11 live procedures with their real
+  concepts (18 procedures).
+- `run.py` gained `quiet`: real messages that need no procedure, and how many
+  procedures are shown on them. `off_topic` (invented messages) cannot see that
+  cost. The set holds the user's messages, so it stays out of the repo.
+
+| Memory | expected found | full | procedures on the 132 quiet messages |
+|---|---|---|---|
+| bench, 52 facts | 10/14 (71%) | 6/9 | 40, on 33 messages (25%) |
+| copy of the real memory, 556 facts | 2/3 scorable | — | **7, on 7 messages (5%)** |
+
+The bench's 25% is its small memory: with 52 facts a procedure has few rivals.
+On the real memory the cost is 5%, and three of the seven are plausible (a
+release plan gets the release order; two install messages get the MSIX
+reinstall).
+
+**What the real memory lacks is content, not recall.** Six of the nine
+messages expect a procedure that exists only in the bench set: the gate before
+a push (q3: "Sì, pusha", "completa, poi pusha"), commit only after real use
+(q4), how to measure a recall change (q5). The live memory never received
+them: the D5 migration moved the habits, and v3's procedures were written for
+the bench. On "Vai di bench" the real memory brings the NeuRAG bench diagnosis
+(`#d05724fb`), the only procedure it has about a bench.
+
+Together with v3 the task messages are 23 (14 author-labelled, 9 blind).
+
+**Then stored** (2026-11-23, rewritten to today's gate and in the playbook's
+"When ...:" form): the gate before a push (`#fe478fe4`), commit after real use
+(`#d1576384`), measuring a recall change (`#46c8873a`). Same blind labels, a
+fresh copy of the real memory:
+
+| | expected procedures found | quiet messages with a procedure |
+|---|---|---|
+| before | 2 of 3 scorable | 7/132 |
+| after | **6 of 10** scorable | 10/132 |
+
+Found now: the gate on "Sì, pusha" and "completa, poi pusha", the commit
+procedure on a commit request, the recall measure on "Vai di bench" (beside the
+NeuRAG bench diagnosis). The three new quiet ones are close calls (a commit
+request in another project, a state question that mentions a past push).
+Still missed: a request to "fine-tune the recall" names no bench; one message
+asks for test, merge, push and release together, three procedures where K is 2.
+
+**Two traps of the measure, not of the recall.** A first run read "Sì, pusha"
+and "Vai di bench" as misses, and blamed the Italian form of an English verb.
+Wrong on both: `_names` already takes an English stem with an Italian ending
+(*pusha*, *pushato*, *committare*: a 3-4 letter stem takes up to 4 more
+letters), since 2026-11-08. "Sì, pusha" was the first message of the run, sent
+before the recall vectors were built (empty answer); on "Vai di bench" the
+800-character budget cut the second procedure after its text and before its
+`#id`. A measure through the daemon warms up first and counts a fact as shown
+by its first 40 characters, as `run.py` does — the replay procedure
+(`#86a67962`) already warned about the cut id.
+
 ## Not adopted: a reply-language clause in the memory frame (2026-11-17)
 
 Memory is English by rule; in this session the assistant drifted into English
