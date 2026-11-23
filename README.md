@@ -15,6 +15,10 @@ Three cooperating MCP projects, one memory ecosystem for AI agents.
 also live on their own, and you can install any of them from there. What you
 cannot do is develop them there: see [Where the code lives](#where-the-code-lives).
 
+> **AI agent asked to install this?** Read [gray_matter/INSTALL-AI.md](gray_matter/INSTALL-AI.md)
+> first. Ask the user which combination they want (full suite, Neuron + GM,
+> NeuRAG + GM, or one tool alone) before running any installer.
+
 ---
 
 ## What is Gray Matter?

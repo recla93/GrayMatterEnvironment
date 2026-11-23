@@ -1,6 +1,11 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **`INSTALL-AI.md` makes an AI agent ask first**: NeuRAG + GM or NeuRAG
+  alone, then the matching non-interactive command. Inside the umbrella repo it
+  sends the agent to Gray Matter's, which covers the whole suite.
+- **`install.ps1` no longer dies under an AI agent.** Same fix as Gray
+  Matter's installer (`Test-CanPrompt`, `Read-Answer`).
 - **The OpenCode plugin recalls on a failed tool** (the same file as Neuron's,
   see Gray Matter's changelog, P3.11).
 

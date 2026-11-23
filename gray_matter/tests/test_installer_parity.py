@@ -219,6 +219,18 @@ SH_FEATURES = {
 
 
 @pytest.mark.parametrize("project", PRESENT)
+def test_no_prompt_can_end_an_agent_install(project):
+    """An AI agent runs PowerShell -NonInteractive: a bare Read-Host throws
+    there, and under EAP=Stop the whole install died at the mode question.
+    $Ask must see that (Test-CanPrompt), and every Read-Host must be caught."""
+    ps1 = _read(project, ".ps1")
+    assert "$Ask = ((Test-CanPrompt)" in ps1, f"{project}: $Ask ignores a console-less host"
+    bare = [ln.strip() for ln in ps1.splitlines()
+             if "Read-Host" in ln and not ln.lstrip().startswith("#") and "try {" not in ln]
+    assert not bare, f"{project}/install.ps1: uncaught prompt(s): {bare}"
+
+
+@pytest.mark.parametrize("project", PRESENT)
 @pytest.mark.parametrize("why,token", sorted(PS1_FEATURES.items()))
 def test_every_ps1_has_every_feature(project, why, token):
     assert token in _read(project, ".ps1"), f"{project}/install.ps1 is missing {why}"

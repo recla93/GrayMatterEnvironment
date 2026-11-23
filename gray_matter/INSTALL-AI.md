@@ -1,38 +1,121 @@
-# INSTALL-AI — Gray Matter (full suite: GM + bundled Neuron + NeuRAG)
+# INSTALL-AI — Gray Matter suite (GM + Neuron + NeuRAG)
 
-> Instructions for an AI agent. Run in order, stop at the first error.
-> This repo BUNDLES both tools as subdirectories (`neuron/`, `neurag/`) —
-> the zip is self-contained. Model: MCP clients talk ONLY to `gray-matter`
-> (the gateway); the tools run as GM-managed workers.
+> Instructions for an AI agent asked to install this suite. This file is the
+> single entry point: `neuron/INSTALL-AI.md` and `neurag/INSTALL-AI.md` send
+> you here.
 
-## 1. Install (one step — the unified installer does everything)
+## Why you must not just run the installer
 
-```bash
-sh install.sh          # macOS/Linux   (Windows: install.cmd / install.ps1)
+The installers ask the human questions with an interactive prompt (which
+tools, which embedding model, what to do with an existing install). When you
+run them, nobody sees those prompts: the installer either takes the default
+silently or fails on the prompt. So **you** ask the questions in chat, then run
+the installer non-interactively (`GM_YES=1`) with the answers as flags.
+
+## 1. Ask the user — before running anything
+
+**Question 1 — what to install.** Always ask; never pick for them.
+
+| # | Choice | What the user gets |
+|---|---|---|
+| 1 | **Full suite** (recommended) | GM gateway + Neuron (memory) + NeuRAG (knowledge base), bridges between them, GUI, session hooks |
+| 2 | **Neuron + Gray Matter** | persistent memory behind the gateway, with hooks and GUI; no knowledge base |
+| 3 | **NeuRAG + Gray Matter** | knowledge base behind the gateway, with GUI; no memory, no session hooks |
+| 4 | **Neuron alone** | memory only, registered directly in the MCP clients; no GUI, no bridges |
+| 5 | **NeuRAG alone** | knowledge base only, registered directly; no GUI, no bridges |
+
+Without GM the user loses: bridges between Neuron and NeuRAG, neighbor
+auto-surface, the GUI control center, automatic registration of the gateway.
+
+**Question 2 — embedding model.** Only for choices that include Neuron (1, 2, 4).
+Changing it later means re-embedding the whole store, so ask.
+
+| # | Model | Size | Note |
+|---|---|---|---|
+| 1 | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 220 MB | multilingual (EN+IT), default |
+| 2 | `sentence-transformers/all-MiniLM-L6-v2` | 90 MB | English only, smallest |
+| 3 | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | 1.0 GB | multilingual, stronger |
+| 4 | `intfloat/multilingual-e5-large` | 2.2 GB | multilingual, best, heavy |
+
+**Question 3 — only if a previous install exists.** Look for the venv
+`<base>/GrayMatterEnvironment/graymatter/.venv` (`<base>` = `GM_HOME` if set,
+else `%LOCALAPPDATA%` on Windows, `$XDG_DATA_HOME` or `~/.local/share` on
+Linux/macOS). If it
+exists, ask:
+
+| Choice | Flag | Effect |
+|---|---|---|
+| Refresh the code | `-Force` / `--force` | reinstalls the code; data, settings, registrations kept |
+| Rebuild the venv | `-Clear` / `--clear` | deletes the venv and rebuilds it; data kept |
+| Leave it | — | do not run the installer |
+
+Never offer a wipe. Deleting memory and knowledge is for the human to do by
+hand (`gray-matter uninstall`, interactive).
+
+## 2. Run the matching command
+
+Run from the folder of the repo you were given. In the umbrella repo the three
+tools are siblings: `gray_matter/`, `neuron/`, `neurag/`. Add the embedding
+model and the Question 3 flag to the command.
+
+**Windows (PowerShell):**
+
+| # | Command |
+|---|---|
+| 1 | `$env:GM_YES="1"; .\gray_matter\install.ps1 -EmbedModel <model>` |
+| 2 | `$env:GM_YES="1"; $env:GM_NO_NEURAG="1"; .\gray_matter\install.ps1 -EmbedModel <model>` |
+| 3 | `$env:GM_YES="1"; $env:GM_NO_NEURON="1"; .\gray_matter\install.ps1` |
+| 4 | `$env:GM_YES="1"; .\neuron\install.ps1 --no-gm -EmbedModel <model>` |
+| 5 | `$env:GM_YES="1"; .\neurag\install.ps1 --no-gm` |
+
+**macOS / Linux:**
+
+| # | Command |
+|---|---|
+| 1 | `GM_YES=1 GM_EMBED_MODEL=<model> sh gray_matter/install.sh` |
+| 2 | `GM_YES=1 GM_NO_NEURAG=1 GM_EMBED_MODEL=<model> sh gray_matter/install.sh` |
+| 3 | `GM_YES=1 GM_NO_NEURON=1 sh gray_matter/install.sh` |
+| 4 | `GM_YES=1 sh neuron/install.sh --no-gm --embed-model <model>` |
+| 5 | `GM_YES=1 sh neurag/install.sh --no-gm` |
+
+The install takes minutes (it downloads Python if missing, and the embedding
+model): run it in the background and wait for `INSTALL COMPLETE`.
+
+### Windows: when you run inside Claude Desktop or another MSIX app
+
+`install.ps1` refuses to run inside an MSIX app container: writes to AppData
+there are redirected to a private copy the other apps never see. If it stops
+with that message, do not set `GM_HOME` just for this run: the installer does
+not make it persistent, so code and data would end up in two different roots.
+Launch the installer outside the container, as a normal process:
+
+```powershell
+$cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:GM_YES=''1''; & ''<repo>\gray_matter\install.ps1'' *> ''<log file>''"'
+Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
 ```
 
-What it does: finds/bootstraps Python 3.10+ → one shared venv → installs GM +
-bundled Neuron + NeuRAG (pyturso wheels from `neuron/vendor`, fastembed
-best-effort) → `gray-matter install` (registers ONLY the gateway in every
-detected MCP client with `.bak` backups, deploys session hooks, writes the
-manifest) → Desktop GUI shortcut → opens the control center.
+Then follow the log file until `INSTALL COMPLETE`. Add the same env vars and
+flags of the chosen row inside the quoted command.
 
-## 2. Verify
+## 3. Verify and report
 
 ```bash
-gray-matter doctor    # only gray-matter in clients; warns if vector tier degraded
+gray-matter doctor    # only gray-matter in the clients; warns if the vector tier is degraded
 gray-matter ping
-python -m pytest neuron/tests gray_matter/tests neurag/tests -q
 ```
 
-Restart your AI apps to load the gateway.
+For a standalone install (4, 5) there is no `gray-matter`: check that the tool
+is listed in the client's MCP config.
 
-## 3. Rollback / removal
+Tell the user what was installed, then: **restart the AI apps** so they load
+the new MCP server.
+
+## 4. Rollback / removal
 
 ```bash
 gray-matter uninstall --dry-run
 gray-matter uninstall            # interactive: asks BEFORE touching memory
 ```
 
-User memory (graphs, knowledge.db, bridges) is NEVER deleted without explicit
-consent. Spec: `INSTALLER-UX` in the docs; paths: `paths.py`.
+User memory (graphs, knowledge.db, bridges) is never deleted without explicit
+consent. Spec: `INSTALLER-UX.md`; paths: `gray_matter/paths.py`.

@@ -1,6 +1,26 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **An AI agent asks the user what to install.** The installers ask with
+  `Read-Host`, which an agent's non-interactive PowerShell cannot answer: the
+  prompt fails, or the default is taken without the user seeing the choice.
+  `INSTALL-AI.md` is now the single entry point for agents: it lists the five
+  combinations (full suite, Neuron + GM, NeuRAG + GM, Neuron alone, NeuRAG
+  alone), the embedding model and the repair choices as questions for the
+  user, then the matching `GM_YES=1` command for Windows and macOS/Linux, and
+  how to launch from outside an MSIX container. The root README points agents
+  to it.
+- **No prompt can end an install run by an agent.** `$Ask` asked only
+  `UserInteractive`, which stays true in an agent's `-NonInteractive`
+  PowerShell: there `Read-Host` throws, and under `EAP=Stop` Neuron's and
+  NeuRAG's installers died at the mode question. `Test-CanPrompt` (same in the
+  three `install.ps1`) also checks a redirected stdin and `-NonInteractive`,
+  and `Read-Answer` catches the prompt that still fails (a console-less GUI
+  launch). The existing-install menu now honours `-Yes`/`GM_YES` too. In
+  `install.sh`, coupled mode ignored `GM_NO_NEURON`/`GM_NO_NEURAG` and its
+  `Include?` read ended the run under `set -e` without a tty. Proven by a live
+  reinstall with `-NonInteractive`, no `-Yes`, no `-Force`: GM and NeuRAG
+  refreshed, Neuron kept, `INSTALL COMPLETE`.
 - **A failed tool brings what memory knows about the error (P3.11).** The
   recall ran once per user message, so a stored fix arrived a message late: on
   2026-11-17 OpenCode's web search returned 402 and the model gave up with the

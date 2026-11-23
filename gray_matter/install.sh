@@ -317,13 +317,15 @@ if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
     # Detect other peers as siblings of the calling peer's parent
     PEER_PARENT=$(dirname "$GM_PEER_DIR")
     OTHER_PEERS=""
+    # GM_NO_<PEER> holds here too, as in install.ps1: an agent that chose
+    # "Neuron + GM" sets GM_NO_NEURAG and must not get NeuRAG anyway.
     case "$PEER_LABEL" in
         neuron|Neuron)
-            _d=$(find_peer_in neurag "$PEER_PARENT" 2>/dev/null || true)
+            [ -z "${GM_NO_NEURAG:-}" ] && _d=$(find_peer_in neurag "$PEER_PARENT" 2>/dev/null || true) || _d=""
             [ -n "$_d" ] && OTHER_PEERS="$_d:NeuRAG"
             ;;
         neurag|Neurag)
-            _d=$(find_peer_in neuron "$PEER_PARENT" 2>/dev/null || true)
+            [ -z "${GM_NO_NEURON:-}" ] && _d=$(find_peer_in neuron "$PEER_PARENT" 2>/dev/null || true) || _d=""
             [ -n "$_d" ] && OTHER_PEERS="$_d:Neuron"
             ;;
     esac
@@ -337,10 +339,17 @@ if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
             echo ""
             echo "  $_label source found alongside $PEER_LABEL."
         fi
+        # No tty or --yes: include (the recommended answer), as install.ps1.
+        # A bare `read` on EOF returns 1, and set -e ended the install there.
+        if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then
+            echo "  Including $_label (non-interactive; set GM_NO_$(echo "$_label" | tr '[:lower:]' '[:upper:]')=1 to skip)."
+            install_peer "$_dir" "$_label"
+            continue
+        fi
         printf "  [Y]es — add %s to the suite\n" "$_label"
         printf "  [N]o  — keep %s standalone\n" "$PEER_LABEL"
         printf "  Include %s? [Y] " "$_label"
-        read -r _ans
+        read -r _ans || _ans=""
         case "$_ans" in
             n|N|no|NO)
                 echo "  Skipping $_label."

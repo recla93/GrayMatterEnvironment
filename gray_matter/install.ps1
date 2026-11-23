@@ -458,7 +458,21 @@ $VPy = Join-Path $Venv "Scripts\python.exe"
 # string "0" is TRUE (only "" is false), so `-not $env:GM_YES` silenced the
 # prompts for whoever set GM_YES=0 to ask for them. Same contract as the sh
 # side (`[ "${GM_YES:-0}" = "1" ]`).
-$Ask = ([Environment]::UserInteractive -and -not $Force -and
+# Test-CanPrompt is the floor under GM_YES: an AI agent's PowerShell runs
+# -NonInteractive (Read-Host throws, and EAP=Stop ends the install) or with
+# stdin redirected (Read-Host reads EOF or hangs). Neither shows in
+# UserInteractive. Same function in neuron/ and neurag/install.ps1.
+function Test-CanPrompt {
+    if ([Console]::IsInputRedirected) { return $false }
+    if ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' }) { return $false }
+    return [Environment]::UserInteractive
+}
+# A console-less GUI launch (CreateNoWindow) still gets past Test-CanPrompt and
+# Read-Host throws there: "" is every prompt's default answer.
+function Read-Answer([string]$Prompt) {
+    try { return (Read-Host $Prompt) } catch { return "" }
+}
+$Ask = ((Test-CanPrompt) -and -not $Force -and
         ($env:GM_YES -ne "1") -and ($args -notcontains "-Yes"))
 # pip self-upgrade is non-critical: never let it abort the install.
 Invoke-Pip install --upgrade pip --quiet | Out-Null
@@ -592,13 +606,14 @@ function Prompt-InstallChoice([string]$label, [string]$ver, [string]$module, [st
     # throws, and ErrorActionPreference=Stop would abort the whole install. The
     # UserInteractive gate is deliberately NOT back (it was wrong: it is true in
     # that very case); catching the failure delivers the documented "skip".
-    try { $ans = Read-Host "Choice" }
+    # -Yes / GM_YES / no console: the same answer as a failed prompt.
+    try { if (-not $Ask) { throw "not asking" }; $ans = Read-Host "Choice" }
     catch {
         if ($drift.state -eq "differ") {
-            Write-Host "  (no console for the prompt - but the installed code is stale: refreshing)"
+            Write-Host "  (not asking - but the installed code is stale: refreshing)"
             return "reinstall"
         }
-        Write-Host "  (no console for the prompt - keeping the current install)"
+        Write-Host "  (not asking - keeping the current install; -Force refreshes it)"
         return "skip"
     }
     switch -Regex ($ans) {
@@ -790,7 +805,7 @@ if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml
         }
         Write-Host "  [Y]es — add $($op.label) to the suite"
         Write-Host "  [N]o  — keep $PeerLabel standalone"
-        $ans = Read-Host "  Include $($op.label)? [Y]"
+        $ans = Read-Answer "  Include $($op.label)? [Y]"
         if ($ans -notmatch '^(n|no)$') {
             Install-Peer $op.dir $op.label
         } else {
