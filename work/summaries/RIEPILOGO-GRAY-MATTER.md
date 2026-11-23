@@ -60,8 +60,8 @@
 | `PLAN-RAG-OPTIMIZATION-2026-07-22.md` | Piano ottimizzazione RAG |
 | `PROBLEM-REGISTER-2026-07-21.md` | Problema registrazione |
 | `RELEASE-CHECKLIST.md` | Release checklist |
-| `work/audit/GRAY-MATTER-TASKS.md` | Task audit/manutenzione GM |
-| `work/audit/PIANO-AZIONE.md` | Piano d'azione condiviso |
+| `work/history/GRAY-MATTER-TASKS.md` | Task audit/manutenzione GM |
+| `work/history/PIANO-AZIONE.md` | Piano d'azione condiviso |
 | `work/design/` | 5 file: ADR-009 GME Registry, Implementation Plan, Mock Implementations, Risk Analysis, Summary Checklist |
 
 ---

@@ -47,8 +47,8 @@
 
 | File | Rilevanza per NeuRAG |
 |------|----------------------|
-| `work/audit/NEURAG-TASKS.md` | Task di audit/manutenzione specifici per NeuRAG |
-| `work/audit/PIANO-AZIONE.md` | Piano d'azione condiviso (include NeuRAG) |
+| `work/history/NEURAG-TASKS.md` | Task di audit/manutenzione specifici per NeuRAG |
+| `work/history/PIANO-AZIONE.md` | Piano d'azione condiviso (include NeuRAG) |
 | `NeuRAGAudit.md` | Audit specifico del componente NeuRAG |
 | `ARCHITETTURA.md` | Architettura 3 componenti (NeuRAG è uno dei 3) |
 | `DESIGN-RAG-OPTIMIZATION-2026-07-22.md` | Ottimizzazione RAG (NeuRAG) |

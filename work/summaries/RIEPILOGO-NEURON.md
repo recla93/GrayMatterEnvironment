@@ -69,8 +69,8 @@ Moduli core: `server.py` (MCP server, ~22 tools), `engine.py` (CLI engine standa
 
 | File | Rilevanza per Neuron |
 |------|----------------------|
-| `work/audit/NEURON-TASKS.md` | Task di audit/manutenzione specifici per Neuron |
-| `work/audit/PIANO-AZIONE.md` | Piano d'azione condiviso (include Neuron) |
+| `work/history/NEURON-TASKS.md` | Task di audit/manutenzione specifici per Neuron |
+| `work/history/PIANO-AZIONE.md` | Piano d'azione condiviso (include Neuron) |
 | `NeuronAudit.md` | Audit specifico del componente Neuron |
 | `ARCHITETTURA.md` | Architettura 3 componenti (Neuron è uno dei 3) |
 | `DESIGN-CLOUD-MEMORY-2026-07-21.md` | Design memoria cloud (Neuron + Turso) |

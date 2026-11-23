@@ -42,7 +42,7 @@ At some point, the project underwent an external audit (Laguna). The result was 
 
 **What changed:** The team adopted a "verify everything against the code" discipline. The DOCS-GUIDELINES.md rules are a direct consequence: "Never trust a doc that isn't verified against the current source."
 
-**Lesson:** External audits are not adversarial. They are the system checking itself. Audits are kept in `work/audit/` and `work/history/`.
+**Lesson:** External audits are not adversarial. They are the system checking itself. Audits are kept in `work/history/`.
 
 ---
 
