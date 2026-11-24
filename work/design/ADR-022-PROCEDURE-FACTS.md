@@ -1,7 +1,7 @@
 # ADR-022: Procedure facts (Neuron 7)
 
-> Status: **D1-D3 implemented** — 2026-11-17 (proposed 2026-11-16); D5, the
-> migration of live habits, waits for the user. Best after ADR-021. This is the release
+> Status: **D1-D3 and D5 implemented** — 2026-11-17 (proposed 2026-11-16); D5,
+> the migration of live habits, done with the user on 2026-11-17. Best after ADR-021. This is the release
 > named Neuron 7. Scope: Neuron (`store_turn`, `pre_turn`), the bench.
 > Rules and traps: [index](ADR-INDEX-2026-11-16.md).
 
