@@ -27,6 +27,13 @@ the installer non-interactively (`GM_YES=1`) with the answers as flags.
 Without GM the user loses: bridges between Neuron and NeuRAG, neighbor
 auto-surface, the GUI control center, automatic registration of the gateway.
 
+**When NeuRAG is worth it** (ADR-023, measured): it is the archive of the
+user's *project documentation* — designs, specs, decisions, Word files
+included — kept outside the repository they work in. On those documents its
+one-line pointer named the right section 10 times in 11. It does not help with
+the repository being worked on (already on disk) nor with general knowledge
+(the model has it). No such documents: recommend 2 (Neuron + Gray Matter).
+
 **Question 2 — embedding model.** Only for choices that include Neuron (1, 2, 4).
 Changing it later means re-embedding the whole store, so ask.
 

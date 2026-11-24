@@ -114,6 +114,28 @@ def test_a_weak_kb_match_gives_no_pointer(srv):
     assert "📚" not in out, "below the threshold the vector hit was wrong: better nothing"
 
 
+def test_the_pointer_skips_documents_of_the_current_project(srv):
+    """A document inside the client's working directory is already on disk:
+    the pointer takes the first hit outside it, with the same threshold
+    (2026-11-23: in this repo the pointer was followed 0 times in 17)."""
+    srv._kq_reply = ("Top 3 results:\n"
+                     "  [1] D:\\repo\\docs\\INSTALL.md :: Install > Long paths (3/7)  (cos 0.71)\n"
+                     "  [2] X:\\ARBOR\\PIANO.md :: Piano > Hardware (2/5) [2026-11-22]  (cos 0.62)\n"
+                     "  [3] X:\\ARBOR\\NOTTE_LORA.md :: Notte (1/4)  (cos 0.50)\n")
+    out = asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s1", cwd="D:\\repo"))
+    assert '📚 KB: "PIANO.md :: Hardware [2026-11-22]" (cos 0.62)' in out, out
+    srv._HOOK_SEEN.clear()
+    out = asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s2", cwd="D:\\repository"))
+    assert "INSTALL.md" in out, "D:\\repository does not contain D:\\repo: a prefix is not a parent"
+    srv._HOOK_SEEN.clear()
+    srv._kq_reply = "Top 1 results:\n  [1] D:\\repo\\docs\\INSTALL.md :: Install (3/7)  (cos 0.71)\n"
+    out = asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s3", cwd="D:\\repo"))
+    assert "📚" not in out, "only the current project's documents: no pointer"
+    srv._HOOK_SEEN.clear()
+    out = asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s4"))
+    assert "INSTALL.md" in out, "no cwd (other clients): the first hit, as before"
+
+
 def test_the_same_kb_section_is_pointed_at_once_per_session(srv):
     a = asyncio.run(srv._hook_recall("come si installa con i path lunghi?", "s1"))
     b = asyncio.run(srv._hook_recall("e ancora sui path lunghi di Windows?", "s1"))

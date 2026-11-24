@@ -1,6 +1,12 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **NeuRAG is the archive of project documentation (ADR-023)**, and Word files
+  are part of it: `python-docx` is now a dependency (~4 MB with lxml, prebuilt
+  wheels), because the installers never add extras and `ingest` stopped on
+  every .docx. PDF stays an optional extra (PyMuPDF: ~20 MB, AGPL). The
+  measures behind the role, and what is parked (bridges, promotion, keyword
+  routing), are in ADR-023.
 - **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`**
   (option A, see Gray Matter's changelog): `paths.default_suite()`, the hook
   copies and `install.ps1`; an existing suite under `%LOCALAPPDATA%` is kept.

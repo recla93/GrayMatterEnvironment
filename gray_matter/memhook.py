@@ -83,8 +83,9 @@ def recall(payload: dict) -> str:
     # Claude Code's): the daemon's own per-session record decides the profile.
     profile = None if not (profile_shown or ids) else not profile_shown
     # No ping first: without a daemon the connection is refused at once, and _ipc gives ''.
+    # cwd: the KB pointer skips documents already on disk where the model works.
     return fit(_ipc({"action": "recall", "prompt": prompt[:300], "session": session,
-                     "profile": profile, "exclude": ids}),
+                     "profile": profile, "exclude": ids, "cwd": str(payload.get("cwd") or "")}),
                BUDGET + (0 if profile_shown else PROFILE_BUDGET))
 
 

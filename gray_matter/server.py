@@ -1211,30 +1211,47 @@ _HOOK_SESSIONS_MAX = 50          # ponytail: clear-all when full; LRU if session
 # ponytail: threshold tuned on 5 real messages (2026-11-05): the 2 useful ones
 # scored 0.55, the 2 wrong ones 0.45-0.46. Redo it on the log once there are more turns.
 KB_VECTOR_MIN_COS = 0.55
-_KB_HIT = re.compile(r"\[1\]\s+(.+?)\s+\(cos ([0-9.]+)\)")
+_KB_HITS =re.compile(r"\[\d+\]\s+(.+?)\s+\(cos ([0-9.]+)\)")
 
 
-async def _kb_vector_pointer(text: str, shown: set) -> str:
+def _inside(src: str, folder: str) -> bool:
+    """A KB source path lies in `folder` (the client's working directory)."""
+    try:
+        s = os.path.normcase(os.path.abspath(src.partition(" :: ")[0].strip()))
+        f = os.path.normcase(os.path.abspath(folder))
+    except (TypeError, ValueError):
+        return False
+    return s == f or s.startswith(f.rstrip("\\/") + os.sep)
+
+
+async def _kb_vector_pointer(text: str, shown: set, cwd: str = "") -> str:
     """One line pointing at the KB SECTION closest in meaning to the message.
 
     Vector, not the name/trigger lookup of _knowledge_hint. Measured on five real
     messages: the SQL lookup named a whole folder every time ("audit", "docs",
     "gray_matter") — and minted the noise bridges flash<->audit, flusso<->docs —
     while the vector search named the right section twice, both at cos 0.55.
-    It mints NO bridge: a pointer is a hint, a bridge is a claim."""
+    It mints NO bridge: a pointer is a hint, a bridge is a claim.
+
+    `cwd`: the client's working directory. A document inside it is already on
+    disk where the model works: in this repo the pointer was followed 0 times in
+    17 (2026-11-23), while on project documents kept elsewhere it was right 10
+    times in 11. So the first hit OUTSIDE `cwd` is the pointer, same threshold."""
     neurag = _registry.get_server("neurag")
     if not (neurag and neurag.is_alive() and neurag.collaborative) or PROACTIVE_BUDGET <= 0:
         return ""
     try:
-        kq = await _call_server_async("neurag", "knowledge_query", {"query": text, "top_n": 1})
+        kq = await _call_server_async("neurag", "knowledge_query",
+                                      {"query": text, "top_n": 3 if cwd else 1})
     except Exception:  # noqa: BLE001 — a pointer is best-effort, never blocks the recall
         return ""
-    m = _KB_HIT.search(kq or "")
+    m = next((h for h in _KB_HITS.finditer(kq or "") if not (cwd and _inside(h.group(1), cwd))), None)
     if not m or float(m.group(2)) < KB_VECTOR_MIN_COS:
         return ""
     src, _, section = m.group(1).partition(" :: ")
     where = os.path.basename(src.strip())
-    section = re.sub(r"\s*\(\d+/\d+\)$", "", section.strip())     # drop "(11/15)", the chunk index
+    # drop "(11/15)", the chunk index, also when the date follows it: "(2/5) [2026-11-22]"
+    section = re.sub(r"\s*\(\d+/\d+\)(?=(\s*\[[^\]]*\])?$)", "", section.strip())
     # The last heading only, capped: a five-level breadcrumb cost ~70 tokens per message.
     section = section.split(" > ")[-1][:60]
     label = f"{where} :: {section}" if section else where
@@ -1281,7 +1298,7 @@ def _trim_for_hook(ctx: str) -> str:
 
 
 async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
-                       exclude: "list | None" = None) -> str:
+                       exclude: "list | None" = None, cwd: str = "") -> str:
     """ADR-014: what the UserPromptSubmit hook injects, composed in ONE IPC call.
 
     Context, KB pointer, plus the flash. The KB search needs only
@@ -1297,7 +1314,7 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     shown, flashed = _HOOK_SEEN.setdefault(session, (set(), set()))
     flashed.update(str(i) for i in (exclude or []))
     q = " ".join(prompt.split())[:300]
-    kb_task = asyncio.ensure_future(_kb_vector_pointer(q, shown))
+    kb_task = asyncio.ensure_future(_kb_vector_pointer(q, shown, cwd))
     # The whole message is the topic, no extracted keywords: pre_turn searches
     # each keyword as its own key, and extract (a closed stopword list) handed
     # it `ciao`, `visto`, `dovremmo` — each one taking a context slot. Measured
@@ -1599,7 +1616,7 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     try:
                         response = {"result": await _hook_recall(
                             str(msg.get("prompt") or ""), str(msg.get("session") or ""),
-                            msg.get("profile"), msg.get("exclude"))}
+                            msg.get("profile"), msg.get("exclude"), str(msg.get("cwd") or ""))}
                     except Exception as e:
                         response = {"error": str(e)}
                 elif action == "turn":

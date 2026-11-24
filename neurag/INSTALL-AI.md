@@ -8,6 +8,13 @@ combination of the suite.
 
 **In the standalone NeuRAG repo**, read on.
 
+## What NeuRAG is for
+
+The archive of the user's project documentation: designs, specs, decisions,
+Word files included, kept outside the repository they work in (ADR-023 in the
+umbrella repo). Not the repository itself (already on disk), not general
+knowledge (the model has it). Ingest only folders the user names.
+
 ## Why you must not just run the installer
 
 `install.ps1` / `install.sh` ask the human which mode, with an interactive

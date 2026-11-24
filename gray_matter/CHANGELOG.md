@@ -1,16 +1,6 @@
 # Changelog — Gray Matter
 
 ## Unreleased
-- **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`
-  (option A).** Under `%LOCALAPPDATA%` an MSIX client (Claude Desktop and all
-  it launches) redirects writes into its private LocalCache, so the installer
-  refused to run there and every reinstall of a suite outside AppData needed
-  `GM_HOME` by hand, which nothing makes persistent. `default_suite()` (paths,
-  gme, Neuron's config, NeuRAG's paths, the hooks, the three `install.ps1`)
-  picks the home; an existing suite under `%LOCALAPPDATA%` keeps winning while
-  the new place does not exist. The MSIX probe runs only for such a suite.
-  Linux and macOS unchanged. Proven by a reinstall from inside Claude Desktop
-  with no `GM_HOME`.
 - **The installer installs dependencies added without a version bump.** A
   refresh at the same version runs pip with `--no-deps`, so `python-docx`
   (new in NeuRAG) never arrived: `pip check` said "requires python-docx, which
@@ -22,6 +12,24 @@
   before the suite, gone after it. A user saw it missing after an install and
   blamed the installer, which had created it correctly. The tests' autouse
   fixture now points `shortcut._windows_desktop` at a temporary folder.
+- **The KB pointer skips the project you are working in (ADR-023).** A
+  document inside the client's working directory is already on disk: in this
+  repo the pointer was followed 0 times in 17, while on project documents kept
+  elsewhere it named the right section 10 times in 11. The memory hook now
+  passes `cwd`, and the pointer takes the first hit outside it, same 0.55
+  threshold (kept: on 33 judged pairs a higher one did not raise precision
+  consistently). No `cwd` (OpenCode): the first hit, as before. The pointer's
+  label also drops the chunk index when a date follows it ("(2/5) [date]").
+- **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`
+  (option A).** Under `%LOCALAPPDATA%` an MSIX client (Claude Desktop and all
+  it launches) redirects writes into its private LocalCache, so the installer
+  refused to run there and every reinstall of a suite outside AppData needed
+  `GM_HOME` by hand, which nothing makes persistent. `default_suite()` (paths,
+  gme, Neuron's config, NeuRAG's paths, the hooks, the three `install.ps1`)
+  picks the home; an existing suite under `%LOCALAPPDATA%` keeps winning while
+  the new place does not exist. The MSIX probe runs only for such a suite.
+  Linux and macOS unchanged. Proven by a reinstall from inside Claude Desktop
+  with no `GM_HOME`.
 - **No test can touch the real suite.** Tests isolated `LOCALAPPDATA` only, and
   with the default in the home a first run wrote fake values into the real
   `neuron/.env` (an embedding model `from-user`, fake Turso credentials) and
