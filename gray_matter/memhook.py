@@ -268,14 +268,6 @@ def silently_used(fact_words: set, said: str, prompt: str = "") -> bool:
     return hit >= min(2, len(words))
 
 
-def arm(session: str) -> bool:
-    """ADR-021: which half of the sessions an experiment applies to. From the
-    session id alone, so the daemon that ranks and the ledger that reads the
-    transcripts afterwards agree without storing anything."""
-    import hashlib
-    return int(hashlib.sha1(str(session).encode("utf-8")).hexdigest(), 16) % 2 == 1
-
-
 GIST = re.compile(r"\+ \([^()]*\)$")     # "<gist> + (concept)": a fact shown in its short form
 
 
@@ -334,6 +326,7 @@ def save(payload: dict) -> str:
         "args": {"topic": " ".join("#" + i for i in ids)}}))
     if shown:     # best-effort like the recall: no daemon, no signal
         _ipc({"action": "call", "server": "neuron", "tool": "confirm",
+              "session": str(payload.get("session_id") or ""),   # the daemon logs the turn's arm
               "args": {"facts": used, "shown": shown}})
     prompt, wrote, work, chars = last_turn(entries)
     if not prompt:

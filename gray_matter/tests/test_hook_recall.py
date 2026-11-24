@@ -385,3 +385,33 @@ def test_the_recall_shows_the_bridge_of_a_fact_it_shows(srv, monkeypatch, tmp_pa
     monkeypatch.setattr(srv, "_call_server_async", ctx)
     out = asyncio.run(srv._hook_recall("which database do we use locally?", "s1", profile=False))
     assert "🔗 #0a1b2c3d ↔ turso" in out, out
+
+
+def test_the_use_experiment_logs_each_turn_with_its_own_arm(srv, tmp_path, monkeypatch):
+    """ADR-021, per turn since 2026-11-24: the recall draws the arm and passes it
+    to pre_turn; the Stop hook's confirm writes one line with that arm; the
+    ledger reads the log per arm. Per session gave 4 sessions against 7."""
+    import random
+    import gray_matter.paths as P
+    from gray_matter.bench import ledger
+    monkeypatch.setattr(P, "logs_dir", lambda: tmp_path)
+    sent = []
+    real = srv._call_server_async
+
+    async def spy(server, tool, args):
+        if tool == "pre_turn":
+            sent.append(args["arm"])
+        return await real(server, tool, args)
+    monkeypatch.setattr(srv, "_call_server_async", spy)
+    random.seed(7)
+    for i in range(40):
+        asyncio.run(srv._hook_recall(f"messaggio numero {i} sul recall", "s1"))
+        used = ["aaaaaaaa"] if sent[-1] else []
+        srv._log_use("s1", {"shown": ["aaaaaaaa", "bbbbbbbb"], "facts": used})
+    srv._log_use("s1", {"shown": ["cccccccc"], "facts": []})   # no recall drawn: not logged
+    lines = [json.loads(x) for x in (tmp_path / "use_experiment.jsonl").read_text("utf-8").splitlines()]
+    assert [x["arm"] for x in lines] == sent and len(lines) == 40
+    assert 0 < sum(sent) < 40, "both arms drawn within one session"
+    out = ledger.experiment(tmp_path / "use_experiment.jsonl")
+    assert out["bonus"]["rate"] == 0.5 and out["control"]["rate"] == 0.0 and out["z"] > 1.96
+

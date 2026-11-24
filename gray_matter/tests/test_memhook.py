@@ -295,7 +295,7 @@ def test_the_stop_hook_reports_the_recalled_facts_the_turn_used(tmp_path, monkey
           USER, recall, _assistant(_tool("Read", file_path="deploy_hooks.py")), RESULT,
           _assistant({"type": "text", "text": "claude_pzs8 is the MSIX id; tools/gate.py push_release"}),
           _assistant(restate))
-    assert sent == [{"action": "call", "server": "neuron", "tool": "confirm",
+    assert sent == [{"action": "call", "server": "neuron", "tool": "confirm", "session": "",
                      "args": {"facts": ["aaaaaaaa"], "shown": ["aaaaaaaa", "bbbbbbbb"]}}]
     sent.clear()
     _stop(tmp_path, USER, recall, _assistant({"type": "text", "text": "deploy_hooks.py claude_pzs8"}),

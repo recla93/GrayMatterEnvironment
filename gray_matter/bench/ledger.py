@@ -186,7 +186,6 @@ def analyze(path: Path, common: frozenset = frozenset()) -> dict:
             "mem_overhead_iet": round(overhead),
             "mem_share": round(overhead / iet_total, 4) if iet_total else 0.0,
             "mem_calls": mem_calls, "explore_calls": explore_calls, "other_calls": other_calls,
-            "arm": _memhook.arm(path.stem),      # ADR-021: the experiment's half, from the session id
             "facts_shown": len(shown), "facts_used": len(used), "facts_silent": len(silent),
             "use_rate": round(len(used) / len(shown), 3) if shown else None,
             "any_use_rate": round((len(used) + len(silent)) / len(shown), 3) if shown else None}
@@ -209,13 +208,7 @@ def totals(rows: list) -> dict:
             "explore_calls_per_turn": round(s("explore_calls") / turns, 2),
             "facts_shown": shown, "facts_used": used, "facts_silent": silent,
             "use_rate": round(used / shown, 3) if shown else None,
-            "any_use_rate": round((used + silent) / shown, 3) if shown else None,
-            # ADR-021: the same rate per half. Equal halves while the bonus is off.
-            "any_use_rate_by_arm": {
-                str(a): (round(sum(r["facts_used"] + r["facts_silent"] for r in rows if r.get("arm") == a)
-                               / n, 3), n)
-                for a in (False, True)
-                if (n := sum(r["facts_shown"] for r in rows if r.get("arm") == a))}}
+            "any_use_rate": round((used + silent) / shown, 3) if shown else None}
 
 
 COMMON_SHARE = 0.2        # a word in the answers of more than 1 session in 5 proves nothing
@@ -277,13 +270,43 @@ def markdown(rows: list, tot: dict) -> str:
     return summary + "\n\n" + head + "\n" + body + "\n"
 
 
+def experiment(path: Path) -> dict:
+    """ADR-021 use bonus, per arm, from the daemon's own log (one line per turn:
+    arm, facts shown, facts used). Arms are drawn per turn since 2026-11-24.
+    z: two-proportion test on used/shown; |z| >= 1.96 is a difference at 95%."""
+    arms = {False: [0, 0, 0], True: [0, 0, 0]}          # turns, shown, used
+    if path.is_file():
+        for ln in path.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            a = arms[bool(r.get("arm"))]
+            a[0] += 1; a[1] += len(r.get("shown") or []); a[2] += len(r.get("used") or [])
+    out = {("bonus" if k else "control"): {"turns": t, "shown": n, "used": u,
+                                           "rate": round(u / n, 3) if n else None}
+           for k, (t, n, u) in arms.items()}
+    (_, n0, u0), (_, n1, u1) = arms[False], arms[True]
+    if n0 and n1:
+        p = (u0 + u1) / (n0 + n1)
+        se = (p * (1 - p) * (1 / n0 + 1 / n1)) ** 0.5
+        out["z"] = round((u1 / n1 - u0 / n0) / se, 2) if se else 0.0
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--project", default="", help="substring of the project folder name")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--md", help="write a markdown report to this file")
+    ap.add_argument("--experiment", nargs="?", const="", metavar="LOG",
+                    help="ADR-021 use bonus per arm, from logs/use_experiment.jsonl")
     a = ap.parse_args(argv)
+    if a.experiment is not None:
+        from gray_matter.paths import logs_dir
+        print(json.dumps(experiment(Path(a.experiment or logs_dir() / "use_experiment.jsonl")), indent=2))
+        return 0
     rows = collect(Path(a.root), a.project)
     tot = totals(rows)
     if a.json:

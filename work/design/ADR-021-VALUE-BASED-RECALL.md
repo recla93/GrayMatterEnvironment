@@ -177,3 +177,25 @@ To run it: wait until most recalled facts have `shown >= 2` (weeks of use), set
 on a clear difference with at least 150 facts shown per half; otherwise set it
 back to 0 and record the result here. Mind that `confirmed` holds counts from
 before 2026-11-16 for some facts: a rate above its real value, capped at 1.
+
+## The experiment, widened (2026-11-24)
+
+Run since 2026-11-19 with the bonus at 0.10, per session. After five days the
+halves were 4 sessions against 7 (69 facts shown against 188) and the
+transcripts of 08-20/11 had been lost, the 19/11 baseline with them. Changed:
+
+- **The arm is drawn per turn** (`_hook_recall`, `random() < 0.5`), so the
+  halves balance in turns, not sessions. A session sees both arms; use is
+  measured per turn, so the attribution stays per turn.
+- **The use measure is the Stop hook's** (`memhook.used_facts`: distinctive
+  words of the fact in what the turn wrote and passed to its tools), not the
+  ledger's explicit `#id`: about 21% of the shown facts against 8%, more
+  signal per fact.
+- **The daemon writes its own log**, `logs/use_experiment.jsonl`: arm, facts
+  shown, facts used, one line per turn. No dependence on the transcripts.
+  `python gray_matter/bench/ledger.py --experiment` reads it per arm with a
+  two-proportion z. `memhook.arm` and the ledger's per-session split are gone.
+
+Evaluate on **2026-12-01**: adopt at 0.10 if both arms have at least 150 facts
+shown and z >= 1.96; z <= -1.96 sets it back to 0; in between, record the
+numbers here and decide with them.

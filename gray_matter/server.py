@@ -1168,6 +1168,30 @@ def _norm(s: str) -> str:
 
 
 _HOOK_SEEN: dict = {}            # session -> (kb pointers shown, fact ids shown: recalled or flashed)
+# ADR-021 use-bonus experiment, per TURN since 2026-11-24 (per session gave 4
+# sessions against 7 after a week): the arm drawn for a session's latest recall,
+# read back when its Stop hook reports which facts the turn used.
+_TURN_ARM: dict = {}
+
+
+def _log_use(session: str, args: dict) -> None:
+    """One line per turn into logs/use_experiment.jsonl: the arm of the turn's
+    recall, the facts it showed and those the turn used (memhook.used_facts,
+    the distinctive-word measure). Its own log, not the transcripts: those of
+    08-20/11 were lost. Best-effort: a write error never fails the confirm."""
+    a = _TURN_ARM.pop(session, None)
+    if a is None or not isinstance(args, dict):
+        return
+    try:
+        from gray_matter.paths import logs_dir
+        p = logs_dir() / "use_experiment.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"t": round(time.time()), "arm": a,
+                                 "shown": list(args.get("shown") or []),
+                                 "used": list(args.get("facts") or [])}) + "\n")
+    except OSError:
+        pass
 # The save check for hosts with no readable transcript (Kimi, Codex, OpenCode):
 # every store_turn of every client passes through the daemon, so it can tell
 # whether a fact landed since this session's message arrived. shortcut: one
@@ -1307,6 +1331,7 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     stays a courier: start, one request, print."""
     if session not in _HOOK_SEEN and len(_HOOK_SEEN) >= _HOOK_SESSIONS_MAX:
         _HOOK_SEEN.clear()
+        _TURN_ARM.clear()
     # The hook reads both from the transcript (memhook.session_memory); an older
     # hook sends neither, and the daemon's own per-session record stands in.
     first = (session not in _HOOK_SEEN) if profile is None else bool(profile)
@@ -1321,10 +1346,11 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     # 2026-11-06: extracted topic -> wasapi/endpoint-audio, message -> release/
     # installer/daemon. ponytail: no keywords at all; graph-filtered ones only
     # if the dry-run log shows recall missing concepts the message names.
-    from gray_matter.memhook import arm
+    import random
+    _TURN_ARM[session] = random.random() < 0.5   # ADR-021, drawn per turn; logged by _log_use
     args = {"topic": q, "profile": first,      # ADR-015 D7.1: user/habit once per session
             "exclude": sorted(flashed),
-            "arm": arm(session)}               # ADR-021: inert while NEURON_FACT_USE_BONUS is 0
+            "arm": _TURN_ARM[session]}         # ADR-021: inert while NEURON_FACT_USE_BONUS is 0
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
         _maybe_flash(args["topic"], flashed),
@@ -1603,6 +1629,8 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     try:
                         result = await _call_server_async(srv, tool_name, tool_args)
                         response = {"result": result}
+                        if tool_name == "confirm" and msg.get("session"):
+                            _log_use(str(msg["session"]), tool_args)
                         if tool_name == "store_turn" and isinstance(tool_args, dict) and (
                                 tool_args.get("facts") or str(tool_args.get("episode") or "").strip()):
                             _FACT_AT[0] = time.time()

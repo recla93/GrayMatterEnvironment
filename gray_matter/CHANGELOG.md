@@ -1,6 +1,12 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The use-bonus experiment draws its arm per turn and keeps its own log.**
+  Per session it had 4 sessions against 7 after five days, and it read the
+  transcripts, of which 08-20/11 were lost. The daemon now draws the arm at
+  each recall and, when the Stop hook reports the facts the turn used, writes
+  arm, shown and used to `logs/use_experiment.jsonl`;
+  `bench/ledger.py --experiment` reads it per arm with a two-proportion z.
 - **The default suite is Gray Matter + Neuron; NeuRAG is an add-on.** NeuRAG
   helps with one thing, measured in ADR-023: project documents kept outside
   the repository being worked on. Everyone else paid its embedding download,
