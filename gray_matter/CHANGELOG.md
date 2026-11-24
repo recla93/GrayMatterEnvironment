@@ -1,6 +1,18 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The test suite no longer deletes the real Desktop shortcut.** The Desktop
+  folder comes from the registry, so every `execute_uninstall` in
+  `test_executor.py` removed `Gray Matter.lnk` from the user's Desktop: present
+  before the suite, gone after it. A user saw it missing after an install and
+  blamed the installer, which had created it correctly. The tests' autouse
+  fixture now points `shortcut._windows_desktop` at a temporary folder.
+- **No test can touch the real suite.** Tests isolated `LOCALAPPDATA` only, and
+  with the default in the home a first run wrote fake values into the real
+  `neuron/.env` (an embedding model `from-user`, fake Turso credentials) and
+  `registry/neuron.json` (restored the same day). An autouse fixture in the
+  three suites' `conftest.py` points `USERPROFILE`, `HOME`, `LOCALAPPDATA`,
+  `APPDATA` and `XDG_DATA_HOME` at a temporary folder for every test.
 - **An AI agent asks the user what to install.** The installers ask with
   `Read-Host`, which an agent's non-interactive PowerShell cannot answer: the
   prompt fails, or the default is taken without the user seeing the choice.

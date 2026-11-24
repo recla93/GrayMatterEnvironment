@@ -29,6 +29,18 @@ def _clean_mockdeps_pollution():
 
 
 @pytest.fixture(autouse=True)
+def _no_real_home(tmp_path_factory, monkeypatch):
+    """No test sees the user's real folders (see gray_matter/tests/conftest.py:
+    on 2026-11-23 tests that isolated only LOCALAPPDATA wrote into the real suite)."""
+    d = tmp_path_factory.mktemp("home")
+    for k, v in {"USERPROFILE": d, "HOME": d, "LOCALAPPDATA": d / "AppData" / "Local",
+                 "APPDATA": d / "AppData" / "Roaming", "XDG_DATA_HOME": d / ".local" / "share"}.items():
+        monkeypatch.setenv(k, str(v))
+    for k in ("GM_HOME", "NEURAG_HOME"):
+        monkeypatch.delenv(k, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_conn_cache():
     """Clear the module-level connection cache between tests.
 

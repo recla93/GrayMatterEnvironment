@@ -29,3 +29,23 @@ def _purge_fake_modules() -> None:
 def _clean_mockdeps_pollution():
     _purge_fake_modules()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_home(tmp_path_factory, monkeypatch):
+    """No test sees the user's real folders. On 2026-11-23 the suite default
+    moved to %USERPROFILE%, and tests that isolated only LOCALAPPDATA wrote fake
+    values into the real neuron/.env and registry/neuron.json. Same fixture in
+    the three suites' conftest.py; a test that needs a folder sets its own."""
+    d = tmp_path_factory.mktemp("home")
+    for k, v in {"USERPROFILE": d, "HOME": d, "LOCALAPPDATA": d / "AppData" / "Local",
+                 "APPDATA": d / "AppData" / "Roaming", "XDG_DATA_HOME": d / ".local" / "share"}.items():
+        monkeypatch.setenv(k, str(v))
+    for k in ("GM_HOME", "NEURAG_HOME"):
+        monkeypatch.delenv(k, raising=False)
+    # The Desktop comes from the registry, not from an env var: every
+    # execute_uninstall in test_executor.py deleted the REAL
+    # "D:\Desktop\Gray Matter.lnk" (seen 2026-11-23: present before the suite,
+    # gone after it; a user found the shortcut missing after an install).
+    from gray_matter import shortcut
+    monkeypatch.setattr(shortcut, "_windows_desktop", lambda: str(d / "Desktop"))
