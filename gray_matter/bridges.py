@@ -400,9 +400,15 @@ def _maybe_migrate(conn) -> None:
         pass
 
 
-def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "") -> bool:
+def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "",
+               promoted: bool = False) -> bool:
     """Record a bridge. Idempotent on (neuron_concept, neurag_node): existing ->
-    weight +1 and False; brand-new -> True. Ingest validation (F4) as before."""
+    weight +1 and False; brand-new -> True. Ingest validation (F4) as before.
+
+    ``promoted``: the bridge is the record that a fact is in the vault (written
+    by `promote`). It never decays: promote reads these bridges to skip what it
+    already wrote, and NeuRAG's add_chunk does not dedupe, so a decayed record
+    meant the same fact added again a week later (found 2026-11-23)."""
     neuron_concept, neurag_node = _clean(neuron_concept), _clean(neurag_node)
     rationale = _clean(rationale, cap=500)
     if not (_valid_endpoint(neuron_concept) and _valid_endpoint(neurag_node)):
@@ -418,16 +424,16 @@ def add_bridge(neuron_concept: str, neurag_node: str, rationale: str = "") -> bo
         if exists is not None:
             # relative increment in SQL -> concurrent-safe (no stale read-modify-write)
             conn.execute(
-                "UPDATE bridges SET weight=min(weight+1,?), last_used=?, "
+                "UPDATE bridges SET weight=min(weight+1,?), last_used=?, promoted=max(promoted,?), "
                 "rationale=CASE WHEN rationale IS NULL OR rationale='' THEN ? ELSE rationale END "
-                "WHERE neuron_key=? AND neurag_key=?", (_WEIGHT_CAP, now, rationale, nk, gk))
+                "WHERE neuron_key=? AND neurag_key=?", (_WEIGHT_CAP, now, int(promoted), rationale, nk, gk))
             conn.commit()
             return False
         try:
             conn.execute(
                 "INSERT INTO bridges (neuron_key,neurag_key,neuron,neurag,rationale,"
-                "weight,created,last_used,promoted) VALUES (?,?,?,?,?,1,?,?,0)",
-                (nk, gk, neuron_concept, neurag_node, rationale, now, now))
+                "weight,created,last_used,promoted) VALUES (?,?,?,?,?,1,?,?,?)",
+                (nk, gk, neuron_concept, neurag_node, rationale, now, now, int(promoted)))
             conn.commit()
             return True
         except Exception:      # lost an insert race -> bump the winner instead
@@ -505,14 +511,15 @@ def bridges_for(topic: str, tags: "set[str] | None" = None,
 def decay(amount: float = 1.0, max_idle_seconds: float = 7 * 24 * 3600,
           prune_below: float = 1.0) -> int:
     """Idle bridges lose `amount` weight; those below `prune_below` are dropped.
-    Returns how many were pruned. Bridges are hypotheses — unused ones fade."""
+    Returns how many were pruned. Bridges are hypotheses — unused ones fade.
+    A promoted bridge is a record, not a hypothesis: it is left alone."""
     now = time.time()
     conn = _connect()
     try:
         before = conn.execute("SELECT COUNT(*) AS c FROM bridges").fetchone()["c"] or 0
-        conn.execute("UPDATE bridges SET weight=weight-? WHERE ?-last_used > ?",
+        conn.execute("UPDATE bridges SET weight=weight-? WHERE ?-last_used > ? AND promoted=0",
                      (amount, now, max_idle_seconds))
-        conn.execute("DELETE FROM bridges WHERE weight < ?", (prune_below,))
+        conn.execute("DELETE FROM bridges WHERE weight < ? AND promoted=0", (prune_below,))
         after = conn.execute("SELECT COUNT(*) AS c FROM bridges").fetchone()["c"] or 0
         conn.commit()
     finally:

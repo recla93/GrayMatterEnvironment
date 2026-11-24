@@ -85,7 +85,7 @@ def _apply(monkeypatch, export, answers=None, bridges=()):
         return "ok"
     monkeypatch.setattr(srv, "_call_server_async", fake_call)
     monkeypatch.setattr(br, "all_bridges", lambda: [{"neuron": b, "neurag": "x"} for b in bridges])
-    monkeypatch.setattr(br, "add_bridge", lambda a, b, r="": calls.append(("bridge", a, b)) or True)
+    monkeypatch.setattr(br, "add_bridge", lambda a, b, r="", **k: calls.append(("bridge", a, b)) or True)
     return asyncio.run(srv._do_promote(apply=True)), calls
 
 
@@ -96,6 +96,38 @@ def test_apply_writes_parent_node_chunks_and_the_provenance_bridge(monkeypatch):
     assert [c[2]["chunks"][0]["source"] for c in calls if c[1] == "knowledge_add_chunks"] == ["neuron:#a1"]
     assert [c[1:] for c in calls if c[0] == "bridge"] == [("#a1", "turso")]
     assert r["written"] == ["turso"] and r["chunks"] == 1
+
+
+def test_a_promoted_fact_is_not_added_again_after_a_week_of_decay(monkeypatch, tmp_path):
+    """The provenance bridge is promote's only record of what is in the vault,
+    and NeuRAG's add_chunk does not dedupe. Before 2026-11-23 decay deleted that
+    bridge after 7 idle days (an '#id' endpoint never matches a message, so it
+    is never surfaced): the next promote wrote the same chunk again."""
+    import sqlite3
+    import gray_matter.server as srv
+    from gray_matter import bridges as br
+    monkeypatch.setenv("GRAY_MATTER_BRIDGES", str(tmp_path / "bridges.db"))
+    chunks = []
+
+    async def fake_call(server, tool, args):
+        if tool == "export":
+            return json.dumps(_exp(_f("a1")))
+        if tool == "knowledge_add_chunks":
+            chunks.extend(c["source"] for c in args["chunks"])
+        return f"Created node '{args.get('name', '')}'"
+    monkeypatch.setattr(srv, "_call_server_async", fake_call)
+
+    asyncio.run(srv._do_promote(apply=True))
+    assert chunks == ["neuron:#a1"]
+    db = sqlite3.connect(tmp_path / "bridges.db")
+    db.execute("UPDATE bridges SET last_used = last_used - 30 * 24 * 3600")   # a month idle
+    db.commit()
+    db.close()
+    for _ in range(5):
+        br.decay()
+    assert [b["neuron"] for b in br.all_bridges()] == ["#a1"], "the record decayed"
+    asyncio.run(srv._do_promote(apply=True))
+    assert chunks == ["neuron:#a1"], "the same fact was promoted twice"
 
 
 def test_a_new_fact_joins_an_existing_node_and_a_bridged_one_is_not_readded(monkeypatch):

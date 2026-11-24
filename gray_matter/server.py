@@ -276,7 +276,7 @@ async def _do_promote(apply: bool = False) -> dict:
                     "node_name": c["keyword"], "chunks": c["chunks"]})
                 chunks_written += len(c["chunks"])
                 for fid, ch in zip(c["facts"], c["chunks"]):
-                    add_bridge(f"#{fid}", c["keyword"], f"promoted {ch['section']}")
+                    add_bridge(f"#{fid}", c["keyword"], f"promoted {ch['section']}", promoted=True)
             except Exception as exc:  # noqa: BLE001 — one broken node does not stop the rest
                 skipped.append(f"{c['keyword']}: {exc}")
     return {"applied": apply, "count": len(cands), "candidates": cands,
