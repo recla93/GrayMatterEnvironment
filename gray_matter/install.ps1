@@ -9,6 +9,8 @@
 #
 #   powershell -ExecutionPolicy Bypass -File install.ps1
 #
+# Default suite: Gray-Matter + Neuron. NeuRAG (knowledge base) is an add-on:
+#   $env:GM_WITH_NEURAG=1   (kept on upgrade once installed)
 # Opt out of a peer:  $env:GM_NO_NEURON=1  /  $env:GM_NO_NEURAG=1
 #
 # Repair mode:  -Force  — bypass the version-skip idempotence and reinstall the
@@ -373,6 +375,16 @@ if (-not $Clear) {
         if ((Test-VenvUsable $old) -and -not (Test-VenvUsable $Venv)) { $Venv = $old; break }
     }
 }
+# NeuRAG is an add-on since 2026-11-24: the default suite is Gray Matter + Neuron.
+# It is installed on request (GM_WITH_NEURAG=1) or when this venv already has it,
+# so an upgrade never drops it; GM_NO_NEURAG still wins. Read before -Clear wipes.
+# Called by NeuRAG's own installer (coupled mode) is a request too.
+$WantNeurag = (-not $env:GM_NO_NEURAG) -and (($env:GM_WITH_NEURAG -eq "1") -or
+              (Test-Path (Join-Path $Venv "Scripts\neurag.exe")) -or
+              ($env:GM_PEER_DIR -and (Split-Path -Leaf $env:GM_PEER_DIR) -like "neurag*"))   # neurag-main from a zip
+# Not wanted: forget the sibling, or the banner says "NeuRAG: installed" and
+# record-paths runs against a venv without it.
+if (-not $WantNeurag) { $NeuragDir = $null }
 Stop-VenvProcesses $Venv
 # -Clear: throw the venv away and rebuild. A "clean" option existed before, but
 # only as a letter in an interactive prompt — and -Force skipped that prompt, so
@@ -793,7 +805,7 @@ if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml
         $nd = Find-PeerIn "neuron" $PeerParent
         if ($nd) { $OtherPeers += @{dir=$nd; label="Neuron"} }
     }
-    if ($PeerLabel -ne "neurag" -and $PeerLabel -ne "Neurag" -and -not $env:GM_NO_NEURAG) {
+    if ($PeerLabel -ne "neurag" -and $PeerLabel -ne "Neurag" -and $WantNeurag) {
         $nd = Find-PeerIn "neurag" $PeerParent
         if ($nd) { $OtherPeers += @{dir=$nd; label="NeuRAG"} }
     }
@@ -903,7 +915,7 @@ if ($env:GM_PEER_DIR -and (Test-Path (Join-Path $env:GM_PEER_DIR "pyproject.toml
         $NeuronDir = Resolve-Peer "neuron" "Neuron (semantic memory)" $NeuronDir
         if ($NeuronDir) { $Find += Get-FindLinks @($NeuronDir); Install-Peer $NeuronDir "Neuron" }
     }
-    if (-not $env:GM_NO_NEURAG) {
+    if ($WantNeurag) {
         $NeuragDir = Resolve-Peer "neurag" "NeuRAG (knowledge base)" $NeuragDir
         if ($NeuragDir) { $Find += Get-FindLinks @($NeuragDir); Install-Peer $NeuragDir "NeuRAG" }
     }

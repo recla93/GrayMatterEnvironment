@@ -12,6 +12,8 @@
 #   sh install.sh --yes      # non-interactive
 #   sh install.sh --clear    # delete the venv and rebuild from scratch (implies --force)
 #
+# Default suite: Gray-Matter + Neuron. NeuRAG (knowledge base) is an add-on:
+#   GM_WITH_NEURAG=1   (kept on upgrade once installed)
 # Opt out of a peer:  GM_NO_NEURON=1  /  GM_NO_NEURAG=1
 set -eu
 
@@ -140,6 +142,17 @@ if [ "$CLEAR" != "1" ]; then
         if [ -d "$_old" ] && [ ! -d "$VENV" ]; then VENV="$_old"; break; fi
     done
 fi
+# NeuRAG is an add-on since 2026-11-24: the default suite is Gray Matter + Neuron.
+# It is installed on request (GM_WITH_NEURAG=1), when this venv already has it
+# (an upgrade never drops it) or when NeuRAG's own installer calls; GM_NO_NEURAG
+# still wins. Read before --clear wipes the venv. Same rule as install.ps1.
+WANT_NEURAG=0
+if [ -z "${GM_NO_NEURAG:-}" ]; then
+    case "$(basename "${GM_PEER_DIR:-x}")" in [Nn]eurag*) WANT_NEURAG=1 ;; esac   # neurag-main from a zip
+    if [ "${GM_WITH_NEURAG:-}" = "1" ] || [ -e "$VENV/bin/neurag" ]; then WANT_NEURAG=1; fi
+fi
+# Not wanted: forget the sibling, or the banner says "NeuRAG: installed".
+[ "$WANT_NEURAG" = "1" ] || NEURAG_DIR=""
 # INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
 # POSIX unlinks mapped files happily, so this is not the Windows lock that makes
 # pip fail there; the hazard here is a stale server writing to the same store
@@ -321,7 +334,7 @@ if [ -n "${GM_PEER_DIR:-}" ] && [ -f "$GM_PEER_DIR/pyproject.toml" ]; then
     # "Neuron + GM" sets GM_NO_NEURAG and must not get NeuRAG anyway.
     case "$PEER_LABEL" in
         neuron|Neuron)
-            [ -z "${GM_NO_NEURAG:-}" ] && _d=$(find_peer_in neurag "$PEER_PARENT" 2>/dev/null || true) || _d=""
+            [ "$WANT_NEURAG" = "1" ] && _d=$(find_peer_in neurag "$PEER_PARENT" 2>/dev/null || true) || _d=""
             [ -n "$_d" ] && OTHER_PEERS="$_d:NeuRAG"
             ;;
         neurag|Neurag)
@@ -434,7 +447,7 @@ else
             install_peer "$NEURON_DIR" "Neuron"
         fi
     fi
-    if [ -z "${GM_NO_NEURAG:-}" ]; then
+    if [ "$WANT_NEURAG" = "1" ]; then
         NEURAG_DIR=$(resolve_peer neurag "NeuRAG (knowledge base)" "$NEURAG_DIR" || true)
         if [ -n "$NEURAG_DIR" ]; then
             [ -d "$NEURAG_DIR/vendor" ] && FINDLINKS="$FINDLINKS --find-links $NEURAG_DIR/vendor"

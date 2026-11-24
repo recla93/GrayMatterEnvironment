@@ -252,6 +252,22 @@ def test_gm_keeps_a_saved_embedding_model(suffix):
         f"gray_matter/install{suffix}: the embedding question is not gated on a saved model")
 
 
+@pytest.mark.parametrize("suffix", [".ps1", ".sh"])
+def test_gm_installs_neurag_only_on_request_or_upgrade(suffix):
+    """Since 2026-11-24 the default suite is GM + Neuron: NeuRAG helps only
+    with project documents kept outside the repository (ADR-023). Both GM
+    installers gate it on GM_WITH_NEURAG, an existing NeuRAG in the venv (an
+    upgrade never drops it) or NeuRAG's own installer calling; GM_NO_NEURAG
+    still wins, and the old opt-out test must not be the gate any more."""
+    src = _read("gray_matter", suffix)
+    want = "$WantNeurag" if suffix == ".ps1" else '"$WANT_NEURAG" = "1"'
+    venv_probe = r"Scripts\neurag.exe" if suffix == ".ps1" else "$VENV/bin/neurag"
+    for token in ("GM_WITH_NEURAG", "GM_NO_NEURAG", venv_probe, want):
+        assert token in src, f"gray_matter/install{suffix}: missing {token!r}"
+    old_gate = "-not $env:GM_NO_NEURAG) {" if suffix == ".ps1" else '[ -z "${GM_NO_NEURAG:-}" ]; then\n        NEURAG_DIR'
+    assert old_gate not in src, f"gray_matter/install{suffix}: NeuRAG still installed by default"
+
+
 def test_gm_ps1_upgrades_a_different_version_without_the_interview():
     """Sorgente 1.5.3 sopra un dist-info 1.4.1 finiva nel ramo "prima
     installazione": interview completa, niente menu. Ora "installato" e' un

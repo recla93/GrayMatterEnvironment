@@ -1,4 +1,4 @@
-# INSTALL-AI — Gray Matter suite (GM + Neuron + NeuRAG)
+# INSTALL-AI — Gray Matter suite (GM + Neuron, NeuRAG as an add-on)
 
 > Instructions for an AI agent asked to install this suite. This file is the
 > single entry point: `neuron/INSTALL-AI.md` and `neurag/INSTALL-AI.md` send
@@ -18,8 +18,8 @@ the installer non-interactively (`GM_YES=1`) with the answers as flags.
 
 | # | Choice | What the user gets |
 |---|---|---|
-| 1 | **Full suite** (recommended) | GM gateway + Neuron (memory) + NeuRAG (knowledge base), bridges between them, GUI, session hooks |
-| 2 | **Neuron + Gray Matter** | persistent memory behind the gateway, with hooks and GUI; no knowledge base |
+| 1 | **Neuron + Gray Matter** (recommended, the default) | persistent memory behind the gateway, with hooks and GUI; no knowledge base |
+| 2 | **Full suite** | the above + NeuRAG (knowledge base), the add-on for an archive of project documents |
 | 3 | **NeuRAG + Gray Matter** | knowledge base behind the gateway, with GUI; no memory, no session hooks |
 | 4 | **Neuron alone** | memory only, registered directly in the MCP clients; no GUI, no bridges |
 | 5 | **NeuRAG alone** | knowledge base only, registered directly; no GUI, no bridges |
@@ -32,7 +32,8 @@ user's *project documentation* — designs, specs, decisions, Word files
 included — kept outside the repository they work in. On those documents its
 one-line pointer named the right section 10 times in 11. It does not help with
 the repository being worked on (already on disk) nor with general knowledge
-(the model has it). No such documents: recommend 2 (Neuron + Gray Matter).
+(the model has it). So the default leaves it out: offer 2 only to a user who
+has such documents.
 
 **Question 2 — embedding model.** Only for choices that include Neuron (1, 2, 4).
 Changing it later means re-embedding the whole store, so ask.
@@ -64,15 +65,16 @@ hand (`gray-matter uninstall`, interactive).
 
 Run from the folder of the repo you were given. In the umbrella repo the three
 tools are siblings: `gray_matter/`, `neuron/`, `neurag/`. Add the embedding
-model and the Question 3 flag to the command.
+model and the Question 3 flag to the command. An upgrade keeps NeuRAG when it
+is already installed, with or without `GM_WITH_NEURAG`.
 
 **Windows (PowerShell):**
 
 | # | Command |
 |---|---|
 | 1 | `$env:GM_YES="1"; .\gray_matter\install.ps1 -EmbedModel <model>` |
-| 2 | `$env:GM_YES="1"; $env:GM_NO_NEURAG="1"; .\gray_matter\install.ps1 -EmbedModel <model>` |
-| 3 | `$env:GM_YES="1"; $env:GM_NO_NEURON="1"; .\gray_matter\install.ps1` |
+| 2 | `$env:GM_YES="1"; $env:GM_WITH_NEURAG="1"; .\gray_matter\install.ps1 -EmbedModel <model>` |
+| 3 | `$env:GM_YES="1"; $env:GM_WITH_NEURAG="1"; $env:GM_NO_NEURON="1"; .\gray_matter\install.ps1` |
 | 4 | `$env:GM_YES="1"; .\neuron\install.ps1 --no-gm -EmbedModel <model>` |
 | 5 | `$env:GM_YES="1"; .\neurag\install.ps1 --no-gm` |
 
@@ -81,8 +83,8 @@ model and the Question 3 flag to the command.
 | # | Command |
 |---|---|
 | 1 | `GM_YES=1 GM_EMBED_MODEL=<model> sh gray_matter/install.sh` |
-| 2 | `GM_YES=1 GM_NO_NEURAG=1 GM_EMBED_MODEL=<model> sh gray_matter/install.sh` |
-| 3 | `GM_YES=1 GM_NO_NEURON=1 sh gray_matter/install.sh` |
+| 2 | `GM_YES=1 GM_WITH_NEURAG=1 GM_EMBED_MODEL=<model> sh gray_matter/install.sh` |
+| 3 | `GM_YES=1 GM_WITH_NEURAG=1 GM_NO_NEURON=1 sh gray_matter/install.sh` |
 | 4 | `GM_YES=1 sh neuron/install.sh --no-gm --embed-model <model>` |
 | 5 | `GM_YES=1 sh neurag/install.sh --no-gm` |
 

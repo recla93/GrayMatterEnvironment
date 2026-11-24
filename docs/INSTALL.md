@@ -60,7 +60,7 @@ Each project is also available as a standalone repo with its own installer:
 
 | You downloaded | Double-click | You get |
 |---|---|---|
-| **gray_matter** (full suite) | `install.cmd` / `install.command` | GM + bundled Neuron + NeuRAG |
+| **gray_matter** (full suite) | `install.cmd` / `install.command` | GM + bundled Neuron; NeuRAG with `GM_WITH_NEURAG=1` |
 | **Neuron** | `install.cmd` / `install.command` | Mode selector → Full suite or Solo Neuron |
 | **neurag** | `install.cmd` / `install.command` | Mode selector → Full suite or Solo NeuRAG |
 
@@ -68,7 +68,7 @@ Running a standalone installer shows a **mode selector**:
 
 ```
   Installation mode:
-    [F] Full suite — GM + Neuron + NeuRAG (recommended)
+    [F] Full suite — GM + Neuron (recommended; NeuRAG: GM_WITH_NEURAG=1)
     [N] Solo Neuron — standalone (registers directly in clients)
     [D] Details — what you lose without GM
 

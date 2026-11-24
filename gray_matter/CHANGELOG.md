@@ -1,6 +1,14 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The default suite is Gray Matter + Neuron; NeuRAG is an add-on.** NeuRAG
+  helps with one thing, measured in ADR-023: project documents kept outside
+  the repository being worked on. Everyone else paid its embedding download,
+  a worker and an installer step for nothing. The GM installers install it
+  only with `GM_WITH_NEURAG=1`, when the venv already has it (an upgrade never
+  drops it) or when NeuRAG's own installer calls; `GM_NO_NEURAG` still wins.
+  `INSTALL-AI.md` makes Neuron + Gray Matter choice 1. The CI job
+  `gateway-without-neurag` already proves GM runs without it.
 - **The installer installs dependencies added without a version bump.** A
   refresh at the same version runs pip with `--no-deps`, so `python-docx`
   (new in NeuRAG) never arrived: `pip check` said "requires python-docx, which

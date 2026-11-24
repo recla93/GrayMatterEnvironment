@@ -16,8 +16,8 @@ also live on their own, and you can install any of them from there. What you
 cannot do is develop them there: see [Where the code lives](#where-the-code-lives).
 
 > **AI agent asked to install this?** Read [gray_matter/INSTALL-AI.md](gray_matter/INSTALL-AI.md)
-> first. Ask the user which combination they want (full suite, Neuron + GM,
-> NeuRAG + GM, or one tool alone) before running any installer.
+> first. Ask the user which combination they want (Neuron + GM, the default;
+> the full suite with NeuRAG; NeuRAG + GM; or one tool alone) before running any installer.
 
 ---
 
@@ -99,7 +99,7 @@ Each project is also a standalone repo with the same installer:
 
 | You start from | Double-click | You get |
 |---|---|---|
-| **gray_matter** | `install.cmd` / `install.command` | GM + whichever of Neuron/NeuRAG sit beside it |
+| **gray_matter** | `install.cmd` / `install.command` | GM + Neuron; NeuRAG, the add-on for project documents, with `GM_WITH_NEURAG=1` |
 | **neuron** | `install.cmd` / `install.command` | Mode selector → Full suite or Solo Neuron |
 | **neurag** | `install.cmd` / `install.command` | Mode selector → Full suite or Solo NeuRAG |
 
