@@ -605,6 +605,15 @@ echo ""
 # A peer install can leave the shared venv internally inconsistent (pip prints
 # "dependency resolver ... conflicts" and still exits 0), and the banner below
 # then declares success over a venv whose servers crash on import.
+# A refresh at the same version runs pip with --no-deps, so a dependency ADDED
+# without a version bump never arrived (python-docx, 2026-11-23): install what
+# pip check reports missing, then check again.
+MISSING=$("$VPY" -m pip check 2>&1 | sed -n 's/.* requires \([^, ]*\),\{0,1\} which is not installed.*/\1/p' | sort -u)
+if [ -n "$MISSING" ]; then
+    echo "Installing missing dependencies: $MISSING"
+    # shellcheck disable=SC2086
+    "$VPY" -m pip install $FINDLINKS $MISSING >/dev/null 2>&1 || true
+fi
 if ! PIP_CHECK=$("$VPY" -m pip check 2>&1); then
     echo ""
     echo "  [!] The venv has conflicting dependencies - servers may fail to start:"

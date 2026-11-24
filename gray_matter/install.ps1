@@ -1177,6 +1177,16 @@ if ($Desk) {
 # then declares success over a venv whose servers crash on import. Say it here,
 # where the user is still reading, instead of at the next MCP startup.
 $prevEap3 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+# A refresh at the same version runs pip with --no-deps (Get-RepairArgs), so a
+# dependency ADDED without a version bump never arrived: on 2026-11-23 pip check
+# said "neurag 1.9.1 requires python-docx, which is not installed" and the
+# banner still said INSTALL COMPLETE. Install what is missing, then check.
+$missing = @(Invoke-Pip check | ForEach-Object {
+    if ("$_" -match 'requires (\S+?),? which is not installed') { $Matches[1] } } | Sort-Object -Unique)
+if ($missing) {
+    Write-Host "Installing missing dependencies: $($missing -join ', ')"
+    Invoke-Pip install @Find @missing | Out-Null
+}
 $pipCheck = Invoke-Pip check     # no 2>&1: PS 5.1 wraps native stderr in ErrorRecords
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

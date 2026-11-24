@@ -1,6 +1,11 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The installer installs dependencies added without a version bump.** A
+  refresh at the same version runs pip with `--no-deps`, so `python-docx`
+  (new in NeuRAG) never arrived: `pip check` said "requires python-docx, which
+  is not installed" and the banner still said INSTALL COMPLETE. Both installers
+  now install what `pip check` reports missing, then check again.
 - **The test suite no longer deletes the real Desktop shortcut.** The Desktop
   folder comes from the registry, so every `execute_uninstall` in
   `test_executor.py` removed `Gray Matter.lnk` from the user's Desktop: present
