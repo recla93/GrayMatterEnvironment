@@ -1061,6 +1061,12 @@ async def _sleep_monitor():
                     pass
         elif idle < IDLE_SLEEP_TIMEOUT and _is_sleeping:
             _is_sleeping = False
+            # Wake the servers too: only the flag woke, so `gray-matter status`
+            # read "sleeping" for the rest of the daemon's life while its
+            # workers answered every call (seen 2026-11-24).
+            for s in _registry.all_servers():
+                if s.status == "sleeping":
+                    s.status = "alive"
 
 
 async def _reap_dead_workers():
@@ -1606,6 +1612,12 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     response = {"status": "ok"}
                 elif action == "status":
                     response = _registry.to_dict()
+                    # pid is the registering client's (0 for the daemon's own):
+                    # the process that answers is the worker, so show its pid.
+                    for name, info in response.items():
+                        w = _workers.get(name)
+                        if w is not None and w.poll() is None:
+                            info["pid"] = w.pid
                 elif action == "stats":
                     response = _build_stats()
                 elif action == "doctor":

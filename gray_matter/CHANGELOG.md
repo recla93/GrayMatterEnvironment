@@ -7,6 +7,9 @@
   each recall and, when the Stop hook reports the facts the turn used, writes
   arm, shown and used to `logs/use_experiment.jsonl`;
   `bench/ledger.py --experiment` reads it per arm with a two-proportion z.
+- **`gray-matter status` no longer reads "sleeping" on a busy daemon.** An
+  idle sleep marked every server sleeping and the wake reset only the flag;
+  status now also shows the worker's pid instead of the client's 0.
 - **The default suite is Gray Matter + Neuron; NeuRAG is an add-on.** NeuRAG
   helps with one thing, measured in ADR-023: project documents kept outside
   the repository being worked on. Everyone else paid its embedding download,

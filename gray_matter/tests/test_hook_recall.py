@@ -415,3 +415,29 @@ def test_the_use_experiment_logs_each_turn_with_its_own_arm(srv, tmp_path, monke
     out = ledger.experiment(tmp_path / "use_experiment.jsonl")
     assert out["bonus"]["rate"] == 0.5 and out["control"]["rate"] == 0.0 and out["z"] > 1.96
 
+
+def test_a_daemon_that_wakes_wakes_its_servers(monkeypatch):
+    """2026-11-24: after one idle sleep `gray-matter status` read "sleeping" for
+    the rest of the daemon's life, while its workers answered every call."""
+    import gray_matter.server as S
+    srv = SimpleNamespace(status="alive")
+    monkeypatch.setattr(S._registry, "all_servers", lambda: [srv])
+    monkeypatch.setattr(S, "_IS_DAEMON", False)
+    monkeypatch.setattr(S, "_is_sleeping", False)
+    seen, ticks = [], iter([S.IDLE_SLEEP_TIMEOUT + 1, 0])
+
+    async def tick(_s):
+        try:
+            S._last_call_time = S.time.time() - next(ticks)
+        except StopIteration:
+            raise asyncio.CancelledError
+    monkeypatch.setattr(S.asyncio, "sleep", tick)
+    orig = S._registry.all_servers
+
+    def spy():
+        seen.append(srv.status)
+        return orig()
+    monkeypatch.setattr(S._registry, "all_servers", spy)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(S._sleep_monitor())
+    assert seen == ["alive", "sleeping"] and srv.status == "alive"
