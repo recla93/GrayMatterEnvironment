@@ -1,6 +1,16 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`
+  (option A).** Under `%LOCALAPPDATA%` an MSIX client (Claude Desktop and all
+  it launches) redirects writes into its private LocalCache, so the installer
+  refused to run there and every reinstall of a suite outside AppData needed
+  `GM_HOME` by hand, which nothing makes persistent. `default_suite()` (paths,
+  gme, Neuron's config, NeuRAG's paths, the hooks, the three `install.ps1`)
+  picks the home; an existing suite under `%LOCALAPPDATA%` keeps winning while
+  the new place does not exist. The MSIX probe runs only for such a suite.
+  Linux and macOS unchanged. Proven by a reinstall from inside Claude Desktop
+  with no `GM_HOME`.
 - **The installer installs dependencies added without a version bump.** A
   refresh at the same version runs pip with `--no-deps`, so `python-docx`
   (new in NeuRAG) never arrived: `pip check` said "requires python-docx, which

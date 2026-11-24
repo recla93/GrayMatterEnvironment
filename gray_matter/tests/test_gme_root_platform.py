@@ -57,9 +57,15 @@ def test_linux_is_untouched(home, monkeypatch):
     assert gme.gme_root() == home / ".local" / "share" / "GrayMatterEnvironment" / "registry"
 
 
-def test_windows_is_untouched(home, monkeypatch):
+def test_windows_uses_the_home_unless_an_old_suite_exists(home, monkeypatch):
+    """Option A (2026-11-23): %USERPROFILE%\\GrayMatterEnvironment, out of the
+    MSIX redirect of AppData; an existing suite under %LOCALAPPDATA% is kept."""
     monkeypatch.setattr(gme.sys, "platform", "win32")
-    assert gme.gme_root() == home / "AppData" / "Local" / "GrayMatterEnvironment" / "registry"
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert gme.gme_root() == home / "GrayMatterEnvironment" / "registry"
+    old = home / "AppData" / "Local" / "GrayMatterEnvironment"
+    old.mkdir(parents=True)
+    assert gme.gme_root() == old / "registry"
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])

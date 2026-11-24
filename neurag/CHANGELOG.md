@@ -1,6 +1,10 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`**
+  (option A, see Gray Matter's changelog): `paths.default_suite()`, the hook
+  copies and `install.ps1`; an existing suite under `%LOCALAPPDATA%` is kept.
+  Tests now run with every user folder pointed at a temporary one.
 - **`INSTALL-AI.md` makes an AI agent ask first**: NeuRAG + GM or NeuRAG
   alone, then the matching non-interactive command. Inside the umbrella repo it
   sends the agent to Gray Matter's, which covers the whole suite.

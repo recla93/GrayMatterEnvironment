@@ -64,7 +64,13 @@ Windows        %LOCALAPPDATA%
 macOS / Linux  $XDG_DATA_HOME, else ~/.local/share
 ```
 
-Under it, **one suite root**: `<base>/GrayMatterEnvironment/`.
+Under it, **one suite root**: `<base>/GrayMatterEnvironment/`. Except on
+Windows since option A (2026-11-23): the suite root is
+`%USERPROFILE%\GrayMatterEnvironment`, outside the AppData an MSIX client
+redirects; an existing suite under `%LOCALAPPDATA%` keeps winning while the
+new place does not exist (`default_suite()` in `gray_matter/paths.py`,
+`neuron/config.py`, `neurag/paths.py`, the hooks and the three `install.ps1`).
+The per-OS base above still locates the pre-suite (flat) layouts.
 
 > **macOS does not use `~/Library/Application Support`** — a deliberate choice
 > (2026-07-29). It is the Apple convention and `gme.py` followed it, but it was

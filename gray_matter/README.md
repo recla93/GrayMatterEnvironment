@@ -368,7 +368,7 @@ gray-matter config get flash_min_gap
 | Env var | Default | What it controls |
 |---|---|---|
 | `GM_PREWARM` | `"1"` | Set `"0"` to disable worker pre-warming |
-| `GM_HOME` | `%LOCALAPPDATA%\GrayMatterEnvironment\graymatter` (Win) / `~/.local/share/GrayMatterEnvironment/graymatter` | Gray Matter's data folder |
+| `GM_HOME` | `%USERPROFILE%\GrayMatterEnvironment\graymatter` (Win) / `~/.local/share/GrayMatterEnvironment/graymatter` | Gray Matter's data folder |
 | `GM_TOOLS` | `core` | `all` also announces Gray Matter's own tools (`gray_matter_pulse`, `_status`, `_bridge`) |
 | `GRAY_MATTER_BRIDGES` | `<GM_HOME>/bridges.db` | Override bridges store path |
 

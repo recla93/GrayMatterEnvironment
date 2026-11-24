@@ -29,6 +29,34 @@ def base(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _suite(base):
+    """The default suite on a clean machine: %USERPROFILE% on Windows (option A,
+    2026-11-23), the per-OS base elsewhere."""
+    import os
+    return (base / "home" if os.name == "nt" else base) / "GrayMatterEnvironment"
+
+
+def test_windows_default_is_the_home_and_an_old_suite_is_kept(base):
+    """Option A: AppData is redirected by MSIX clients, so the default leaves
+    it; an existing suite under %LOCALAPPDATA% keeps winning until the new place
+    exists, so moving the default cannot lose a memory."""
+    import os
+    if os.name != "nt":
+        pytest.skip("Windows rule")
+    paths, gme = _reload()
+    home_suite, old_suite = base / "home" / "GrayMatterEnvironment", base / "GrayMatterEnvironment"
+    assert paths._user_base() == home_suite                         # clean machine
+    old_suite.mkdir()
+    assert paths._user_base() == old_suite                          # only the old one
+    assert gme.gme_root() == old_suite / "registry"
+    home_suite.mkdir()
+    assert paths._user_base() == home_suite                         # both: the new one
+    neuron_config = pytest.importorskip("neuron.config")
+    assert neuron_config.default_suite() == str(home_suite)
+    neurag_paths = pytest.importorskip("neurag.paths")
+    assert neurag_paths.default_suite() == home_suite
+
+
 def _reload():
     from gray_matter import gme, paths
     importlib.reload(paths)
@@ -38,7 +66,7 @@ def _reload():
 
 def test_everything_lands_under_one_root(base):
     paths, gme = _reload()
-    suite = base / "GrayMatterEnvironment"
+    suite = _suite(base)
     assert paths._user_base() == suite
     assert paths.gm_home() == suite / "graymatter"
     assert gme.gme_root() == suite / "registry"
@@ -87,7 +115,7 @@ def test_migration_moves_everything_and_verifies_before_deleting(base):
     res = paths.migrate_to_suite_root()
     assert all(r["ok"] for r in res), res
 
-    suite = base / "GrayMatterEnvironment"
+    suite = _suite(base)
     assert (suite / "neuron" / "graphs" / "graph_default.db").read_bytes() == b"memoria"
     assert (suite / "graymatter" / "config.json").exists()
     assert not old_graphs.exists(), "l'originale non e' stato rimosso dopo la verifica"
@@ -103,7 +131,7 @@ def test_migration_is_idempotent(base):
     paths.migrate_to_suite_root()
     second = paths.migrate_to_suite_root()
     assert second == [] or all(r["ok"] for r in second)
-    assert (base / "GrayMatterEnvironment" / "neuron" / "graphs" / "g.db").exists()
+    assert (_suite(base) / "neuron" / "graphs" / "g.db").exists()
 
 
 def test_migration_never_overwrites_an_existing_destination(base):
@@ -153,4 +181,4 @@ def test_installed_venv_carries_its_suite(base, monkeypatch):
 
     monkeypatch.delenv("GM_HOME")
     monkeypatch.setattr(sys, "prefix", str(base / "graymatter" / ".venv"))
-    assert paths._user_base() == base / "GrayMatterEnvironment"
+    assert paths._user_base() == _suite(base)

@@ -65,16 +65,16 @@ restart the client: the workers keep the old code in memory until they restart.
 
 ### Reinstalling the live suite from a terminal
 
-Three things decide whether the reinstall lands in the right place:
+Since option A (2026-11-23) the default suite is
+`%USERPROFILE%\GrayMatterEnvironment`, outside AppData: no `GM_HOME` is needed,
+and the installer runs from inside Claude Desktop too. What still matters:
 
-- **`GM_HOME` set to the suite folder** (the folder that holds `graymatter/`,
-  the graphs and the registry). Without it `install.ps1` falls back to
-  `%LOCALAPPDATA%\GrayMatterEnvironment`; if a stale suite is still there, every
-  client is re-pointed at its venv (seen on 2026-11-14).
-- **Outside the MSIX container.** Claude Desktop is an MSIX app: whatever it
-  launches, Claude Code included, sees `%LOCALAPPDATA%` redirected into
-  `Packages\Claude_...\LocalCache`. From there, start the installer as a
-  process outside the container with `Win32_Process Create`.
+- **An old suite under `%LOCALAPPDATA%\GrayMatterEnvironment`** is used while
+  `%USERPROFILE%\GrayMatterEnvironment` does not exist (a venv cannot move).
+  Claude Desktop is an MSIX app: whatever it launches sees `%LOCALAPPDATA%`
+  redirected into `Packages\Claude_...\LocalCache`, so with such a suite the
+  installer refuses to run from there; start it outside the container with
+  `Win32_Process Create`, or move the suite to the home.
 - **`GM_YES=1`**, so nothing waits on a prompt nobody can answer.
 
 ```powershell

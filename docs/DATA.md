@@ -11,7 +11,7 @@ All three tools keep their data under **one suite folder**:
 
 | OS | Suite folder |
 |---|---|
-| Windows | `%LOCALAPPDATA%\GrayMatterEnvironment\` |
+| Windows | `%USERPROFILE%\GrayMatterEnvironment\` (an existing suite under `%LOCALAPPDATA%` is kept) |
 | Linux / macOS | `$XDG_DATA_HOME/GrayMatterEnvironment/`, default `~/.local/share/GrayMatterEnvironment/` |
 
 | Inside it | What |

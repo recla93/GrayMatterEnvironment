@@ -38,7 +38,19 @@ def _user_base() -> Path:
     p = Path(sys.prefix)
     if p.name == ".venv" and p.parent.name == "graymatter" and p.parent.parent.name == SUITE_DIR:
         return p.parent.parent
-    return _os_base() / SUITE_DIR
+    return default_suite()
+
+
+def default_suite() -> Path:
+    """Windows: %USERPROFILE%\\GrayMatterEnvironment, an existing suite under
+    %LOCALAPPDATA% kept while the new place does not exist (option A,
+    2026-11-23: AppData is redirected by MSIX clients). Elsewhere unchanged.
+    Keep-in-sync with gray_matter/paths.py:default_suite()."""
+    old = _os_base() / SUITE_DIR
+    if os.name != "nt":
+        return old
+    new = Path.home() / SUITE_DIR
+    return old if (not new.is_dir() and old.is_dir()) else new
 
 
 def legacy_data_dir() -> Path:

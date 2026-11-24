@@ -38,10 +38,11 @@ Changing it later means re-embedding the whole store, so ask.
 | 4 | `intfloat/multilingual-e5-large` | 2.2 GB | multilingual, best, heavy |
 
 **Question 3 — only if a previous install exists.** Look for the venv
-`<base>/GrayMatterEnvironment/graymatter/.venv` (`<base>` = `GM_HOME` if set,
-else `%LOCALAPPDATA%` on Windows, `$XDG_DATA_HOME` or `~/.local/share` on
-Linux/macOS). If it
-exists, ask:
+`<suite>/graymatter/.venv`, where `<suite>` is `GM_HOME` if set, else on
+Windows `%USERPROFILE%\GrayMatterEnvironment` (or an older
+`%LOCALAPPDATA%\GrayMatterEnvironment`), on Linux/macOS
+`$XDG_DATA_HOME/GrayMatterEnvironment` or `~/.local/share/GrayMatterEnvironment`.
+If it exists, ask:
 
 | Choice | Flag | Effect |
 |---|---|---|
@@ -83,11 +84,13 @@ model): run it in the background and wait for `INSTALL COMPLETE`.
 
 ### Windows: when you run inside Claude Desktop or another MSIX app
 
-`install.ps1` refuses to run inside an MSIX app container: writes to AppData
-there are redirected to a private copy the other apps never see. If it stops
-with that message, do not set `GM_HOME` just for this run: the installer does
-not make it persistent, so code and data would end up in two different roots.
-Launch the installer outside the container, as a normal process:
+The default suite is in `%USERPROFILE%`, outside AppData, so the installer
+runs from inside Claude Desktop as it is. It refuses only when the suite it
+finds is an older one under `%LOCALAPPDATA%`: writes to AppData inside an MSIX
+app land in a private copy the other apps never see. If it stops with that
+message, do not set `GM_HOME` just for this run: the installer does not make it
+persistent, so code and data would end up in two different roots. Launch the
+installer outside the container, as a normal process:
 
 ```powershell
 $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:GM_YES=''1''; & ''<repo>\gray_matter\install.ps1'' *> ''<log file>''"'

@@ -321,23 +321,33 @@ $OsBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
 # Radice UNICA della suite. GM_HOME resta l'override e vale gia' la radice
 # suite, come in paths.py: sotto ci vanno graymatter/, registry/, neuron/,
 # neurag/ — una cartella sola da guardare, copiare o cancellare.
-$GmBase = if ($env:GM_HOME) { $env:GM_HOME } else { Join-Path $OsBase "GrayMatterEnvironment" }
+# Option A (2026-11-23): the default suite is %USERPROFILE%\GrayMatterEnvironment,
+# outside AppData, where an MSIX client cannot redirect it; every install of the
+# live suite had to pass GM_HOME by hand, and nothing makes GM_HOME persistent.
+# An existing suite under %LOCALAPPDATA% is kept while the new place does not
+# exist (a venv cannot move). Same rule as gray_matter/paths.py:default_suite().
+$GmOld = Join-Path $OsBase "GrayMatterEnvironment"
+$GmNew = Join-Path $env:USERPROFILE "GrayMatterEnvironment"
+$GmBase = if ($env:GM_HOME) { $env:GM_HOME }
+          elseif ($env:USERPROFILE -and -not (Test-Path $GmNew) -and (Test-Path $GmOld)) { $GmOld }
+          elseif ($env:USERPROFILE) { $GmNew }
+          else { $GmOld }
 # Inside an MSIX app (Claude Desktop and what it launches) writes under AppData
 # land in Packages\<app>\LocalCache: other clients never see the suite and
 # uninstalling the app deletes the memory. Probe: a file written to AppData
 # shows up in some package's LocalCache only from inside a container.
-# shortcut: stops instead of relocating; drop when the default base leaves AppData.
-if (-not $env:GM_HOME -and $env:LOCALAPPDATA) {
+# Since option A the default suite is outside AppData: the probe runs only when
+# the chosen suite is still under it (an existing old suite, or GM_HOME there).
+if ($env:LOCALAPPDATA -and $GmBase.StartsWith($env:LOCALAPPDATA, [StringComparison]::OrdinalIgnoreCase)) {
     $probe = "gm-msix-probe-$PID.tmp"
     New-Item -ItemType File (Join-Path $env:LOCALAPPDATA $probe) -Force | Out-Null
     $box = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Packages") -Directory -ErrorAction SilentlyContinue |
            Where-Object { Test-Path (Join-Path $_.FullName "LocalCache\Local\$probe") } | Select-Object -First 1
     Remove-Item (Join-Path $env:LOCALAPPDATA $probe) -Force -ErrorAction SilentlyContinue
     if ($box) {
-        throw ("This installer is running inside an app container ($($box.Name)): the suite would " +
-               "land in its private LocalCache, invisible to other clients and deleted with the app. " +
-               "Run install.ps1 from a normal PowerShell window, or set GM_HOME to a folder outside AppData " +
-               "(e.g. `$env:GM_HOME = `"$env:USERPROFILE\GrayMatterEnvironment`").")
+        throw ("This installer is running inside an app container ($($box.Name)) and the suite is " +
+               "under AppData ($GmBase): it would land in the app's private LocalCache, invisible to " +
+               "other clients and deleted with the app. Run install.ps1 from a normal PowerShell window.")
     }
 }
 $Venv = Join-Path $GmBase "graymatter\.venv"

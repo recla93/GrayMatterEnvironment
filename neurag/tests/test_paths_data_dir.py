@@ -31,8 +31,9 @@ def test_env_override_always_wins(clean, monkeypatch, tmp_path):
 
 def test_clean_machine_uses_the_suite_root(clean, tmp_path):
     """Niente su disco → la radice UNICA della suite, accanto a Neuron, a GM e
-    ai json dei path: `<base>/GrayMatterEnvironment/neurag`."""
-    base = tmp_path / "AppData" / "Local" if os.name == "nt" else tmp_path / "xdg"
+    ai json dei path: `<base>/GrayMatterEnvironment/neurag`. Su Windows la base
+    e' la home (opzione A, 2026-11-23: AppData e' rediretta dai client MSIX)."""
+    base = tmp_path / "home" if os.name == "nt" else tmp_path / "xdg"
     assert paths.data_dir() == base / "GrayMatterEnvironment" / "neurag"
 
 

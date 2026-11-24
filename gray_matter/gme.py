@@ -105,6 +105,17 @@ def user_base() -> Path:
     return Path(base)
 
 
+def _default_suite() -> Path:
+    """paths.default_suite() on this module's platform test (sys.platform, which
+    the platform tests patch): on Windows %USERPROFILE%\\GrayMatterEnvironment,
+    an existing suite under %LOCALAPPDATA% kept while the new place is missing."""
+    old = user_base() / "GrayMatterEnvironment"
+    if sys.platform != "win32":
+        return old
+    new = Path(os.path.expanduser("~")) / "GrayMatterEnvironment"
+    return old if (not new.is_dir() and old.is_dir()) else new
+
+
 def _legacy_macos_root() -> Path:
     """Where macOS installs before this alignment put the registry."""
     return (Path(os.path.expanduser("~")) / "Library" / "Application Support"
@@ -124,7 +135,7 @@ def gme_root() -> Path:
     spostare la regola non puo' far dire alla GUI "nessun tool installato".
     """
     from gray_matter.paths import venv_suite   # lazy: paths must not import gme
-    suite = venv_suite() or user_base() / "GrayMatterEnvironment"
+    suite = venv_suite() or _default_suite()
     current = suite / "registry"
     if current.is_dir():
         return current

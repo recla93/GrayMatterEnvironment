@@ -34,7 +34,7 @@ def test_gme_root_is_absolute_even_with_a_stripped_environment(monkeypatch, var)
 def test_gme_root_prefers_the_platform_location(monkeypatch, tmp_path):
     """Il fallback non deve rubare la precedenza alla posizione di piattaforma."""
     if sys.platform == "win32":
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))        # option A: the home
     elif sys.platform != "darwin":
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     else:

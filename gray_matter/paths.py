@@ -5,7 +5,8 @@ that records exactly what was written — so uninstall removes exactly that, no
 guessing. Stdlib only. The env override GM_HOME roots everything under one dir
 (handy for tests and isolated installs).
 
-Layout (per-OS base = %LOCALAPPDATA% on Windows, $XDG_DATA_HOME|~/.local/share else):
+Layout (<base> = %USERPROFILE%\\GrayMatterEnvironment on Windows, an existing one
+under %LOCALAPPDATA% kept; $XDG_DATA_HOME|~/.local/share/GrayMatterEnvironment else):
     <base>/graymatter/        app/, config.json, logs/, manifest.json, pids.json, bridges.json
     <base>/<slug>/graphs      Neuron graph store (slug default 'neuron')
     <base>/neurag/knowledge.db NeuRAG knowledge base
@@ -59,6 +60,25 @@ def venv_suite() -> "Path | None":
     return None
 
 
+def default_suite() -> Path:
+    """Where a suite lives when nothing says otherwise (no GM_HOME, not run from
+    the suite venv).
+
+    Windows: ``%USERPROFILE%\\GrayMatterEnvironment`` (option A, 2026-11-23).
+    Under %LOCALAPPDATA% an MSIX client (Claude Desktop and every process it
+    starts) redirects writes into its private LocalCache, deleted with the app;
+    so every install ran with GM_HOME by hand, which nothing makes persistent.
+    An EXISTING suite under %LOCALAPPDATA% keeps winning while the new place
+    does not exist: moving the default must not lose a memory.
+    Linux/macOS unchanged: ``$XDG_DATA_HOME|~/.local/share``.
+    Keep-in-sync with neuron/config.py, neurag/paths.py and the hooks."""
+    old = _os_base() / SUITE_DIR
+    if os.name != "nt":
+        return old
+    new = Path(os.path.expanduser("~")) / SUITE_DIR
+    return old if (not new.is_dir() and old.is_dir()) else new
+
+
 def _user_base() -> Path:
     """La radice UNICA della suite: <base>/GrayMatterEnvironment.
 
@@ -73,7 +93,7 @@ def _user_base() -> Path:
     """
     if os.environ.get("GM_HOME"):
         return Path(os.environ["GM_HOME"])
-    return venv_suite() or _os_base() / SUITE_DIR
+    return venv_suite() or default_suite()
 
 
 # --- Code / control (removed on uninstall) ---------------------------------

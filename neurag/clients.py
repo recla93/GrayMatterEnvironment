@@ -697,7 +697,8 @@ def default_server_python() -> str:
         bases.append(os.path.join(home, ".venv"))
     if os.name == "nt":
         la = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        bases += [os.path.join(la, "GrayMatterEnvironment", "neurag", ".venv"),
+        bases += [os.path.join(os.path.expanduser("~"), "GrayMatterEnvironment", "neurag", ".venv"),
+                  os.path.join(la, "GrayMatterEnvironment", "neurag", ".venv"),
                   os.path.join(la, "neurag", ".venv"),
                   os.path.join(la, "gray-matter", ".venv")]
     else:

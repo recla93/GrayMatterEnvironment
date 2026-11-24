@@ -39,7 +39,7 @@
 
 | Variable | Default | Where read | Purpose |
 |---|---|---|---|
-| `GM_HOME` | `<suite>/graymatter` — `%LOCALAPPDATA%\GrayMatterEnvironment\graymatter` (Windows), `~/.local/share/GrayMatterEnvironment/graymatter` (Linux/macOS) | `paths.py` | Root directory for all GM data (see [Data](DATA.md)) |
+| `GM_HOME` | `<suite>/graymatter` — `%USERPROFILE%\GrayMatterEnvironment\graymatter` (Windows; an existing suite under `%LOCALAPPDATA%` is kept), `~/.local/share/GrayMatterEnvironment/graymatter` (Linux/macOS) | `paths.py` | Root directory for all GM data (see [Data](DATA.md)) |
 | `GM_INSTANCE` | (unset) | `ipcauth.py` | Windows: names a second daemon of the same user (its own IPC pipe). Set by `tools/isolated.py`; leave unset otherwise |
 | `GM_PREWARM` | `"1"` if `prewarm` is True | `server.py` | Disable worker pre-warming at startup (`"0"` to skip) |
 | `GM_NEURON_CLIENTS` | (auto-detected) | `executor.py` | Override path to Neuron client assets directory |
@@ -103,9 +103,10 @@ The cross-encoder rerank stage was removed in 2026-07: measured on the benchmark
 
 ## Data paths
 
-Everything lives under one suite folder: `%LOCALAPPDATA%\GrayMatterEnvironment\` on
-Windows, `~/.local/share/GrayMatterEnvironment/` on Linux and macOS
-(`$XDG_DATA_HOME` if set).
+Everything lives under one suite folder: `%USERPROFILE%\GrayMatterEnvironment\` on
+Windows (outside AppData, which MSIX apps such as Claude Desktop redirect; an
+existing suite under `%LOCALAPPDATA%` is kept), `~/.local/share/GrayMatterEnvironment/`
+on Linux and macOS (`$XDG_DATA_HOME` if set).
 
 | What | Where | Override |
 |---|---|---|
