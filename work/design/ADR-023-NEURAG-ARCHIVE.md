@@ -52,6 +52,9 @@ of NeuRAG (the installers never add extras, so `ingest` stopped on every
 **D5. Parked, not removed:** GM bridges, `promote`, keyword routing, the idea
 of KB attachments on Neuron facts. They stay in the code; nothing new is built
 on them until a measure says otherwise.
+Confirmed by the user on 2026-11-24, when NeuRAG became an opt-in add-on:
+they stay parked; the Enterprise work on NeuRAG is where they may be
+reconsidered, with a measure first.
 
 ## Consequences
 
