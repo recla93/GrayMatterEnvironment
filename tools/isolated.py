@@ -86,6 +86,10 @@ def snapshot() -> list[str]:
         pairs.append(Path("neuron/.env"))
     for rel in pairs:
         _copy(SUITE / rel, ROOT / rel)
+    # The smoke asks about Gray Matter: on 2026-11-24 another session had switched
+    # the live context and the gate failed on it. The copy starts where the facts are.
+    if (ROOT / "neuron/graphs/graph_backend.db").is_file():
+        (ROOT / "neuron/graphs/_active_context.txt").write_text("backend", encoding="utf-8")
     return [str(p) for p in pairs]
 
 
