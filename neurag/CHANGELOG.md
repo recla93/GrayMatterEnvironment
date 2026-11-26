@@ -1,6 +1,9 @@
 # Changelog — NeuRAG
 
 ## Unreleased
+- **The model pickers offer two embedding models, not four**, the same as Gray
+  Matter's: `all-MiniLM-L6-v2` (English only) and `multilingual-e5-large` are
+  gone from the installers and the GUI list. A name typed by hand still works.
 - **NeuRAG is the archive of project documentation (ADR-023)**, and Word files
   are part of it: `python-docx` is now a dependency (~4 MB with lxml, prebuilt
   wheels), because the installers never add extras and `ingest` stopped on

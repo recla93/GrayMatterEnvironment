@@ -135,9 +135,7 @@ ensure_python() {
 # var: the MCP client respawns the server from an arbitrary cwd.
 # Keep in sync with $EmbedModels in install.ps1.
 EM_1="|0|0 MB|Follow Neuron / default multilingual - one shared vector space (recommended)"
-EM_2="sentence-transformers/all-MiniLM-L6-v2|384|90 MB|English only - smallest and fastest"
-EM_3="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger - 2x storage per vector"
-EM_4="intfloat/multilingual-e5-large|1024|2.2 GB|multilingual, best quality - heavy (RAM + disk)"
+EM_2="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger - 2x storage per vector"
 CHOSEN_MODEL=""; CHOSEN_DIM=""; CHOSEN_SIZE=""
 _set_chosen() {
     CHOSEN_MODEL="${1%%|*}"; _r="${1#*|}"
@@ -145,7 +143,7 @@ _set_chosen() {
 }
 select_embed_model() {
     if [ -n "$EMBED_MODEL" ]; then
-        for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4"; do
+        for e in "$EM_1" "$EM_2"; do
             [ "${e%%|*}" = "$EMBED_MODEL" ] && { _set_chosen "$e"; return; }
         done
         CHOSEN_MODEL="$EMBED_MODEL"; CHOSEN_DIM=0; CHOSEN_SIZE="?"; return
@@ -154,7 +152,7 @@ select_embed_model() {
     echo ""
     echo "  Embedding model for the vault (downloaded once):"
     i=1
-    for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4"; do
+    for e in "$EM_1" "$EM_2"; do
         _rest="${e#*|}"; _dim="${_rest%%|*}"
         _rest="${_rest#*|}"; _size="${_rest%%|*}"; _note="${_rest#*|}"
         echo "    [$i] $_note"
@@ -167,8 +165,6 @@ select_embed_model() {
     printf "  Choice [1]: "; read -r mc
     case "$mc" in
         2) _set_chosen "$EM_2" ;;
-        3) _set_chosen "$EM_3" ;;
-        4) _set_chosen "$EM_4" ;;
         *) _set_chosen "$EM_1" ;;
     esac
 }

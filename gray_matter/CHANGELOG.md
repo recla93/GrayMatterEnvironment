@@ -1,6 +1,10 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **The installer offers two embedding models, not four.** `all-MiniLM-L6-v2`
+  is English only, for a memory written in Italian; `multilingual-e5-large`
+  needs `query: `/`passage: ` prefixes that Neuron never adds, so it gave worse
+  recall than the default. Either still works by name (`-EmbedModel`).
 - **The use-bonus experiment draws its arm per turn and keeps its own log.**
   Per session it had 4 sessions against 7 after five days, and it read the
   transcripts, of which 08-20/11 were lost. The daemon now draws the arm at

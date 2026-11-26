@@ -61,9 +61,7 @@ SUGGEST = {
     "embed_model": [
         "",  # = segue Neuron (multilingue 384-dim)
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",  # 384
-        "sentence-transformers/all-MiniLM-L6-v2",                       # 384, solo EN
         "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",  # 768
-        "intfloat/multilingual-e5-large",                               # 1024
     ],
 }
 

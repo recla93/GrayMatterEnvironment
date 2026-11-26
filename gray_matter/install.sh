@@ -495,14 +495,12 @@ echo "Installing the gateway (register + hooks + manifest)..."
 # the choice. Keep in sync with $EmbedModels in install.ps1 and with
 # neuron/install.sh.
 GM_EM_1="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - default"
-GM_EM_2="sentence-transformers/all-MiniLM-L6-v2|384|90 MB|English only - smallest and fastest"
-GM_EM_3="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger"
-GM_EM_4="intfloat/multilingual-e5-large|1024|2.2 GB|multilingual, best quality - heavy"
+GM_EM_2="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger"
 GM_MODEL=""; GM_DIM=""; GM_SIZE=""
 _gm_set() { GM_MODEL="${1%%|*}"; _r="${1#*|}"; GM_DIM="${_r%%|*}"; _r="${_r#*|}"; GM_SIZE="${_r%%|*}"; }
 gm_select_embed_model() {
     if [ -n "${GM_EMBED_MODEL:-}" ]; then
-        for e in "$GM_EM_1" "$GM_EM_2" "$GM_EM_3" "$GM_EM_4"; do
+        for e in "$GM_EM_1" "$GM_EM_2"; do
             [ "${e%%|*}" = "$GM_EMBED_MODEL" ] && { _gm_set "$e"; return; }
         done
         GM_MODEL="$GM_EMBED_MODEL"; GM_DIM=0; GM_SIZE="?"; return
@@ -511,7 +509,7 @@ gm_select_embed_model() {
     echo ""
     echo "  Embedding model (downloaded once, defines the memory's vector space):"
     i=1
-    for e in "$GM_EM_1" "$GM_EM_2" "$GM_EM_3" "$GM_EM_4"; do
+    for e in "$GM_EM_1" "$GM_EM_2"; do
         _rest="${e#*|}"; _d="${_rest%%|*}"; _rest="${_rest#*|}"; _sz="${_rest%%|*}"; _n="${_rest#*|}"
         echo "    [$i] $_n"
         echo "        ${e%%|*}  (${_d}-dim, ${_sz})"
@@ -521,7 +519,7 @@ gm_select_embed_model() {
     echo "  Changing this later requires re-embedding the whole store."
     printf "  Choice [1]: "; read -r mc || mc=""
     case "$mc" in
-        2) _gm_set "$GM_EM_2" ;; 3) _gm_set "$GM_EM_3" ;; 4) _gm_set "$GM_EM_4" ;;
+        2) _gm_set "$GM_EM_2" ;;
         *) _gm_set "$GM_EM_1" ;;
     esac
 }
