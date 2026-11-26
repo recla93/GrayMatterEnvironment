@@ -1,6 +1,6 @@
 # Changelog — Gray Matter
 
-## Unreleased
+## 1.11.0 (2026-11-27)
 - **Each session works in its project's memory.** `gray_matter/projects.py`
   finds the project of the session's folder by identity, not path: a
   `.neuron-project` file (first line = context), a known path, or the git origin

@@ -1,6 +1,6 @@
 # Changelog — NeuRAG
 
-## Unreleased
+## 1.9.2 (2026-11-27)
 - **The model pickers offer two embedding models, not four**, the same as Gray
   Matter's: `all-MiniLM-L6-v2` (English only) and `multilingual-e5-large` are
   gone from the installers and the GUI list. A name typed by hand still works.
