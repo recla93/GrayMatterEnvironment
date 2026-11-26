@@ -1,6 +1,15 @@
 # Changelog — Gray Matter
 
 ## Unreleased
+- **Each session works in its project's memory.** `gray_matter/projects.py`
+  finds the project of the session's folder by identity, not path: a
+  `.neuron-project` file (first line = context), a known path, or the git origin
+  remote, at the nearest root above the folder, mapped to a Neuron context in
+  `projects.json` in the GM home. The memory hook resolves it from each
+  message's `cwd`, the stdio gateway from its own folder, and both pass it to
+  Neuron as `_scope`. No `projects.json`, or a folder of no project (83% of the
+  OpenCode history came from `C:\Windows\System32`): the shared context, as
+  before. Never a guess.
 - **The installer offers two embedding models, not four.** `all-MiniLM-L6-v2`
   is English only, for a memory written in Italian; `multilingual-e5-large`
   needs `query: `/`passage: ` prefixes that Neuron never adds, so it gave worse

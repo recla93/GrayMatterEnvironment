@@ -148,7 +148,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("propose")
     p.add_argument("--model", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--context", default="backend")
+    p.add_argument("--context", default="graymatter")
     p.add_argument("--limit", type=int, default=0)
     # The model overshoots the length it is asked for: 14 of 155 came back over
     # GIST_MAX + 10 on 2026-11-18. Asking for less leaves the check where it is.

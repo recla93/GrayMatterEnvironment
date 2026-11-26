@@ -126,6 +126,17 @@ def tied(shared: set, error_words: set) -> bool:
     return bool(shared & error_words) and sum(2 if re.search(r"\d", w) else 1 for w in shared) >= 2
 
 
+def _scope(payload: dict) -> dict:
+    """The session's project context (projects.resolve on the hook's cwd), so a
+    lookup or a confirm lands in the graph the session works in."""
+    try:
+        from gray_matter.projects import resolve
+        ctx = resolve(str(payload.get("cwd") or ""))
+    except Exception:  # noqa: BLE001 — best-effort, like every hook call
+        ctx = ""
+    return {"_scope": ctx} if ctx else {}
+
+
 def failure(payload: dict) -> str:
     tool = str(payload.get("tool_name") or "")
     if payload.get("is_interrupt") or _is_memory_tool(tool):
@@ -136,7 +147,7 @@ def failure(payload: dict) -> str:
         return ""
     _, ids = session_memory(str(payload.get("transcript_path") or ""))
     text = _ipc({"action": "call", "server": "neuron", "tool": "pre_turn",
-                 "args": {"topic": topic, "exclude": ids}})
+                 "args": {"topic": topic, "exclude": ids, **_scope(payload)}})
     # Live 2026-11-23 the recall's own floor let "Exit code 1" of a grep draw the
     # 255 fix: a fact for THIS error shares a distinctive word with it (the code,
     # an identifier, a command), not just "exit code". Not the tool's name either:
@@ -323,11 +334,11 @@ def save(payload: dict) -> str:
     entries = _entries(str(payload.get("transcript_path") or ""))
     shown, used = used_facts(entries, lambda ids: _ipc({
         "action": "call", "server": "neuron", "tool": "pre_turn",
-        "args": {"topic": " ".join("#" + i for i in ids)}}))
+        "args": {"topic": " ".join("#" + i for i in ids), **_scope(payload)}}))
     if shown:     # best-effort like the recall: no daemon, no signal
         _ipc({"action": "call", "server": "neuron", "tool": "confirm",
               "session": str(payload.get("session_id") or ""),   # the daemon logs the turn's arm
-              "args": {"facts": used, "shown": shown}})
+              "args": {"facts": used, "shown": shown, **_scope(payload)}})
     prompt, wrote, work, chars = last_turn(entries)
     if not prompt:
         # No Claude Code transcript (Kimi, Codex): the daemon saw every store_turn.

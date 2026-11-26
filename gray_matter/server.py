@@ -519,7 +519,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             # a question whose fact pre_turn put first).
             n_args = {"topic": topic, "max_tokens": MEMORY_MAX_TOKENS,
                       "exclude": sorted(_flashed)}
-            tasks.append(_call_server_async("neuron", "pre_turn", n_args))
+            tasks.append(_call_server_async("neuron", "pre_turn", _session_scoped("pre_turn", n_args)))
             labels.append("neuron")
 
         neurag = _registry.get_server("neurag")
@@ -644,6 +644,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         arguments = {**arguments, "exclude": sorted(_flashed),
                      "profile": not (_PROFILE_SENT or _client_has_memhook())}
         _PROFILE_SENT = True
+
+    if server.name == "neuron":
+        arguments = _session_scoped(name, arguments)
 
     if server.name == "neuron" and name == "store_turn":
         try:      # who writes the fact: Neuron sees only this gateway as its client
@@ -1327,6 +1330,32 @@ def _trim_for_hook(ctx: str) -> str:
     return "\n".join(out).strip("\n")
 
 
+def _project_scope(cwd: str) -> str:
+    """The Neuron context of the project at `cwd` ("" = none: keep the shared one)."""
+    try:
+        from gray_matter.projects import resolve
+        return resolve(cwd)
+    except Exception:  # noqa: BLE001 — a bad projects.json must never break a recall
+        return ""
+
+
+# This stdio gateway's session context: None until its first Neuron call, then
+# the project of the folder the client started it in ("" = none). A gateway
+# lives as long as its client's session, so this is per session.
+_SESSION_CTX: "list[str | None]" = [None]
+
+
+def _session_scoped(name: str, arguments: dict) -> dict:
+    """Neuron call arguments with the session's `_scope`. In a project session
+    `switch_context` moves THIS session only: the shared pointer is for the
+    sessions that have no project."""
+    if _SESSION_CTX[0] is None:
+        _SESSION_CTX[0] = _project_scope(os.getcwd())
+    if name == "switch_context" and _SESSION_CTX[0]:
+        _SESSION_CTX[0] = str(arguments.get("context") or "").lower().strip("/") or _SESSION_CTX[0]
+    return {**arguments, "_scope": _SESSION_CTX[0]} if _SESSION_CTX[0] else arguments
+
+
 async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
                        exclude: "list | None" = None, cwd: str = "") -> str:
     """ADR-014: what the UserPromptSubmit hook injects, composed in ONE IPC call.
@@ -1357,6 +1386,9 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     args = {"topic": q, "profile": first,      # ADR-015 D7.1: user/habit once per session
             "exclude": sorted(flashed),
             "arm": _TURN_ARM[session]}         # ADR-021: inert while NEURON_FACT_USE_BONUS is 0
+    scope = _project_scope(cwd)
+    if scope:
+        args["_scope"] = scope                 # the session's project, not the shared pointer
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
         _maybe_flash(args["topic"], flashed),

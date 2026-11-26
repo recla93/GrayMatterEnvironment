@@ -90,9 +90,16 @@ def copy_graphs(dst: Path, src: "Path | None" = None) -> None:
         finally:
             out.close()
             ro.close()
-    ctx = src / "_active_context.txt"
-    if ctx.is_file():
-        shutil.copy2(ctx, dst / ctx.name)
+    # Not the live pointer: another session can switch it between the two copies
+    # of one replay, and the sides then compare different graphs (2026-11-26).
+    for name in ("graymatter", "backend"):
+        if (dst / f"graph_{name}.db").is_file():
+            (dst / "_active_context.txt").write_text(name, encoding="utf-8")
+            break
+    else:
+        ctx = src / "_active_context.txt"
+        if ctx.is_file():
+            shutil.copy2(ctx, dst / ctx.name)
 
 
 def worker(code: str, graphs: str, msgs_file: str, out_file: str) -> None:

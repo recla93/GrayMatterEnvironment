@@ -16,6 +16,8 @@
 | `NS_CONSOLIDATE_AUTO` | `""` (off) | `server.py:327` | Enable auto-consolidation every N turns (`"1"`, `"true"`, `"yes"`, `"on"` to enable) |
 | `NEURON_CONSOLIDATE_EVERY` | `20` | `server.py:328` | Turns between auto-consolidation runs |
 | `NEURON_CONSOLIDATE_PROTECT_SALIENCE` | `8` | `server.py:336` | Salience threshold: nodes at or above are never merged |
+| `NEURON_AUTO_SWITCH` | off | `server.py` | `1` brings back the automatic context switch on a guessed domain (never inside a project session) |
+| `NEURON_USER_CONTEXT` | `"user"` | `server.py` | Graph of the habits and facts about the user, read from every context |
 | `NEURON_TOPIC_SHIFT_THRESHOLD` | `0.3` | `server.py:135` | Cosine distance threshold for topic-shift detection |
 | `NEURON_TANGENTIAL_EXPIRY_TURNS` | `5` | `models.py:45` | Inactive turns before tangential links are pruned |
 | `NEURON_SALIENCE_DECAY_THRESHOLD` | `5` | `models.py:47` | Inactive turns before salience starts decaying |
@@ -114,6 +116,7 @@ on Linux and macOS (`$XDG_DATA_HOME` if set).
 | NeuRAG knowledge base | `<suite>/neurag/knowledge.db` (+ `config.json`) | — |
 | Gray Matter (bridges, settings, manifest) | `<suite>/graymatter/` | `GM_HOME` |
 | Daily backups | `<suite>/backups/` | `GM_BACKUP_KEEP` (days kept, `0` disables) |
+| Projects → contexts | `<suite>/graymatter/projects.json`: `{"remotes": {"github.com/owner/repo": "ctx"}, "paths": {"X:/folder": "ctx"}}`; or a `.neuron-project` file in the project root | — |
 
 The full file list and the table schemas are in [Data](DATA.md).
 
