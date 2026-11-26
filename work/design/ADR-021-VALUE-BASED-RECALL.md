@@ -199,3 +199,18 @@ transcripts of 08-20/11 had been lost, the 19/11 baseline with them. Changed:
 Evaluate on **2026-12-01**: adopt at 0.10 if both arms have at least 150 facts
 shown and z >= 1.96; z <= -1.96 sets it back to 0; in between, record the
 numbers here and decide with them.
+
+## Verdict (2026-11-25): not adopted
+
+Closed by the user before 2026-12-01. The live log held 5 and 28 facts shown of
+the 150 required per arm, so a blind check on a copy replaced it: the user wrote
+36 prompts from topics alone and judged the shuffled changed facts.
+
+- Live counts: 11 prompts changed; useful among the facts leaving 8 of 14, among
+  those entering 3 of 11; 0 prompts better, 3 worse, 8 equal (sign test p 0.25).
+- Facts with `confirmed > shown` (impossible counts) zeroed: 6 of 12 leaving, 5 of
+  12 entering; 1 better, 2 worse, 8 equal.
+- On 1202 real messages the bonus changed 458; 325 with those counts zeroed.
+
+Small sample and relevance, not use; but no sign of a benefit. The bonus is set to
+0 in the live suite; the code stays, inert at 0.
