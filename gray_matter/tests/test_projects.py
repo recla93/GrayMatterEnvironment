@@ -75,6 +75,7 @@ def test_bad_config_is_no_project(tmp_path):
 def test_gateway_scopes_neuron_calls_and_switches_its_session_only(monkeypatch):
     from gray_matter import server as S
     monkeypatch.setattr(S, "_SESSION_CTX", [None])
+    monkeypatch.setattr(S, "_SESSION_PINNED", [False])
     monkeypatch.setattr(S, "_project_scope", lambda cwd: "backend")
     assert S._session_scoped("pre_turn", {"topic": "x"}) == {"topic": "x", "_scope": "backend"}
     out = S._session_scoped("switch_context", {"context": "LLM/"})
@@ -85,9 +86,32 @@ def test_gateway_scopes_neuron_calls_and_switches_its_session_only(monkeypatch):
 def test_gateway_without_project_keeps_the_shared_pointer(monkeypatch):
     from gray_matter import server as S
     monkeypatch.setattr(S, "_SESSION_CTX", [None])
+    monkeypatch.setattr(S, "_SESSION_PINNED", [False])
     monkeypatch.setattr(S, "_project_scope", lambda cwd: "")
-    assert S._session_scoped("switch_context", {"context": "llm"}) == {"context": "llm"}
     assert S._session_scoped("pre_turn", {"topic": "x"}) == {"topic": "x"}
+    assert S._session_scoped("switch_context", {"context": "llm"}) == {"context": "llm", "_scope_pin": True}
+
+
+def test_the_daemon_gives_a_gateway_call_the_turn_project(monkeypatch):
+    """Claude Desktop shares one gateway among its sessions: its own choice was
+    another session's folder (qwen) while the hook of the message said
+    graymatter (live 2026-11-27). The hook's project wins, a switch pins."""
+    import asyncio
+    from gray_matter import server as S
+    monkeypatch.setattr(S, "_LAST_HOOK_SCOPE", ["graymatter"])
+    assert S._turn_scoped("neuron", {"x": 1, "_scope": "qwen"}, False) == {"x": 1, "_scope": "graymatter"}
+    assert S._turn_scoped("neuron", {"_scope": "llm"}, True) == {"_scope": "llm"}
+    assert S._turn_scoped("neurag", {"q": 1}, False) == {"q": 1}
+    S._LAST_HOOK_SCOPE[0] = ""
+    assert S._turn_scoped("neuron", {"_scope": "qwen"}, False) == {"_scope": "qwen"}
+    sent = []
+
+    async def via(payload, timeout=0):
+        sent.append(payload)
+        return "ok"
+    monkeypatch.setattr(S, "_via_daemon", via)
+    asyncio.run(S._call_server_async("neuron", "store_turn", {"facts": [], "_scope_pin": True}))
+    assert sent[0]["pin"] is True and "_scope_pin" not in sent[0]["args"]
 
 
 def test_memhook_scope_from_payload_cwd(monkeypatch):

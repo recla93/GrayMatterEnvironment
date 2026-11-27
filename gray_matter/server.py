@@ -750,6 +750,11 @@ def _worker_for(server_name: str):
             creationflags=creationflags,
         )
         _workers[server_name] = p
+        # A fresh worker is alive. mark_dead() is never undone for a managed
+        # server (no heartbeat), so _reap_dead_workers killed every respawn
+        # within 10 s, mid-call: "worker gave no response" on each pre_turn
+        # that loads the model (seen live 2026-11-27, status read dead pid=0).
+        _registry.heartbeat(server_name)
     return p
 
 
@@ -888,8 +893,13 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict,
     ``user``: the request is the user's own (CLI/GUI through `gm-neurag`), never
     an MCP caller's — only the daemon sets it, and it travels outside the args.
     """
+    pin = False
+    if isinstance(arguments, dict) and "_scope_pin" in arguments:
+        arguments = dict(arguments)
+        pin = bool(arguments.pop("_scope_pin"))
     shared = None if user else await _via_daemon(
-        {"action": "call", "server": server_name, "tool": tool_name, "args": arguments},
+        {"action": "call", "server": server_name, "tool": tool_name, "args": arguments,
+         **({"pin": True} if pin else {})},
         timeout=IPC_TOOL_TIMEOUT)
     if shared is not None:
         return shared
@@ -1346,6 +1356,25 @@ def _project_scope(cwd: str) -> str:
 # the project of the folder the client started it in ("" = none). A gateway
 # lives as long as its client's session, so this is per session.
 _SESSION_CTX: "list[str | None]" = [None]
+_SESSION_PINNED = [False]       # set by switch_context: then the gateway's choice wins
+
+# Daemon side: the project of the newest message the memory hook saw (its cwd,
+# read per message). A gateway's own choice is made once per process, and the
+# Claude Desktop app shares ONE gateway among its sessions: live 2026-11-27 a
+# GM session's store_turn went to `qwen`, another session's folder, while the
+# hook of the same message said graymatter. So the daemon gives a gateway's
+# Neuron call the hook's project, unless that gateway pinned one by switching.
+# ponytail: newest message wins; two sessions in two projects typing at the
+# same moment can swap, a per-session key if MCP calls ever carry one.
+_LAST_HOOK_SCOPE: "list[str]" = [""]
+
+
+def _turn_scoped(server: str, args, pinned: bool):
+    """A gateway's Neuron call arguments, with the project of the turn (the
+    hook's) unless the gateway pinned its own with switch_context."""
+    if server != "neuron" or not isinstance(args, dict) or pinned or not _LAST_HOOK_SCOPE[0]:
+        return args
+    return {**args, "_scope": _LAST_HOOK_SCOPE[0]}
 
 
 def _root_path(uri: str) -> str:
@@ -1384,9 +1413,15 @@ def _session_scoped(name: str, arguments: dict) -> dict:
     sessions that have no project."""
     if _SESSION_CTX[0] is None:
         _SESSION_CTX[0] = _project_scope(os.getcwd())
-    if name == "switch_context" and _SESSION_CTX[0]:
-        _SESSION_CTX[0] = str(arguments.get("context") or "").lower().strip("/") or _SESSION_CTX[0]
-    return {**arguments, "_scope": _SESSION_CTX[0]} if _SESSION_CTX[0] else arguments
+    if name == "switch_context":
+        want = str(arguments.get("context") or "").lower().strip("/")
+        if _SESSION_CTX[0]:
+            _SESSION_CTX[0] = want or _SESSION_CTX[0]
+        _SESSION_PINNED[0] = bool(want)
+    out = {**arguments, "_scope": _SESSION_CTX[0]} if _SESSION_CTX[0] else dict(arguments)
+    if _SESSION_PINNED[0]:
+        out["_scope_pin"] = True
+    return out
 
 
 async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
@@ -1420,6 +1455,8 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
             "exclude": sorted(flashed),
             "arm": _TURN_ARM[session]}         # ADR-021: inert while NEURON_FACT_USE_BONUS is 0
     scope = _project_scope(cwd)
+    if cwd:                                    # a hook that sends no folder (OpenCode's) knows no project:
+        _LAST_HOOK_SCOPE[0] = scope            # its "inbox" must not override a gateway that has one
     if scope:
         args["_scope"] = scope                 # the session's project, not the shared pointer
     ctx, (flash, _c), kb = await asyncio.gather(
@@ -1695,6 +1732,7 @@ async def _ipc_listener(*, exit_on_busy: bool = True):
                     srv = "neurag" if action == "knowledge_cmd" else msg.get("server", "")
                     tool_name = msg.get("tool", "knowledge_status")
                     tool_args = msg.get("args", {})
+                    tool_args = _turn_scoped(srv, tool_args, bool(msg.get("pin")))
                     # Every stdio gateway's worker calls land here: this is the
                     # counter `stats` shows, across sessions, until restart.
                     _tool_calls[tool_name] = _tool_calls.get(tool_name, 0) + 1

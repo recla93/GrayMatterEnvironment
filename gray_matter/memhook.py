@@ -22,7 +22,7 @@ from pathlib import Path
 
 TIMEOUT = 2.5            # seconds for the IPC request
 BUDGET = 1200            # injected characters, ~300 tokens
-PROFILE_BUDGET = 2600    # on top, once per session: user/habit facts (Neuron's cap, 2400) + the contexts line
+PROFILE_BUDGET = 3800    # on top, once per session: the open pendings (~8 lines), user/habit facts (Neuron's cap, 2400) + the contexts line
 MIN_CHARS = 12
 ACKS = {"ok", "si", "sì", "no", "grazie", "va bene", "perfetto", "fallo", "vai", "procedi"}
 

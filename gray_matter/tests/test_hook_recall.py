@@ -441,3 +441,14 @@ def test_a_daemon_that_wakes_wakes_its_servers(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(S._sleep_monitor())
     assert seen == ["alive", "sleeping"] and srv.status == "alive"
+
+
+def test_only_a_hook_with_a_folder_sets_the_turn_project(srv, monkeypatch):
+    """OpenCode's plugin sends no cwd: its recall resolves to the inbox, and that
+    must not override the project of the gateways' calls (2026-11-27)."""
+    monkeypatch.setattr(srv, "_LAST_HOOK_SCOPE", [""])
+    monkeypatch.setattr(srv, "_project_scope", lambda cwd: "graymatter" if cwd else "inbox")
+    asyncio.run(srv._hook_recall("un messaggio senza cartella", "s1", cwd=""))
+    assert srv._LAST_HOOK_SCOPE == [""]
+    asyncio.run(srv._hook_recall("un messaggio dal progetto", "s2", cwd="D:/gm"))
+    assert srv._LAST_HOOK_SCOPE == ["graymatter"]

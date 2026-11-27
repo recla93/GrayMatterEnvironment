@@ -1,6 +1,20 @@
 # Changelog — Gray Matter
 
 ## 1.11.0 (2026-11-27)
+- **A respawned worker is no longer killed.** A worker error marked its server
+  dead, and nothing set a GM-managed server alive again: every 10 s the reaper
+  killed the current worker, the freshly spawned one too, mid-call. A `status`
+  answered in time; a `pre_turn` that loads the model never did ("worker gave no
+  response"), and the memory hook injected nothing for a whole session. A new
+  worker now marks its server alive.
+- **A gateway's Neuron calls take the project of the turn.** Claude Desktop
+  shares one gateway among its sessions, and the gateway chose its project once
+  per process: a Gray Matter session's facts went to another session's
+  project. The daemon now gives a gateway's call the project of the newest
+  message the memory hook saw with a folder; a `switch_context` pins the
+  gateway's own. A hook that sends no folder (OpenCode's plugin) sets nothing.
+- **The session's first message has room for the pendings**: 3800 characters on
+  top of the 1200 (was 2600).
 - **The installers offer mpnet first, MiniLM-L12 second, and keep a memory's
   model.** A reinstall used to save the menu's first entry; with mpnet first it
   would have re-spaced every MiniLM memory, so the model already saved (or the
