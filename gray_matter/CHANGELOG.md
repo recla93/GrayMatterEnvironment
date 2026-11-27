@@ -5,8 +5,8 @@
   the active context only (1030 of 1591 concepts). Now each context is a
   cluster of its own colour, with a legend to switch contexts on and off
   (a click on a name: that context alone) and the open pendings as nodes on
-  their concepts. Hubs, the five most-linked nodes of each context, are
-  larger, outlined and always labelled; other labels only from N links
+  their concepts. Core Concepts, the five most-linked nodes of each context,
+  are larger, outlined and always labelled; other labels only from N links
   (a slider), since text is what the canvas redraws every frame. Dragging a
   node no longer wakes the physics of the whole graph, and hiding a context
   never re-runs the layout. Each context starts in its own disc, so the
@@ -18,9 +18,9 @@
   now moves the sky to its new balance and stops it (on `stabilized`, or 5 s
   after the last move: on ~1700 nodes a few never fall under the stopping
   speed). New sliders: friction, the border (central gravity, stronger by
-  default), how close a hub keeps what links to it (hubs are also heavier,
-  so clusters stay apart), link width and link brightness, to read the
-  links on the whole map.
+  default), how close a Core Concept keeps what links to it (Core Concepts
+  are also heavier, so clusters stay apart), link width and brightness, to
+  read the links on the whole map, and label size.
 - **The KB no longer shakes.** Its 100 nodes hold ~1300 similarity links:
   as springs they could never all be at rest, and the nodes fought. All
   are drawn; each node's two strongest pull.

@@ -559,8 +559,9 @@ const STRINGS = {
     ph_relayout: "Riorganizza",
     ph_reset: "Valori iniziali",
     ph_label: "Etichette da N legami",
+    ph_font: "Grandezza nomi %",
     ph_damping: "Attrito (frenata)",
-    ph_hub: "Hub: vicinanza dei collegati %",
+    ph_hub: "Core Concepts: vicinanza dei collegati %",
     ph_edgeW: "Spessore legami",
     ph_edgeA: "Luminosità legami %",
     ph_look: "Aspetto",
@@ -568,7 +569,7 @@ const STRINGS = {
     graphs_contexts: "Contesti",
     graphs_all: "Tutti",
     graphs_solo: "clic sul nome: solo questo contesto",
-    graphs_hub: "hub",
+    graphs_hub: "Core Concept",
     graphs_layout: "disposizione",
     graphs_links_n: "legami",
     gr_archive: "Archivia",
@@ -781,8 +782,9 @@ const STRINGS = {
     ph_relayout: "Re-layout",
     ph_reset: "Defaults",
     ph_label: "Labels from N links",
+    ph_font: "Label size %",
     ph_damping: "Friction (braking)",
-    ph_hub: "Hubs: closeness of linked %",
+    ph_hub: "Core Concepts: closeness of linked %",
     ph_edgeW: "Link width",
     ph_edgeA: "Link brightness %",
     ph_look: "Look",
@@ -790,7 +792,7 @@ const STRINGS = {
     graphs_contexts: "Contexts",
     graphs_all: "All",
     graphs_solo: "click a name: this context only",
-    graphs_hub: "hub",
+    graphs_hub: "Core Concept",
     graphs_layout: "layout",
     graphs_links_n: "links",
     gr_archive: "Archive",
@@ -2193,7 +2195,7 @@ function newBridgeForm(side, a, b, g){
 // away), link length and stiffness, friction, and how close a hub keeps
 // what links to it. Look: link width and brightness, labels, node size.
 const PHYS_DEFAULT = {repulsion: 60, central: 3, spring: 100, stiff: 8, damping: 60, hub: 45,
-                      live: false, label: 8, size: 40, edgeW: 1, edgeA: 35};
+                      live: false, label: 8, size: 40, edgeW: 1, edgeA: 35, font: 100};
 function physOptions(p){
   // minVelocity: below it a node counts as still, and the simulation stops
   // ("stabilized") instead of gliding for ever; maxVelocity caps the flings.
@@ -2262,8 +2264,9 @@ function seedPositions(nodes){
 function labelFont(n, p){
   // Text scales with the zoom: a hub's label is big enough to read on the
   // whole map, the others need a closer look.
-  if (n.hub) return {size: 44, color: "#ffffff", strokeWidth: 6, strokeColor: "#1a1b26"};
-  return {size: n.deg >= p.label ? 18 : 0};
+  const f = (p.font || 100) / 100;
+  if (n.hub) return {size: 44 * f, color: "#ffffff", strokeWidth: 6 * f, strokeColor: "#1a1b26"};
+  return {size: n.deg >= p.label ? 18 * f : 0};
 }
 
 async function graphsPanel(body){
@@ -2454,7 +2457,8 @@ async function graphsPanel(body){
     el("label", {}, live, T("ph_live")),
     el("b", {}, T("ph_look")),
     slider("edgeW", .2, 6, .2, relink), slider("edgeA", 5, 100, 5, recolor),
-    slider("label", 1, 40, 1, relabel), slider("size", 12, 80, 2, resize),
+    slider("label", 1, 40, 1, relabel), slider("font", 30, 300, 10, relabel),
+    slider("size", 12, 80, 2, resize),
     el("button", {class:"gbtn", onclick: () => {
       try { localStorage.removeItem(POS_KEY); } catch (_) {}
       render(); }}, T("ph_relayout")),
