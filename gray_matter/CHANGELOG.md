@@ -1,6 +1,23 @@
 # Changelog — Gray Matter
 
 ## 1.11.0 (2026-11-27)
+- **The Graphs panel shows every Neuron context, and stays fluid.** It read
+  the active context only (1030 of 1591 concepts). Now each context is a
+  cluster of its own colour, with a legend to switch contexts on and off
+  (a click on a name: that context alone) and the open pendings as nodes on
+  their concepts. Hubs, the five most-linked nodes of each context, are
+  larger, outlined and always labelled; other labels only from N links
+  (a slider), since text is what the canvas redraws every frame. Dragging a
+  node no longer wakes the physics of the whole graph, and hiding a context
+  never re-runs the layout. Each context starts in its own disc, so the
+  first layout takes about 4 s instead of 15; the positions are kept, and the
+  next opening draws at once.
+- **The control center keeps its settings across restarts.** It took a random
+  port, so its page had a new origin and an empty localStorage every time:
+  physics and positions were lost. It now uses port 9877 (`GM_GUI_PORT`), any
+  free port when that one is busy, and never shares it: on Windows
+  `SO_REUSEADDR` let a second window bind the same port and answer the first
+  one's calls with the wrong token (403).
 - **A respawned worker is no longer killed.** A worker error marked its server
   dead, and nothing set a GM-managed server alive again: every 10 s the reaper
   killed the current worker, the freshly spawned one too, mid-call. A `status`

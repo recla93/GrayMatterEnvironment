@@ -35,8 +35,56 @@ def test_graphs_asks_the_tools_and_returns_the_three_graphs(ipc):
     assert out["bridges"] == [{"neuron": "#ab12", "neurag": "Root", "rationale": "why",
                                "weight": 2.0, "promoted": 0}]
     assert [(c["action"], c["tool"]) for c in ipc] == [
-        ("gm-neuron", "export"), ("gm-neurag", "knowledge_link_graph")]
-    assert ipc[1]["args"] == {"format": "json"}
+        ("gm-neuron", "list_contexts"), ("gm-neuron", "export"), ("gm-neurag", "knowledge_link_graph")]
+    assert ipc[2]["args"] == {"format": "json"}
+
+
+LISTING = ("  graymatter                     nodes=2 links=1 turns=9 <- active\n"
+           "  inbox                          nodes=0 links=0 turns=0\n"
+           "  pending                        nodes=0 links=0 turns=0\n"
+           "  studio/bash                    nodes=1 links=0 turns=3")
+
+
+def test_graphs_exports_every_context_that_holds_something(monkeypatch):
+    calls = []
+    graphs = {"graymatter": {"nodes": [{"keyword": "a"}, {"keyword": "b"}], "links": [], "facts": [],
+                             "episodes": {"1": {}}},
+              "inbox": {"nodes": [], "links": [], "facts": [{"id": "x", "status": "retired"}]},
+              "pending": {"nodes": [], "links": [], "facts": [{"id": "p", "status": "active"}]},
+              "studio/bash": {"nodes": [{"keyword": "sed"}], "links": [], "facts": []}}
+
+    def fake(msg, timeout=0, connect_timeout=None):
+        calls.append(msg)
+        if msg["tool"] == "list_contexts":
+            return {"result": LISTING}
+        if msg["tool"] == "export":
+            return {"result": json.dumps(graphs[msg["args"]["context"]])}
+        return {"result": json.dumps(NEURAG)}
+    monkeypatch.setattr(cli, "_send_ipc", fake)
+    monkeypatch.setattr(bridges, "all_bridges", lambda: [])
+    out = webgui.Api().graphs()
+    assert out["active_context"] == "graymatter"
+    # an empty context (inbox: no concept, no open fact) is left out; an open pending stays
+    assert list(out["neuron_contexts"]) == ["graymatter", "pending", "studio/bash"]
+    assert "episodes" not in out["neuron_contexts"]["graymatter"]       # unused by the panel
+    assert out["neuron"] is out["neuron_contexts"]["graymatter"]        # older pages: the active one
+    assert {c["args"].get("context") for c in calls if c["tool"] == "export"} == set(graphs)
+
+
+def test_the_page_keeps_its_origin_and_two_windows_never_share_a_port(monkeypatch):
+    import socket
+    with socket.socket() as s:                      # a port free right now
+        s.bind(("127.0.0.1", 0))
+        free = s.getsockname()[1]
+    monkeypatch.setattr(webgui, "GUI_PORT", free)
+    first, port1, _ = webgui._build_server(webgui.Api())
+    try:
+        second, port2, _ = webgui._build_server(webgui.Api())
+        second.server_close()
+    finally:
+        first.server_close()
+    assert port1 == free                            # same origin: localStorage survives a restart
+    assert port2 not in (0, free)                   # with SO_REUSEADDR Windows gave it the same port
 
 
 def test_a_failing_source_is_an_error_in_its_slot_not_a_blank_panel(monkeypatch):

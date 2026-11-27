@@ -41,6 +41,7 @@ from gray_matter import catalog
 __all__ = ["Api", "main"]
 
 _HTML = Path(__file__).with_name("webgui.html")
+GUI_PORT = int(os.environ.get("GM_GUI_PORT") or 9877)   # the daemon is 9876
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _MAX_LOG = 4000
 
@@ -903,29 +904,56 @@ class Api:
 
     # -- graphs (read-only) -------------------------------------------------
     @staticmethod
-    def _tool_json(action: str, tool: str, args: dict) -> dict:
-        """One tool call through the daemon, its JSON answer or {"error"}.
+    def _tool_raw(action: str, tool: str, args: dict) -> "tuple[str | None, str]":
+        """One tool call through the daemon: (its text answer, "") or (None, error).
         Never opens a store: GM orchestrates, the tools own their data (ADR-016)."""
         from gray_matter import cli as _cli
         try:
             resp = _cli._send_ipc({"action": action, "tool": tool, "args": args},
                                   timeout=30.0, connect_timeout=_cli.FAST_CONNECT)
         except Exception as e:  # noqa: BLE001 — daemon down / token missing
-            return {"error": str(e)}
+            return None, str(e)
         raw = (resp or {}).get("result")
+        return (raw, "") if raw is not None else (None, (resp or {}).get("error", "no daemon"))
+
+    @classmethod
+    def _tool_json(cls, action: str, tool: str, args: dict) -> dict:
+        """One tool call through the daemon, its JSON answer or {"error"}."""
+        raw, err = cls._tool_raw(action, tool, args)
         if raw is None:
-            return {"error": (resp or {}).get("error", "no daemon")}
+            return {"error": err}
         try:
             data = json.loads(raw)
         except (TypeError, ValueError):
             return {"error": str(raw)[:300]}
         return data if isinstance(data, dict) else {"error": str(raw)[:300]}
 
+    def _neuron_contexts(self) -> "tuple[list[str], str]":
+        """Neuron's contexts that hold something (concepts or facts), and the active one."""
+        raw, _err = self._tool_raw("gm-neuron", "list_contexts", {})
+        names, active = [], ""
+        for line in (raw or "").splitlines():
+            m = re.match(r"\s*(\S.*?)\s+nodes=(\d+)\s+links=\d+\s+turns=(\d+)(\s+<- active)?\s*$", line)
+            if not m:
+                continue
+            if m.group(4):
+                active = m.group(1)
+            names.append(m.group(1))
+        return names, active
+
     def graphs(self, _args: str = "") -> dict:
-        """The three graphs for the Graphs panel: Neuron concepts and facts,
-        NeuRAG nodes (with layer) and links, GM's bridges between the two."""
-        out: dict = {"ok": True,
-                     "neuron": self._tool_json("gm-neuron", "export", {}),
+        """The graphs for the Graphs panel: every Neuron context (concepts,
+        links, facts), NeuRAG nodes (with layer) and links, GM's bridges.
+        `neuron` stays the active context alone, for older pages."""
+        names, active = self._neuron_contexts()
+        contexts = {}
+        for name in names:
+            g = self._tool_json("gm-neuron", "export", {"context": name})
+            g.pop("episodes", None)        # the panel draws no episode: half the payload
+            if g.get("error") or g.get("nodes") or any(f.get("status") == "active" for f in g.get("facts") or []):
+                contexts[name] = g
+        out: dict = {"ok": True, "active_context": active, "neuron_contexts": contexts,
+                     "neuron": contexts.get(active) or self._tool_json("gm-neuron", "export", {}),
                      "neurag": self._tool_json("gm-neurag", "knowledge_link_graph",
                                                {"format": "json"})}
         try:
@@ -1369,7 +1397,18 @@ def _build_server(api: Api):
                           "where": tb.strip().splitlines()[-3:]}
             self._send(200, json.dumps(result).encode("utf-8"), "application/json")
 
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    # A fixed port keeps the page's origin, so what it keeps in localStorage
+    # (physics, graph positions) survives a restart; a random one reset it
+    # every time. Busy (a second window): any free port. No address reuse: on
+    # Windows SO_REUSEADDR lets a second server bind the same port, and the
+    # two windows would answer each other's calls (with the wrong token).
+    class _Server(http.server.ThreadingHTTPServer):
+        allow_reuse_address = False
+        allow_reuse_port = False
+    try:
+        srv = _Server(("127.0.0.1", GUI_PORT), Handler)
+    except OSError:
+        srv = _Server(("127.0.0.1", 0), Handler)
     port = srv.server_address[1]
     holder["html"] = _HTML.read_text(encoding="utf-8").replace(
         "__GM_API_BASE__", f"http://127.0.0.1:{port}").replace(

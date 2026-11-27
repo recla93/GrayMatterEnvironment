@@ -237,6 +237,13 @@
   .gphys{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;font-size:12px;color:var(--dim);
          background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
   .gphys[hidden],.gbanner[hidden]{display:none}
+  .gleg{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;font-size:12px;color:var(--dim)}
+  .gleg label{display:flex;align-items:center;gap:5px}
+  .gleg input{width:auto;margin:0}
+  .gleg .gname{cursor:pointer}
+  .gleg .gname:hover{color:var(--fg)}
+  .gleg .gcount{opacity:.6}
+  .gleg .off{opacity:.4}
   .gphys label{display:flex;align-items:center;gap:7px}
   .gphys input[type=range]{width:110px;padding:0;accent-color:var(--accent)}
   .gphys input[type=checkbox]{margin:0}
@@ -551,6 +558,14 @@ const STRINGS = {
     ph_live: "Movimento continuo",
     ph_relayout: "Riorganizza",
     ph_reset: "Valori iniziali",
+    ph_label: "Etichette da N legami",
+    ph_size: "Dimensione massima",
+    graphs_contexts: "Contesti",
+    graphs_all: "Tutti",
+    graphs_solo: "clic sul nome: solo questo contesto",
+    graphs_hub: "hub",
+    graphs_layout: "disposizione",
+    graphs_links_n: "legami",
     gr_archive: "Archivia",
     gr_restore: "Ripristina",
     gr_rename: "Rinomina",
@@ -760,6 +775,14 @@ const STRINGS = {
     ph_live: "Keep moving",
     ph_relayout: "Re-layout",
     ph_reset: "Defaults",
+    ph_label: "Labels from N links",
+    ph_size: "Max size",
+    graphs_contexts: "Contexts",
+    graphs_all: "All",
+    graphs_solo: "click a name: this context only",
+    graphs_hub: "hub",
+    graphs_layout: "layout",
+    graphs_links_n: "links",
     gr_archive: "Archive",
     gr_restore: "Restore",
     gr_rename: "Rename",
@@ -1906,6 +1929,11 @@ async function bridgesView(body){
 // The data comes from the tools (Api.graphs -> daemon IPC), never from the
 // stores; the library is vendored in assets/ so the view works offline.
 const GCOL = {neuron:"#7aa2f7", neurag:"#bb9af7", fact:"#e0af68", bridge:"#9ece6a"};
+// One colour per Neuron context (the active one takes the first); NeuRAG's
+// purple and the bridges' green stay out of it so the three never mix up.
+const CTX_PAL = ["#7aa2f7", "#e0af68", "#f7768e", "#7dcfff", "#ff9e64", "#73daca",
+                 "#c0caf5", "#2ac3de", "#e5c890", "#db4b4b", "#a9b1d6", "#41a6b5"];
+const HUBS_PER_GROUP = 5;   // the starting points: most-linked nodes of each context
 let visReady = null;
 
 function loadVis(){
@@ -1915,30 +1943,56 @@ function loadVis(){
     onerror: () => { visReady = null; ko(new Error(T("graphs_lib_fail"))); }})));
 }
 
-// Payload -> {nodes, edges, byId, factsOf, bridgesOf, counts, errors}.
+// Payload -> {nodes, edges, byId, bridgesOf, contexts, counts, errors}.
+// Every Neuron context is its own cluster: a concept's id carries its
+// context, so "graph" in two contexts is two nodes, each in its cluster.
 function graphModel(data){
   const nodes = [], edges = [], errors = [], byId = {}, bridgesOf = {};
   const add = n => { if (!byId[n.id]){ byId[n.id] = n; nodes.push(n); } return n.id; };
   const edge = e => edges.push(Object.assign({id: "e" + edges.length}, e));
 
-  const nx = data.neuron || {};
-  if (nx.error) errors.push("Neuron: " + nx.error);
-  const facts = nx.facts || [], factById = {}, factsOf = {}, nOf = {};
-  for (const f of facts){
-    factById[f.id] = f;
-    if (f.status === "active") for (const c of f.concepts || []) (factsOf[String(c).toLowerCase()] ||= []).push(f);
+  const active = data.active_context || "";
+  const ctxs = data.neuron_contexts || (data.neuron ? {[active || "neuron"]: data.neuron} : {});
+  const order = Object.keys(ctxs).sort((a, b) => (b === active) - (a === active) || a.localeCompare(b));
+  const contexts = order.map((name, i) => ({name, color: CTX_PAL[i % CTX_PAL.length],
+                                            active: name === active, concepts: 0, facts: 0}));
+  const ctxOf = Object.fromEntries(contexts.map(c => [c.name, c]));
+  const nOf = {}, factById = {}, pendings = [];
+  for (const c of contexts){
+    const nx = ctxs[c.name] || {};
+    if (nx.error){ errors.push("Neuron " + c.name + ": " + nx.error); continue; }
+    const factsOf = {}, local = {};
+    for (const f of nx.facts || []){
+      factById[f.id] = f;
+      if (f.status !== "active") continue;
+      c.facts++;
+      for (const k of f.concepts || []) (factsOf[String(k).toLowerCase()] ||= []).push(f);
+      if (c.name === "pending") pendings.push(f);
+    }
+    for (const n of nx.nodes || []){
+      const kw = n.keyword.toLowerCase(), fs = factsOf[kw] || [];
+      const id = add({id: "n:" + c.name + ":" + n.keyword, label: n.keyword, src: "neuron",
+        ctx: c.name, kind: "concept", raw: n, facts: fs, color: c.color,
+        title: c.name + " · " + fs.length + " " + T("graphs_fact_n")});
+      local[kw] = id;
+      c.concepts++;
+      if (!nOf[kw]) nOf[kw] = id;          // bridges name a keyword: the active context wins
+    }
+    for (const l of nx.links || []){
+      const x = local[String(l.source).toLowerCase()], y = local[String(l.target).toLowerCase()];
+      if (x && y && x !== y) edge({from: x, to: y, src: "neuron", ctx: c.name,
+        width: Math.min(4, .5 + (l.weight || 0)),
+        title: l.link_type + (l.rationale ? ": " + l.rationale : "")});
+    }
   }
-  for (const n of nx.nodes || []){
-    const fs = factsOf[n.keyword.toLowerCase()] || [];
-    nOf[n.keyword.toLowerCase()] = add({id: "n:" + n.keyword, label: n.keyword, src: "neuron",
-      kind: "concept", raw: n, value: 1 + fs.length,
-      color: GCOL.neuron, title: (n.domain || "") + " · " + fs.length
-                                + " " + T("graphs_fact_n")});
-  }
-  for (const l of nx.links || []){
-    const a = nOf[String(l.source).toLowerCase()], b = nOf[String(l.target).toLowerCase()];
-    if (a && b && a !== b) edge({from: a, to: b, src: "neuron", width: Math.min(4, .5 + (l.weight || 0)),
-      title: l.link_type + (l.rationale ? ": " + l.rationale : "")});
+  // Open pendings hold facts but no concepts: each is a node on its concepts.
+  if (ctxOf.pending) for (const f of pendings){
+    const id = add({id: "f:" + f.id, label: "#" + f.id, src: "neuron", ctx: "pending", kind: "fact",
+      raw: f, color: ctxOf.pending.color, shape: "diamond", title: f.text});
+    for (const k of f.concepts || []){
+      const to = nOf[String(k).toLowerCase()];
+      if (to) edge({from: id, to, src: "neuron", ctx: "pending", dashes: [1, 3]});
+    }
   }
 
   const kx = data.neurag || {};
@@ -1983,11 +2037,25 @@ function graphModel(data){
       width: 1 + Math.min(3, (b.weight || 1) / 3),
       title: (b.rationale || "bridge") + " (w " + Number(b.weight || 0).toFixed(1) + ")"});
   }
-  const active = facts.filter(f => f.status === "active").length;
-  const counts = [(nx.nodes || []).length + " " + T("graphs_concepts"), active + " " + T("graphs_fact_n"),
+  // Degree decides size and labels; the top of each group are its hubs.
+  const deg = {};
+  for (const e of edges){ deg[e.from] = (deg[e.from] || 0) + 1; deg[e.to] = (deg[e.to] || 0) + 1; }
+  const groups = {};
+  for (const n of nodes){ n.deg = deg[n.id] || 0; n.value = 1 + n.deg; (groups[n.ctx || n.src] ||= []).push(n); }
+  for (const g of Object.values(groups))
+    g.filter(n => n.deg >= 3).sort((x, y) => y.deg - x.deg).slice(0, HUBS_PER_GROUP).forEach(n => {
+      n.hub = true;
+      n.borderWidth = 3;
+      n.color = {background: typeof n.color === "string" ? n.color : GCOL.neurag, border: "#ffffff",
+                 highlight: {background: "#ffffff", border: "#ffffff"}};
+      n.title = "★ " + T("graphs_hub") + " · " + n.deg + " " + T("graphs_links_n") + "\n" + (n.title || "");
+    });
+  const nConcepts = contexts.reduce((s, c) => s + c.concepts, 0);
+  const nFacts = contexts.reduce((s, c) => s + c.facts, 0);
+  const counts = [nConcepts + " " + T("graphs_concepts"), nFacts + " " + T("graphs_fact_n"),
     (kx.nodes || []).length + " " + T("graphs_kb_nodes") + " (" + archived + " " + T("graphs_archived_one") + ")",
     bridges.length + " " + T("graphs_bridge_n")].join(" · ");
-  return {nodes, edges, byId, factsOf, bridgesOf, counts, errors};
+  return {nodes, edges, byId, bridgesOf, contexts, counts, errors};
 }
 
 // What a node stands for as a bridge end: a concept by keyword, a fact by
@@ -2017,9 +2085,10 @@ function graphSide(side, m, id, edgeId, g){
   if (end) acts.append(el("button", {class:"ghost", onclick: () => g.startLink(id)},
     "⇄ " + T(end.side === "neuron" ? "graphs_link_kb" : "graphs_link_neuron")));
   if (n.kind === "concept"){
-    side.append(el("div", {class:"hint"}, [r.domain, r.topic].filter(Boolean).join(" · ")),
+    side.append(el("div", {class:"hint"}, [n.ctx, r.domain, r.topic, n.hub ? "★ " + T("graphs_hub") : "",
+                                           n.deg + " " + T("graphs_links_n")].filter(Boolean).join(" · ")),
                 el("div", {class:"gk"}, T("graphs_facts")));
-    const fs = m.factsOf[r.keyword.toLowerCase()] || [];
+    const fs = n.facts || [];
     if (!fs.length) side.append(el("div", {class:"hint"}, T("graphs_no_facts")));
     for (const f of fs) side.append(el("div", {class:"gfact"},
       el("div", {class:"gk"}, f.kind + " · #" + f.id + (f.confirmed ? " · ✓" + f.confirmed : "")),
@@ -2102,10 +2171,10 @@ function newBridgeForm(side, a, b, g){
   fr.focus();
 }
 
-// Physics knobs, Obsidian-style: kept per viewer in localStorage.
-const PHYS_DEFAULT = {repulsion: 45, central: 1, spring: 90, stiff: 8, live: false};
+// Physics and look, Obsidian-style: kept per viewer in localStorage.
+const PHYS_DEFAULT = {repulsion: 60, central: 1, spring: 100, stiff: 8, live: false, label: 8, size: 40};
 function physOptions(p){
-  return {solver: "forceAtlas2Based", stabilization: {iterations: 250},
+  return {solver: "forceAtlas2Based", stabilization: {iterations: 150, updateInterval: 25},
           forceAtlas2Based: {gravitationalConstant: -p.repulsion, centralGravity: p.central / 100,
                              springLength: p.spring, springConstant: p.stiff / 100, avoidOverlap: .2,
                              damping: .5}};
@@ -2115,17 +2184,60 @@ function loadPhys(){
   catch (_) { return Object.assign({}, PHYS_DEFAULT); }
 }
 
+// The layout is the slow part (~40 ms an iteration on 1700 nodes), so it is
+// paid once: positions are kept per viewer and the next opening draws at once.
+const POS_KEY = "gm_graph_pos";
+function loadPos(){
+  try { return JSON.parse(localStorage.getItem(POS_KEY) || "{}"); } catch (_) { return {}; }
+}
+function savePos(network){
+  try {
+    const out = {};
+    for (const [id, p] of Object.entries(network.getPositions())) out[id] = [Math.round(p.x), Math.round(p.y)];
+    localStorage.setItem(POS_KEY, JSON.stringify(out));
+  } catch (_) {}
+}
+// Each context starts in its own disc, the biggest in the middle and the
+// others on a ring: the physics only refines, and the clusters stay apart.
+function seedPositions(nodes){
+  const groups = {};
+  for (const n of nodes) (groups[n.ctx || n.src] ||= []).push(n);
+  const keys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
+  const radius = k => 14 * Math.sqrt(groups[k].length) + 40;
+  const ring = keys.length > 1 ? radius(keys[0]) + Math.max(...keys.slice(1).map(radius)) + 120 : 0;
+  keys.forEach((k, i) => {
+    const a = i ? 2 * Math.PI * (i - 1) / (keys.length - 1) : 0, d = i ? ring : 0;
+    const cx = d * Math.cos(a), cy = d * Math.sin(a), r = radius(k);
+    for (const n of groups[k]){
+      if (n.x !== undefined) continue;
+      const t = 2 * Math.PI * Math.random(), s = r * Math.sqrt(Math.random());
+      n.x = cx + s * Math.cos(t); n.y = cy + s * Math.sin(t);
+    }
+  });
+}
+
+// A label is text the canvas redraws every frame: only hubs and well-linked
+// nodes carry one, the rest show it on hover. This keeps ~2000 nodes fluid.
+function labelFont(n, p){
+  // Text scales with the zoom: a hub's label is big enough to read on the
+  // whole map, the others need a closer look.
+  if (n.hub) return {size: 44, color: "#ffffff", strokeWidth: 6, strokeColor: "#1a1b26"};
+  return {size: n.deg >= p.label ? 18 : 0};
+}
+
 async function graphsPanel(body){
-  const shows = {neuron: true, neurag: true, bridges: true, archived: true};
+  const shows = {neurag: true, bridges: true, archived: true};
+  const ctxOn = {};
   const phys = loadPhys();
   const net = el("div", {id:"gnet"}, el("div", {class:"empty", style:"padding:22px"}, T("loading")));
   const side = el("div", {id:"gside"}, el("div", {class:"hint"}, T("graphs_pick")));
   const stats = el("span");
   const search = el("input", {type:"search", placeholder: T("graphs_search")});
   const boxes = Object.keys(shows).map(k => el("label", {},
-    el("input", {type:"checkbox", checked:"", onchange: ev => { shows[k] = ev.target.checked; draw(); }}),
+    el("input", {type:"checkbox", checked:"", onchange: ev => { shows[k] = ev.target.checked; apply(); }}),
     k === "archived" ? null : el("span", {class:"gsw", style:"background:" + GCOL[k === "bridges" ? "bridge" : k]}),
     T("graphs_" + k)));
+  const legend = el("div", {class:"gleg", title: T("graphs_solo")});
   const linkBtn = el("button", {class:"gbtn", title: T("graphs_link_hint")}, "⇄ " + T("graphs_link"));
   const physBtn = el("button", {class:"gbtn"}, "⚙ " + T("graphs_physics"));
   const fitBtn = el("button", {class:"gbtn"}, "⤢ " + T("graphs_fit"));
@@ -2134,7 +2246,7 @@ async function graphsPanel(body){
   body.append(el("div", {class:"graphs"},
     el("div", {class:"gbar"}, ...boxes, search, linkBtn, physBtn, fitBtn,
        el("button", {class:"gbtn", onclick: () => render()}, "↻ " + T("graphs_reload")), stats),
-    physBox, banner,
+    legend, physBox, banner,
     el("div", {class:"gwrap"}, net, side)));
 
   let data;
@@ -2142,28 +2254,49 @@ async function graphsPanel(body){
   catch (e){ net.replaceChildren(el("div", {class:"empty l-err", style:"padding:22px"}, String(e))); return; }
   if (view !== "graphs" || !net.isConnected) return;     // the user moved on meanwhile
   const m = graphModel(data || {});
-  stats.textContent = m.counts;
+  const counts = el("span", {}, m.counts);
+  stats.replaceChildren(counts);
   if (data && data.error) m.errors.push(data.error);
   if (m.errors.length) stats.append(el("span", {class:"l-err"}, "  [!] " + m.errors.join(" | ")));
+  for (const c of m.contexts) ctxOn[c.name] = true;
 
   net.replaceChildren();
-  const dsN = new vis.DataSet(), dsE = new vis.DataSet();
+  for (const n of m.nodes) n.font = labelFont(n, phys);
+  const pos = loadPos();
+  let known = 0;
+  for (const n of m.nodes) if (pos[n.id]){ [n.x, n.y] = pos[n.id]; known++; }
+  // Mostly known: draw as saved, new nodes seeded beside their context.
+  const settled = known >= .9 * m.nodes.length;
+  if (!settled) for (const n of m.nodes){ delete n.x; delete n.y; }
+  seedPositions(m.nodes);
+  const dsN = new vis.DataSet(m.nodes), dsE = new vis.DataSet(m.edges);
+  const t0 = performance.now();
   const network = new vis.Network(net, {nodes: dsN, edges: dsE}, {
-    nodes: {shape: "dot", borderWidth: 1, scaling: {min: 5, max: 24, label: {enabled: false}},
+    // improvedLayout runs Kamada-Kawai before the physics: seconds of frozen
+    // page on a thousand nodes. The force layout alone is enough.
+    layout: {improvedLayout: false},
+    nodes: {shape: "dot", borderWidth: 1, scaling: {min: 8, max: phys.size, label: {enabled: false}},
             font: {color: "#c0caf5", size: 12, face: "Segoe UI"}},
     edges: {color: {color: "#3b4261", highlight: "#7aa2f7", hover: "#7aa2f7", inherit: false},
             smooth: false, width: 1, selectionWidth: 2},
-    physics: physOptions(phys),
-    interaction: {hover: true, tooltipDelay: 150, hideEdgesOnDrag: true, navigationButtons: false},
+    physics: settled && !phys.live ? false : physOptions(phys),
+    interaction: {hover: true, tooltipDelay: 150, hideEdgesOnDrag: true, hideEdgesOnZoom: true,
+                  navigationButtons: false},
     manipulation: {enabled: false, addEdge: (edge, cb) => { cb(null); finishLink(edge.from, edge.to); }},
   });
+  network.on("stabilizationProgress", p => {
+    counts.textContent = T("graphs_layout") + " " + Math.round(100 * p.iterations / p.total) + "%";
+  });
   network.on("stabilizationIterationsDone", () => {
+    counts.textContent = m.counts;
+    counts.title = T("graphs_layout") + " " + ((performance.now() - t0) / 1000).toFixed(1) + " s";
     if (!phys.live) network.setOptions({physics: false});
+    savePos(network);
     network.fit({animation: {duration: 400}});
   });
-  // Dragging a node wakes the simulation for a moment, like Obsidian.
-  network.on("dragStart", p => { if (p.nodes.length) network.setOptions({physics: physOptions(phys)}); });
-  network.on("dragEnd", () => { if (!phys.live) setTimeout(() => network.setOptions({physics: false}), 1500); });
+  // Dragging moves the node alone: waking the whole simulation on a
+  // thousand nodes was the stutter. "Keep moving" is the opt-in for that.
+  network.on("dragEnd", p => { if (p.nodes.length) savePos(network); });
 
   const g = {reload: () => { if (view === "graphs") render(); }, startLink};
   network.on("click", p => {
@@ -2178,18 +2311,34 @@ async function graphsPanel(body){
     const keep = id ? new Set([id, ...network.getConnectedNodes(id)]) : null;
     if (!keep && !lit) return;
     lit = keep;
-    dsN.update(dsN.get().map(n => ({id: n.id,
-      opacity: keep && !keep.has(n.id) ? .12 : (m.byId[n.id].archived ? .3 : 1)})));
+    dsN.update(m.nodes.map(n => ({id: n.id,
+      opacity: keep && !keep.has(n.id) ? .12 : (n.archived ? .3 : 1)})));
   }
 
-  function draw(){
-    const keep = n => shows[n.src] && (shows.archived || !n.archived);
-    const vn = m.nodes.filter(keep), ids = new Set(vn.map(n => n.id));
+  // Visibility only: hiding a node never re-runs the layout, so switching a
+  // context on and off is instant and the map does not move.
+  const visible = n => n.ctx ? !!ctxOn[n.ctx]
+                             : (n.src === "bridges" ? shows.bridges : shows[n.src]) && (shows.archived || !n.archived);
+  function fitVisible(){
+    network.fit({nodes: m.nodes.filter(visible).map(n => n.id), animation: {duration: 400}});
+  }
+  function apply(){
     lit = null;
-    dsN.clear(); dsE.clear();
-    dsN.add(vn);
-    dsE.add(m.edges.filter(e => shows[e.src] && ids.has(e.from) && ids.has(e.to)));
-    network.setOptions({physics: physOptions(phys)});
+    dsN.update(m.nodes.map(n => ({id: n.id, hidden: !visible(n), opacity: n.archived ? .3 : 1})));
+    dsE.update(m.edges.filter(e => e.src === "bridges").map(e => ({id: e.id, hidden: !shows.bridges})));
+    drawLegend();
+  }
+  function drawLegend(){
+    const solo = name => { for (const k in ctxOn) ctxOn[k] = k === name; apply(); fitVisible(); };
+    const all = Object.values(ctxOn).every(Boolean);
+    const box = (on, change) => { const i = el("input", {type:"checkbox", onchange: change}); i.checked = on; return i; };
+    legend.replaceChildren(el("b", {}, T("graphs_contexts")),
+      el("label", {}, box(all, ev => { for (const k in ctxOn) ctxOn[k] = ev.target.checked; apply(); }), T("graphs_all")),
+      ...m.contexts.map(c => el("label", {class: ctxOn[c.name] ? "" : "off"},
+        box(ctxOn[c.name], ev => { ctxOn[c.name] = ev.target.checked; apply(); }),
+        el("span", {class:"gsw", style:"background:" + c.color}),
+        el("span", {class:"gname", onclick: () => solo(c.name)}, (c.active ? "● " : "") + c.name),
+        el("span", {class:"gcount"}, String(c.concepts || c.facts)))));
   }
 
   // Draw a bridge: drag from a Neuron end to a NeuRAG end (either way round).
@@ -2217,36 +2366,39 @@ async function graphsPanel(body){
     newBridgeForm(side, a, b, g);
   }
   linkBtn.addEventListener("click", () => linking ? stopLink() : startLink());
-  fitBtn.addEventListener("click", () => network.fit({animation: true}));
+  fitBtn.addEventListener("click", fitVisible);
 
-  // The physics panel: four forces and "keep moving".
+  // The physics panel: four forces, "keep moving", and the look.
   const save = () => { try { localStorage.setItem("gm_graph_phys", JSON.stringify(phys)); } catch (_) {} };
-  const slider = (key, min, max, step) => {
+  const slider = (key, min, max, step, onSet) => {
     const out = el("span", {class:"gval"}, String(phys[key]));
     const s = el("input", {type:"range", min, max, step, value: String(phys[key])});
-    s.addEventListener("input", () => {
-      phys[key] = Number(s.value); out.textContent = s.value; save();
-      network.setOptions({physics: physOptions(phys)});
-    });
+    s.addEventListener("input", () => { phys[key] = Number(s.value); out.textContent = s.value; save(); onSet(); });
     return el("label", {}, T("ph_" + key), s, out);
   };
+  const force = () => network.setOptions({physics: physOptions(phys)});
+  const relabel = () => dsN.update(m.nodes.map(n => ({id: n.id, font: labelFont(n, phys)})));
+  const resize = () => network.setOptions({nodes: {scaling: {min: 8, max: phys.size}}});
   const live = el("input", {type:"checkbox"});
   live.checked = phys.live;
   live.addEventListener("change", () => {
     phys.live = live.checked; save();
     network.setOptions({physics: phys.live ? physOptions(phys) : false});
   });
-  physBox.append(slider("repulsion", 5, 200, 5), slider("central", 0, 10, .5), slider("spring", 20, 300, 10),
-    slider("stiff", 1, 30, 1), el("label", {}, live, T("ph_live")),
-    el("button", {class:"gbtn", onclick: () => { network.setOptions({physics: physOptions(phys)}); network.stabilize(200); }},
-       T("ph_relayout")),
+  physBox.append(slider("repulsion", 5, 200, 5, force), slider("central", 0, 10, .5, force),
+    slider("spring", 20, 300, 10, force), slider("stiff", 1, 30, 1, force),
+    slider("label", 1, 40, 1, relabel), slider("size", 12, 80, 2, resize),
+    el("label", {}, live, T("ph_live")),
+    el("button", {class:"gbtn", onclick: () => {
+      try { localStorage.removeItem(POS_KEY); } catch (_) {}
+      render(); }}, T("ph_relayout")),
     el("button", {class:"gbtn", onclick: () => { Object.assign(phys, PHYS_DEFAULT); save(); render(); }}, T("ph_reset")));
   physBtn.addEventListener("click", () => { physBox.hidden = !physBox.hidden; physBtn.classList.toggle("on", !physBox.hidden); });
 
   search.addEventListener("input", () => {
     const q = search.value.trim().toLowerCase();
     network.selectNodes(q ? m.nodes.filter(n => String(n.label).toLowerCase().includes(q)
-                                                && dsN.get(n.id)).map(n => n.id) : []);
+                                                && visible(n)).map(n => n.id) : []);
   });
   search.addEventListener("keydown", ev => {
     const sel = network.getSelectedNodes();
@@ -2255,7 +2407,7 @@ async function graphsPanel(body){
     focusOn(sel[0]);
     graphSide(side, m, sel[0], null, g);
   });
-  draw();
+  drawLegend();
 }
 
 // Short-lived notice in a corner: the outcome of a click, where the eye is.
