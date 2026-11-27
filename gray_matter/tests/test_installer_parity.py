@@ -246,10 +246,22 @@ def test_every_sh_has_every_feature(project, why, token):
 def test_gm_keeps_a_saved_embedding_model(suffix):
     """La domanda sul modello tornava a OGNI run interattivo: un [2] battuto al
     posto di [1] su un reinstall cambia lo spazio vettoriale del grafo. Si
-    chiede solo se non c'e' gia' un NS_EMBED_MODEL salvato."""
+    chiede solo se non c'e' gia' un modello: salvato, o quello dei vettori di
+    una memoria esistente (config.saved_embed_model, 2026-11-27)."""
     src = _read("gray_matter", suffix)
-    assert "NS_EMBED_MODEL=(.+)" in src and "keeping" in src, (
+    assert "saved_embed_model" in src and "keeping" in src, (
         f"gray_matter/install{suffix}: the embedding question is not gated on a saved model")
+
+
+@pytest.mark.parametrize("project", ["gray_matter", "neuron"])
+@pytest.mark.parametrize("suffix", [".ps1", ".sh"])
+def test_a_reinstall_keeps_the_memorys_model(project, suffix):
+    """The menu's first entry became mpnet on 2026-11-27: a reinstall that saved
+    it without asking would have re-spaced every MiniLM memory."""
+    src = _read(project, suffix)
+    assert "saved_embed_model" in src, f"{project}/install{suffix}: a reinstall can switch the model"
+    first = src.index("paraphrase-multilingual-mpnet-base-v2")
+    assert first < src.index("paraphrase-multilingual-MiniLM-L12-v2"), f"{project}/install{suffix}: mpnet is not the default"
 
 
 @pytest.mark.parametrize("suffix", [".ps1", ".sh"])
@@ -336,14 +348,12 @@ def test_every_installer_agrees_on_one_vector_space(project):
 
     What must never appear is a THIRD answer: a different default of its own.
     """
-    default = "paraphrase-multilingual-MiniLM-L12-v2"
+    # Since 2026-11-27 each store has its own default, measured on its bench:
+    # mpnet for Neuron (and GM, which installs it), MiniLM-L12 for NeuRAG.
+    default = "paraphrase-multilingual-MiniLM-L12-v2" if project == "neurag" else "paraphrase-multilingual-mpnet-base-v2"
     for suffix in (".ps1", ".sh"):
         body = _read(project, suffix)
-        names_default = default in body
-        defers = "Follow Neuron" in body or "following Neuron" in body
-        assert names_default or defers, (
-            f"{project}/install{suffix}: neither names the shared default "
-            f"({default}) nor defers to Neuron — that is a third vector space")
+        assert default in body, f"{project}/install{suffix}: does not name its default ({default})"
 
 
 @pytest.mark.parametrize("project", PRESENT)

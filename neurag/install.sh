@@ -134,8 +134,8 @@ ensure_python() {
 # Persisted via neurag/settings.py (the tool's own config surface), NOT an env
 # var: the MCP client respawns the server from an arbitrary cwd.
 # Keep in sync with $EmbedModels in install.ps1.
-EM_1="|0|0 MB|Follow Neuron / default multilingual - one shared vector space (recommended)"
-EM_2="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger - 2x storage per vector"
+EM_1="|0|0 MB|MiniLM-L12 multilingual (paraphrase-multilingual-MiniLM-L12-v2) - default, best on documents"
+EM_2="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|mpnet multilingual - Neuron's default, worse here on documents (2x storage)"
 CHOSEN_MODEL=""; CHOSEN_DIM=""; CHOSEN_SIZE=""
 _set_chosen() {
     CHOSEN_MODEL="${1%%|*}"; _r="${1#*|}"
@@ -171,7 +171,7 @@ select_embed_model() {
 save_embed_model() {  # $1 = venv python
     _vpy="$1"
     if [ -z "$CHOSEN_MODEL" ]; then
-        echo "  Embedding model: following Neuron / the multilingual default."
+        echo "  Embedding model: the default, MiniLM-L12 multilingual."
         return 0
     fi
     _dim="$CHOSEN_DIM"

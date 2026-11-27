@@ -19,8 +19,9 @@ import os
 from pathlib import Path
 
 DEFAULTS = {
-    # Embedding model, chosen at install time. "" = follow Neuron / the built-in
-    # multilingual default, which is what keeps the two in ONE vector space.
+    # Embedding model, chosen at install time. "" = the built-in default,
+    # MiniLM-L12 multilingual (no longer Neuron's model: mpnet was worse on the
+    # documents bench, 2026-11-27).
     # embed_dim MUST match embed_model: vectors of different widths are not
     # comparable, so changing either later means re-indexing the vault.
     "embed_model": "",

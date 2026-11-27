@@ -494,8 +494,8 @@ echo "Installing the gateway (register + hooks + manifest)..."
 # without ever running Neuron's own installer, so these users were never given
 # the choice. Keep in sync with $EmbedModels in install.ps1 and with
 # neuron/install.sh.
-GM_EM_1="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - default"
-GM_EM_2="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger"
+GM_EM_1="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual (EN+IT) - default, best recall"
+GM_EM_2="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - light, for a weak PC"
 GM_MODEL=""; GM_DIM=""; GM_SIZE=""
 _gm_set() { GM_MODEL="${1%%|*}"; _r="${1#*|}"; GM_DIM="${_r%%|*}"; _r="${_r#*|}"; GM_SIZE="${_r%%|*}"; }
 gm_select_embed_model() {
@@ -549,17 +549,22 @@ print('EMBED_MODEL_READY')" 2>&1 | sed 's/^/    /'; then
 # la domanda tornava, e un [2] battuto al posto di [1] su un reinstall cambia
 # lo spazio vettoriale del grafo. GM_EMBED_MODEL esplicito vince sempre.
 gm_saved_embed_model() {  # $1 = venv python
-    "$1" -I -c "import re
-from neuron.config import user_env_file
-m = re.search(r'^NS_EMBED_MODEL=(.+)$', open(user_env_file(), encoding='utf-8').read(), re.M)
-print(m.group(1).strip() if m else '')" 2>/dev/null || echo ""
+    # "env|<model>" saved, "store|<model>" from an older install's memory.
+    "$1" -I -c "from neuron.config import saved_embed_model
+m, w = saved_embed_model()
+print(w + '|' + m if m else '')" 2>/dev/null || echo ""
 }
 if [ -n "$NEURON_DIR" ]; then
     GM_SAVED=""
     [ -z "${GM_EMBED_MODEL:-}" ] && GM_SAVED=$(gm_saved_embed_model "$VPY")
     if [ -n "$GM_SAVED" ]; then
         echo ""
-        echo "  Embedding model: keeping $GM_SAVED (set GM_EMBED_MODEL to change it)."
+        echo "  Embedding model: keeping ${GM_SAVED#*|} (set GM_EMBED_MODEL to change it)."
+        if [ "${GM_SAVED%%|*}" = "store" ]; then
+            GM_MODEL="${GM_SAVED#*|}"; GM_DIM=0; GM_SIZE="?"
+            for e in "$GM_EM_1" "$GM_EM_2"; do [ "${e%%|*}" = "$GM_MODEL" ] && _gm_set "$e"; done
+            gm_save_embed_model "$VPY"
+        fi
     else
         gm_select_embed_model
         gm_save_embed_model "$VPY"

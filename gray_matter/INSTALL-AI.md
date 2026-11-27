@@ -40,8 +40,8 @@ Changing it later means re-embedding the whole store, so ask.
 
 | # | Model | Size | Note |
 |---|---|---|---|
-| 1 | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 220 MB | multilingual (EN+IT), default |
-| 2 | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | 1.0 GB | multilingual, stronger |
+| 1 | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | 1.0 GB | multilingual (EN+IT), default: best recall |
+| 2 | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 220 MB | multilingual (EN+IT), light: for a weak PC |
 
 **Question 3 — only if a previous install exists.** Look for the venv
 `<suite>/graymatter/.venv`, where `<suite>` is `GM_HOME` if set, else on

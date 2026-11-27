@@ -32,8 +32,10 @@ def _setting(key: str):
 
 def _resolve_model() -> str:
     # env (NeuRAG → Neuron) beats the persisted choice, which beats the default.
+    # Not Neuron's NS_EMBED_MODEL any more (2026-11-27): mpnet, Neuron's default,
+    # was worse here (bench recall@5 0.933 -> 0.900, concept MRR 0.728 -> 0.567,
+    # Italian 1.00 -> 0.857) and the two stores are never compared vector to vector.
     return (os.environ.get("NEURAG_EMBED_MODEL")
-            or os.environ.get("NS_EMBED_MODEL")
             or (_setting("embed_model") or "")
             or _DEFAULT_MODEL)
 
@@ -43,7 +45,7 @@ def _resolve_dim() -> int:
     user pick an mpnet (768) or e5-large (1024), and a hardcoded 384 next to an
     overridable model silently mis-sizes every vector NeuRAG stores — the shared
     space with Neuron is the whole point of the model alignment above."""
-    raw = os.environ.get("NEURAG_EMBED_DIM") or os.environ.get("NS_EMBED_DIM") or ""
+    raw = os.environ.get("NEURAG_EMBED_DIM") or ""
     try:
         if str(raw).strip():
             return int(str(raw).strip())

@@ -255,8 +255,8 @@ function Ensure-Python {
 # var: the MCP client respawns the server from an arbitrary cwd.
 # Names/dims verified against fastembed's list_supported_models().
 $EmbedModels = @(
-    @{ name = "";                                                            dim = 0;    size = "0 MB";   note = "Follow Neuron / default multilingual - one shared vector space (recommended)" },
-    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual, stronger - 2x storage per vector" }
+    @{ name = "";                                                            dim = 0;    size = "0 MB";   note = "MiniLM-L12 multilingual (paraphrase-multilingual-MiniLM-L12-v2) - default, best on documents" },
+    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "mpnet multilingual - Neuron's default, worse here on documents (2x storage)" }
 )
 function Select-EmbedModel {
     if ($EmbedModel) {
@@ -280,7 +280,7 @@ function Select-EmbedModel {
     return $EmbedModels[0]
 }
 function Save-EmbedModel([string]$Vpy, $Model) {
-    if (-not $Model.name) { Write-Host "  Embedding model: following Neuron / the multilingual default." }
+    if (-not $Model.name) { Write-Host "  Embedding model: the default, MiniLM-L12 multilingual." }
     $dim = $Model.dim
     if ($Model.name -and $dim -eq 0) {
         # No 2>$null here: redirecting a native exe's stderr in PS 5.1 wraps

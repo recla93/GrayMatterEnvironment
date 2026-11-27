@@ -1,6 +1,11 @@
 # Changelog — NeuRAG
 
 ## 1.9.2 (2026-11-27)
+- **NeuRAG no longer follows Neuron's embedding model.** Neuron's new default,
+  mpnet, was worse on NeuRAG's bench (recall@5 0.933 -> 0.900, concepts MRR
+  0.728 -> 0.567, Italian 1.00 -> 0.857), and the two stores are never compared
+  vector to vector: MiniLM-L12 stays NeuRAG's default (`NEURAG_EMBED_MODEL`
+  changes it), the pickers name it first.
 - **The model pickers offer two embedding models, not four**, the same as Gray
   Matter's: `all-MiniLM-L6-v2` (English only) and `multilingual-e5-large` are
   gone from the installers and the GUI list. A name typed by hand still works.

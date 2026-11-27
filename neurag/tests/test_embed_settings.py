@@ -50,13 +50,14 @@ def test_env_beats_persisted_settings(vault, monkeypatch):
     assert e.DIM == 384
 
 
-def test_neuron_env_is_followed_so_the_pair_shares_one_space(vault, monkeypatch):
-    # NS_* is Neuron's knob: one env governs the suite (embedder.py docstring).
+def test_neurons_model_is_not_followed(vault, monkeypatch):
+    """2026-11-27: Neuron's default became mpnet, worse on NeuRAG's bench
+    (recall@5 0.933 -> 0.900, Italian 1.00 -> 0.857): NeuRAG keeps its own."""
     monkeypatch.setenv("NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
     monkeypatch.setenv("NS_EMBED_DIM", "768")
     e = _reload()
-    assert e._MODEL.endswith("paraphrase-multilingual-mpnet-base-v2")
-    assert e.DIM == 768
+    assert e._MODEL.endswith("paraphrase-multilingual-MiniLM-L12-v2")
+    assert e.DIM == 384
 
 
 def test_empty_model_setting_falls_back_to_the_default(vault):

@@ -985,8 +985,8 @@ if ($NeuronDir) {
 # the choice. Same list and same persistence (neuron.config.set_user_env) as
 # neuron/install.ps1 — keep the two in sync.
 $EmbedModels = @(
-    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - default, best size/quality" },
-    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual, stronger - 2x storage per vector" }
+    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual (EN+IT) - default, best recall (2x storage per vector)" },
+    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - light, for a weak PC" }
 )
 function Select-GmEmbedModel {
     if ($EmbedModel) {
@@ -1114,10 +1114,9 @@ function Get-SavedEmbedModel {
     $probe = Join-Path $env:TEMP "gm_embed_$PID.py"
     @"
 try:
-    import re
-    from neuron.config import user_env_file
-    m = re.search(r'^NS_EMBED_MODEL=(.+)$', open(user_env_file(), encoding='utf-8').read(), re.M)
-    print(m.group(1).strip() if m else '')
+    from neuron.config import saved_embed_model
+    m, where = saved_embed_model()
+    print(where + '|' + m if m else '')
 except Exception:
     print('')
 "@ | Set-Content $probe -Encoding ASCII
@@ -1126,9 +1125,16 @@ except Exception:
     return "$out".Trim()
 }
 if ($NeuronDir) {
+    # "env|<model>" (already saved) or "store|<model>" (an older install that
+    # never saved it: the memory's vectors say which one, and it stays).
     $saved = if ($EmbedModel) { "" } else { Get-SavedEmbedModel }
     if ($saved) {
-        Write-Host "`n  Embedding model: keeping $saved (pass -EmbedModel to change it)."
+        $where, $name = $saved -split '\|', 2
+        Write-Host "`n  Embedding model: keeping $name (pass -EmbedModel to change it)."
+        if ($where -eq "store") {
+            $known = $EmbedModels | Where-Object { $_.name -eq $name } | Select-Object -First 1
+            Save-GmEmbedModel $VPy $(if ($known) { $known } else { @{ name = $name; dim = 0; size = "?"; note = "kept" } })
+        }
     } else {
         $GmChosen = Select-GmEmbedModel
         Save-GmEmbedModel $VPy $GmChosen
