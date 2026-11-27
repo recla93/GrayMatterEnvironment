@@ -1,6 +1,11 @@
 # Changelog — Gray Matter
 
 ## 1.11.0 (2026-11-27)
+- **The flash looks in the session's project.** The recall had the project
+  and the flash did not: Neuron's `forgotten` read its global active context,
+  so a session of any project got `graymatter`'s dormant facts. All three
+  flash paths (memory hook, gateway `pre_turn`, `pulse`) now pass the
+  session's project.
 - **The Graphs panel shows every Neuron context, and stays fluid.** It read
   the active context only (1030 of 1591 concepts). Now each context is a
   cluster of its own colour, with a legend to switch contexts on and off

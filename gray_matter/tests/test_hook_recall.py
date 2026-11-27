@@ -452,3 +452,20 @@ def test_only_a_hook_with_a_folder_sets_the_turn_project(srv, monkeypatch):
     assert srv._LAST_HOOK_SCOPE == [""]
     asyncio.run(srv._hook_recall("un messaggio dal progetto", "s2", cwd="D:/gm"))
     assert srv._LAST_HOOK_SCOPE == ["graymatter"]
+
+
+def test_the_flash_looks_in_the_sessions_project(srv, monkeypatch):
+    """The recall had the session's project and the flash did not: Neuron read
+    its global active context, and every project got graymatter's flashes
+    (2026-11-27)."""
+    seen = {}
+    real = srv._call_server_async
+
+    async def spy(server, tool, args):
+        seen[tool] = dict(args)
+        return await real(server, tool, args)
+    monkeypatch.setattr(srv, "_call_server_async", spy)
+    monkeypatch.setattr(srv, "_project_scope", lambda cwd: "mocoder")
+    asyncio.run(srv._hook_recall("parliamo del runner di mocoder", "s1", cwd="D:/mocoder"))
+    assert seen["pre_turn"]["_scope"] == "mocoder"
+    assert seen["forgotten"]["_scope"] == "mocoder"

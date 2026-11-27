@@ -574,7 +574,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # Flash: serendipitous dormant-concept recall, fired at a topic shift.
         if PROACTIVE_BUDGET > 0:
             # ADR-016 D4: no bridge is born from a flash any more.
-            flash_note, _concept = await _maybe_flash(topic)
+            flash_note, _concept = await _maybe_flash(topic, scope=_SESSION_CTX[0] or "")
             if flash_note:
                 proactive.append(flash_note)
 
@@ -667,7 +667,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # nobody makes. For clients with the hook, "recall" already gives it.
     flash = ""
     if is_pre and PROACTIVE_BUDGET > 0:
-        flash, _c = await _maybe_flash(str(arguments.get("topic", "")))
+        flash, _c = await _maybe_flash(str(arguments.get("topic", "")), scope=str(arguments.get("_scope") or ""))
         flash = f"\n\n{flash}" if flash else ""
     return [TextContent(type="text", text=(result or "(empty)") + kb + flash)]
 
@@ -1461,7 +1461,7 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
         args["_scope"] = scope                 # the session's project, not the shared pointer
     ctx, (flash, _c), kb = await asyncio.gather(
         _call_server_async("neuron", "pre_turn", args),
-        _maybe_flash(args["topic"], flashed),
+        _maybe_flash(args["topic"], flashed, scope),
         kb_task)
     from gray_matter.memhook import BUDGET, PROFILE_BUDGET
     _note_facts(ctx, flashed)
@@ -1490,7 +1490,7 @@ _FLASH_LINE = re.compile(r"\[(?P<kind>idea|decision|fix|fact)\] .* \((?P<concept
                          r"#(?P<id>[0-9a-f]{8})\s*$", re.M)
 
 
-async def _maybe_flash(topic: str, flashed: "set | None" = None):
+async def _maybe_flash(topic: str, flashed: "set | None" = None, scope: str = ""):
     """Flash v1/v2 — returns (note, concept). `concept` is the dormant keyword
     surfaced (or ""), which pulse uses to auto-persist a cross-store bridge (v3b).
     Fires at a topic shift, mid-band `near` selection, rate-limited by a min gap +
@@ -1509,9 +1509,12 @@ async def _maybe_flash(topic: str, flashed: "set | None" = None):
     # ADR-016 D2: a dormant FACT near the topic, or nothing. It used to be a
     # bare node name, from a band that starts under the model's noise and, when
     # empty, from the oldest node of all: the carbonara got a flash.
-    out = await _call_server_async("neuron", "forgotten", {
-        "facts": True, "near": topic, "threshold": 5, "top_n": 1,
-        "exclude": sorted(flashed)})
+    # The session's project, like the recall beside it: without it Neuron read
+    # its global active context, and every project got graymatter's flashes.
+    args = {"facts": True, "near": topic, "threshold": 5, "top_n": 1, "exclude": sorted(flashed)}
+    if scope:
+        args["_scope"] = scope
+    out = await _call_server_async("neuron", "forgotten", args)
     m = _FLASH_LINE.search(out or "")
     if not m:                                        # "No dormant fact", errors, old Neuron
         return "", ""
