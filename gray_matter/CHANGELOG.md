@@ -12,6 +12,18 @@
   never re-runs the layout. Each context starts in its own disc, so the
   first layout takes about 4 s instead of 15; the positions are kept, and the
   next opening draws at once.
+- **The graph's physics stops, and every force has a slider.** Moving a force
+  slider switched the physics on for good, "keep moving" or not, and nothing
+  had a stopping speed: the nodes glided for ever and drifted off. A slider
+  now moves the sky to its new balance and stops it (on `stabilized`, or 5 s
+  after the last move: on ~1700 nodes a few never fall under the stopping
+  speed). New sliders: friction, the border (central gravity, stronger by
+  default), how close a hub keeps what links to it (hubs are also heavier,
+  so clusters stay apart), link width and link brightness, to read the
+  links on the whole map.
+- **The KB no longer shakes.** Its 100 nodes hold ~1300 similarity links:
+  as springs they could never all be at rest, and the nodes fought. All
+  are drawn; each node's two strongest pull.
 - **The control center keeps its settings across restarts.** It took a random
   port, so its page had a new origin and an empty localStorage every time:
   physics and positions were lost. It now uses port 9877 (`GM_GUI_PORT`), any
