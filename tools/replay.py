@@ -90,6 +90,12 @@ def copy_graphs(dst: Path, src: "Path | None" = None) -> None:
         finally:
             out.close()
             ro.close()
+    # The recall vectors too: a cache keyed by text and stamped with its model
+    # (a wrong model is ignored). Without it each side re-embedded ~3200 texts
+    # with mpnet, ~8 min a side, and the gate's 900 s timeout fired (2026-11-27).
+    vecs = src / "_recall_vectors.bin"
+    if vecs.is_file():
+        shutil.copyfile(vecs, dst / vecs.name)
     # Not the live pointer: another session can switch it between the two copies
     # of one replay, and the sides then compare different graphs (2026-11-26).
     for name in ("graymatter", "backend"):
@@ -178,8 +184,15 @@ def main(argv=None) -> int:
         subprocess.run(["git", "worktree", "add", "--detach", "-q", str(ref_tree), a.ref], cwd=REPO, check=True)
     try:
         sides = {}
+        # Both copies first, from one snapshot: copied one after the other, a fact
+        # stored live while the first side ran (~6 min) was in the second copy
+        # only, and 25 of 300 recalls "changed" with no code change (2026-11-27).
+        copy_graphs(tmp / "before" / "graphs")
+        if a.data_after:
+            copy_graphs(tmp / "after" / "graphs", Path(a.data_after))
+        else:
+            shutil.copytree(tmp / "before" / "graphs", tmp / "after" / "graphs")
         for side, code in (("before", REPO if a.data_after else ref_tree), ("after", REPO)):
-            copy_graphs(tmp / side / "graphs", Path(a.data_after) if a.data_after and side == "after" else None)
             out = tmp / f"{side}.json"
             p = subprocess.run([sys.executable, "-X", "utf8", __file__, "--worker", str(code),
                                 str(tmp / side / "graphs"), str(tmp / "messages.json"), str(out)],

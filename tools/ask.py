@@ -51,7 +51,11 @@ def main(argv=None) -> int:
     (home / "xdg" / "opencode").mkdir(parents=True)
     (home / "xdg" / "opencode" / "opencode.json").write_text(json.dumps(CONFIG), encoding="utf-8")
     (home / "cwd").mkdir()
-    env = {**os.environ, "XDG_CONFIG_HOME": str(home / "xdg")}
+    # OpenCode 2.3.2 also reads ~/.claude/CLAUDE.md, its skills and the project
+    # config unless told not to: an isolated run quoted the user's rules (2026-11-23).
+    env = {**os.environ, "XDG_CONFIG_HOME": str(home / "xdg"),
+           "OPENCODE_DISABLE_CLAUDE_CODE": "1", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT": "1",
+           "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "OPENCODE_DISABLE_PROJECT_CONFIG": "1"}
     failed = 0
     try:
         for p in map(Path, a.prompts):
