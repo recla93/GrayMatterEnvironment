@@ -1,6 +1,16 @@
 # Changelog — Gray Matter
 
 ## 1.11.0 (2026-11-27)
+- **The installers offer mpnet first, MiniLM-L12 second, and keep a memory's
+  model.** A reinstall used to save the menu's first entry; with mpnet first it
+  would have re-spaced every MiniLM memory, so the model already saved (or the
+  one a graph was built with) stays unless `-EmbedModel` says otherwise.
+- **The gateway asks the client which folder it works in (MCP roots)** before
+  using its own: a Claude Desktop session's gateway did not start in the
+  project, and the model's facts went to the inbox.
+- **A session in a folder of no project works in Neuron's inbox** once
+  `projects.json` exists (`no_project` renames it): it never writes in a
+  project's graph. Without `projects.json`, the shared context as before.
 - **Each session works in its project's memory.** `gray_matter/projects.py`
   finds the project of the session's folder by identity, not path: a
   `.neuron-project` file (first line = context), a known path, or the git origin

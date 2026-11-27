@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 
 MARKER = ".neuron-project"
+NO_PROJECT = "inbox"     # a session of no project writes here, never in a project's graph
 _REMOTE = re.compile(r'\[remote "origin"\][^\[]*?url\s*=\s*(\S+)', re.S)
 
 
@@ -87,3 +88,19 @@ def resolve(cwd: str, file: "Path | None" = None) -> str:
                 m = None
             return str(remotes.get(_key(m.group(1)), "")) if m else ""
     return ""
+
+
+def session_context(cwd: str, file: "Path | None" = None) -> str:
+    """The context a session at `cwd` works in: its project's, else the inbox.
+
+    Only once projects.json exists (the user opted in): without it "" and the
+    shared context, as before. The inbox is where a session of no project writes
+    (`no_project` in projects.json renames it): 83% of the OpenCode history came
+    from C:\\Windows\\System32, and with the old shared context all of it landed
+    in whatever project was active."""
+    if file is None:
+        from gray_matter.paths import gm_home
+        file = gm_home() / "projects.json"
+    if not file.is_file():
+        return ""
+    return resolve(cwd, file) or str(_load(file).get("no_project", NO_PROJECT) or "").lower().strip("/")

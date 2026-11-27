@@ -519,6 +519,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             # a question whose fact pre_turn put first).
             n_args = {"topic": topic, "max_tokens": MEMORY_MAX_TOKENS,
                       "exclude": sorted(_flashed)}
+            await _resolve_session_ctx()
             tasks.append(_call_server_async("neuron", "pre_turn", _session_scoped("pre_turn", n_args)))
             labels.append("neuron")
 
@@ -646,6 +647,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _PROFILE_SENT = True
 
     if server.name == "neuron":
+        await _resolve_session_ctx()
         arguments = _session_scoped(name, arguments)
 
     if server.name == "neuron" and name == "store_turn":
@@ -1331,10 +1333,11 @@ def _trim_for_hook(ctx: str) -> str:
 
 
 def _project_scope(cwd: str) -> str:
-    """The Neuron context of the project at `cwd` ("" = none: keep the shared one)."""
+    """The Neuron context of a session at `cwd`: its project's, the inbox when it
+    has none, "" without projects.json (keep the shared one)."""
     try:
-        from gray_matter.projects import resolve
-        return resolve(cwd)
+        from gray_matter.projects import session_context
+        return session_context(cwd)
     except Exception:  # noqa: BLE001 — a bad projects.json must never break a recall
         return ""
 
@@ -1343,6 +1346,36 @@ def _project_scope(cwd: str) -> str:
 # the project of the folder the client started it in ("" = none). A gateway
 # lives as long as its client's session, so this is per session.
 _SESSION_CTX: "list[str | None]" = [None]
+
+
+def _root_path(uri: str) -> str:
+    """`file:///D:/Desktop/GM` -> `D:/Desktop/GM` ("" for another scheme)."""
+    from urllib.parse import unquote, urlparse
+    u = urlparse(uri)
+    if u.scheme != "file":
+        return ""
+    path = unquote(u.path)
+    return path[1:] if len(path) > 2 and path[0] == "/" and path[2] == ":" else path
+
+
+async def _resolve_session_ctx() -> None:
+    """This gateway's session context, once: from the folder the CLIENT says it
+    works in (MCP roots), else this process's own folder. Live 2026-11-27 the
+    gateway of a Claude Desktop session did not start in the project folder, and
+    the model's facts went to the inbox while the hook (which gets the message's
+    cwd) recalled the project."""
+    if _SESSION_CTX[0] is not None:
+        return
+    folder = os.getcwd()
+    try:
+        sess = app.request_context.session
+        caps = sess.client_params.capabilities if sess.client_params else None
+        if caps is not None and getattr(caps, "roots", None) is not None:
+            res = await asyncio.wait_for(sess.list_roots(), timeout=3)
+            folder = next((p for r in res.roots if (p := _root_path(str(r.uri)))), folder)
+    except Exception:  # noqa: BLE001 — no roots: the process folder, as before
+        pass
+    _SESSION_CTX[0] = _project_scope(folder)
 
 
 def _session_scoped(name: str, arguments: dict) -> dict:

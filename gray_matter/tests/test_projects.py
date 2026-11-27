@@ -92,7 +92,37 @@ def test_gateway_without_project_keeps_the_shared_pointer(monkeypatch):
 
 def test_memhook_scope_from_payload_cwd(monkeypatch):
     from gray_matter import memhook as M
-    monkeypatch.setattr(P, "resolve", lambda cwd, file=None: "backend" if cwd == "D:/gm" else "")
+    monkeypatch.setattr(P, "session_context", lambda cwd, file=None: "backend" if cwd == "D:/gm" else "")
     assert M._scope({"cwd": "D:/gm"}) == {"_scope": "backend"}
     assert M._scope({"cwd": "C:/Windows/System32"}) == {}
     assert M._scope({}) == {}
+
+
+def test_no_project_means_the_inbox_once_projects_json_exists(tmp_path):
+    conf = _conf(tmp_path, remotes={"github.com/recla93/graymatterenvironment": "graymatter"})
+    repo = _repo(tmp_path / "gm")
+    assert P.session_context(str(repo), conf) == "graymatter"
+    assert P.session_context(str(tmp_path / "gm" / ".."), conf) == "inbox"
+    assert P.session_context("", conf) == "inbox"
+    conf.write_text(json.dumps({"remotes": {}, "no_project": "Generale"}), encoding="utf-8")
+    assert P.session_context(str(tmp_path), conf) == "generale"
+    assert P.session_context(str(repo), tmp_path / "missing.json") == ""      # not opted in: as before
+
+
+def test_gateway_takes_the_project_from_the_client_roots(monkeypatch):
+    import asyncio
+    import types
+    from gray_matter import server as S
+    monkeypatch.setattr(S, "_SESSION_CTX", [None])
+    seen = {}
+    monkeypatch.setattr(S, "_project_scope", lambda folder: seen.setdefault("folder", folder) and "graymatter")
+
+    class Sess:
+        client_params = types.SimpleNamespace(capabilities=types.SimpleNamespace(roots=object()))
+
+        async def list_roots(self):
+            return types.SimpleNamespace(roots=[types.SimpleNamespace(uri="file:///D:/Desktop/Gray%20Matter")])
+    monkeypatch.setattr(S, "app", types.SimpleNamespace(request_context=types.SimpleNamespace(session=Sess())))
+    asyncio.run(S._resolve_session_ctx())
+    assert seen["folder"] == "D:/Desktop/Gray Matter" and S._SESSION_CTX == ["graymatter"]
+    assert S._root_path("file:///home/u/proj") == "/home/u/proj" and S._root_path("https://x") == ""

@@ -343,7 +343,7 @@ def test_the_first_message_has_room_for_the_profile_too(srv, monkeypatch):
     later = asyncio.run(srv._hook_recall("second message long enough", "s1", profile=False))
     assert mh.BUDGET < len(first) <= mh.BUDGET + mh.PROFILE_BUDGET, len(first)
     assert len(later) <= mh.BUDGET, len(later)
-    assert len(mh.fit("x" * 3000, mh.BUDGET + mh.PROFILE_BUDGET)) == mh.BUDGET + mh.PROFILE_BUDGET
+    assert len(mh.fit("x" * 9000, mh.BUDGET + mh.PROFILE_BUDGET)) == mh.BUDGET + mh.PROFILE_BUDGET
 
 
 def test_only_the_gm_neurag_ipc_marks_a_call_as_the_users(monkeypatch):

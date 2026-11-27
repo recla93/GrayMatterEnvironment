@@ -22,7 +22,7 @@ from pathlib import Path
 
 TIMEOUT = 2.5            # seconds for the IPC request
 BUDGET = 1200            # injected characters, ~300 tokens
-PROFILE_BUDGET = 1000    # on top, once per session: user/habit facts (= Neuron's cap)
+PROFILE_BUDGET = 2600    # on top, once per session: user/habit facts (Neuron's cap, 2400) + the contexts line
 MIN_CHARS = 12
 ACKS = {"ok", "si", "sì", "no", "grazie", "va bene", "perfetto", "fallo", "vai", "procedi"}
 
@@ -130,8 +130,8 @@ def _scope(payload: dict) -> dict:
     """The session's project context (projects.resolve on the hook's cwd), so a
     lookup or a confirm lands in the graph the session works in."""
     try:
-        from gray_matter.projects import resolve
-        ctx = resolve(str(payload.get("cwd") or ""))
+        from gray_matter.projects import session_context
+        ctx = session_context(str(payload.get("cwd") or ""))
     except Exception:  # noqa: BLE001 — best-effort, like every hook call
         ctx = ""
     return {"_scope": ctx} if ctx else {}
