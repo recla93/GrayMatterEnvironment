@@ -12,6 +12,11 @@
     hook saw, which may be another session's. The model is told to pass
     `store_turn(context=<the ctx= of its recall header>)`, and every save
     answers `saved in '<context>'`.
+- **A fact cited in another fact's text is not "already shown".** The hook
+  marked every `#id` of a recall as shown for the session, the ones a fact's
+  text only cites included: a handoff citing the inbox definition hid it for
+  the whole session, never shown. Only the id that closes a shown fact counts
+  now (the flash's duplicate check too).
 - **The model passes its project when it saves.** Instructions, the
   `store_turn` schema and the playbook say: `context=` the `ctx=` of the
   latest recall header. An explicit context already wins over the turn's

@@ -484,3 +484,16 @@ def test_a_flash_already_in_the_recall_is_dropped(srv, monkeypatch):
     out = asyncio.run(srv._hook_recall("parliamo ancora del flash di GM", "s-dup"))
     assert "#0a1b2c3d" in out and "⚡ Flash" not in out
     assert srv._unless_shown("⚡ Flash: [idea] x (c) #11112222", "facts: #0a1b2c3d") != ""
+
+
+def test_only_the_ids_that_close_a_fact_count_as_shown():
+    """An id CITED in a fact's text is not a shown fact: on 2026-11-28 a handoff
+    citing the inbox definition hid it for the whole session, never shown."""
+    import gray_matter.server as S
+    seen: set = set()
+    S._note_facts("facts: [fact] a (inbox) #11111111 (27/11) | [progress] handoff cites "
+                  "fact #22222222, IDEAS (handoff) #33333333\n"
+                  "pending: do X #44444444 (27/11) | do Y #55555555\n"
+                  "profile: [habit] h + #66666666 | [procedure] steps (gate) #88888888 "
+                  "· 1) fix [proven #99999999]\n</recalled-memory>", seen)
+    assert seen == {"11111111", "33333333", "44444444", "55555555", "66666666", "88888888", "99999999"}

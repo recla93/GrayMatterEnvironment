@@ -1234,10 +1234,19 @@ def _saved_since(session: str) -> str:
 _FACT_ID = re.compile(r"#([0-9a-f]{8})\b")
 
 
+# The id that closes a shown fact: "(concept) #id", then a date "(28/11)", a
+# "|", a line end, a linked note "↳", a procedure's solutions "·" or "]". An id
+# CITED inside a fact's text ("the definition #37c307bc, then...") is followed
+# by anything else, and was marked shown too: on 2026-11-28 a handoff citing
+# the inbox definition hid it for the whole session, never shown.
+_SHOWN_ID = re.compile(r"#([0-9a-f]{8})(?=(?: \(\d{1,2}/\d{1,2}\))?(?:\s*(?:\||$|↳|·|\]|<)))", re.M)
+
+
 def _note_facts(text: str, seen: set) -> None:
     """ADR-015 D7: remember the fact ids a pre_turn showed, so neither the next
-    pre_turn nor a flash brings them back in the same session."""
-    seen.update(_FACT_ID.findall(text or ""))
+    pre_turn nor a flash brings them back in the same session. Only the ids
+    that close a shown fact, not the ones its text cites."""
+    seen.update(_SHOWN_ID.findall(text or ""))
 _PROFILE_SENT = False            # this gateway process already served the user/habit facts
 
 
@@ -1498,7 +1507,7 @@ def _unless_shown(flash: str, shown: str) -> str:
     Both run in parallel, so the flash cannot exclude what the recall picks: on
     a live probe (2026-11-27) the flash repeated a fact of the same message."""
     m = _FACT_ID.findall(flash or "")
-    return "" if m and m[-1] in set(_FACT_ID.findall(shown or "")) else flash
+    return "" if m and m[-1] in set(_SHOWN_ID.findall(shown or "")) else flash
 
 
 async def _maybe_flash(topic: str, flashed: "set | None" = None, scope: str = ""):
