@@ -985,8 +985,8 @@ if ($NeuronDir) {
 # the choice. Same list and same persistence (neuron.config.set_user_env) as
 # neuron/install.ps1 — keep the two in sync.
 $EmbedModels = @(
-    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual (EN+IT) - default, best recall (2x storage per vector)" },
-    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - light, for a weak PC" }
+    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual (EN+IT) - default, best recall (2x storage per vector); suite ~2.5 GB RAM (8 GB PC minimum)" },
+    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - light, for a weak PC; suite ~1.5 GB RAM" }
 )
 function Select-GmEmbedModel {
     if ($EmbedModel) {

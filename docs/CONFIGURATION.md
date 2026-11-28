@@ -11,7 +11,7 @@
 |---|---|---|---|
 | `NS_GRAPHS_DIR` | per-user (see Data paths) | `config.py:63` | Override graph store location |
 | `NEURON_SLUG` | `"neuron"` | `config.py` | Sub-directory name of the graph store under the suite folder (old installs used `neuron5`; they are moved on start) |
-| `NS_EMBED_MODEL` | `"sentence-transformers/paraphrase-multilingual-mpnet-base-v2"` | `models.py` | Embedding model name (768-dim; MiniLM-L12 is the light choice, 384). The dimension follows the model. Changing requires a full re-embed (`scripts/reembed.py`); an install keeps the model its memory was built with |
+| `NS_EMBED_MODEL` | `"sentence-transformers/paraphrase-multilingual-mpnet-base-v2"` | `models.py` | Embedding model name (768-dim; MiniLM-L12 is the light choice, 384). The dimension follows the model. RAM of the Neuron worker: about 1.7 GB with mpnet (2 GB at start), 0.65 GB with MiniLM. Changing requires a full re-embed (`scripts/reembed.py`); an install keeps the model its memory was built with |
 | `NS_EMBED_DIM` | `"384"` | `models.py:76` | Embedding vector dimension. Must match `NS_EMBED_MODEL` |
 | `NS_CONSOLIDATE_AUTO` | `""` (off) | `server.py:327` | Enable auto-consolidation every N turns (`"1"`, `"true"`, `"yes"`, `"on"` to enable) |
 | `NEURON_CONSOLIDATE_EVERY` | `20` | `server.py:328` | Turns between auto-consolidation runs |

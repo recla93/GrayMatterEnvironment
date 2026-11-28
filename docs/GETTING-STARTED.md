@@ -7,6 +7,8 @@
 
 - Python 3.10 or later (the installer can install it for you)
 - An MCP client: Claude Desktop, Claude Code, Cursor, VS Code, OpenCode, …
+- RAM: about 2.5 GB for the suite with the default model, so 8 GB minimum and
+  16 GB comfortable; on a weak laptop choose MiniLM at install (about 1.5 GB)
 
 ## Step 1: install
 

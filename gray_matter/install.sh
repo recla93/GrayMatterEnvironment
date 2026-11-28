@@ -494,8 +494,8 @@ echo "Installing the gateway (register + hooks + manifest)..."
 # without ever running Neuron's own installer, so these users were never given
 # the choice. Keep in sync with $EmbedModels in install.ps1 and with
 # neuron/install.sh.
-GM_EM_1="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual (EN+IT) - default, best recall"
-GM_EM_2="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - light, for a weak PC"
+GM_EM_1="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual (EN+IT) - default, best recall; suite ~2.5 GB RAM (8 GB PC minimum)"
+GM_EM_2="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - light, for a weak PC; suite ~1.5 GB RAM"
 GM_MODEL=""; GM_DIM=""; GM_SIZE=""
 _gm_set() { GM_MODEL="${1%%|*}"; _r="${1#*|}"; GM_DIM="${_r%%|*}"; _r="${_r#*|}"; GM_SIZE="${_r%%|*}"; }
 gm_select_embed_model() {

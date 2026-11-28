@@ -11,6 +11,11 @@
   Windows (winget), macOS (Homebrew), Debian/Ubuntu (apt) and Fedora (dnf) with
   your consent.
 - An MCP client: Claude Desktop, Cursor, VS Code, OpenCode, Gemini CLI, Windsurf.
+- **RAM:** the suite keeps its embedding models loaded. With Neuron's default
+  model (mpnet) it uses about **2.5 GB** (2.8 GB while it starts): **8 GB** is
+  the minimum, **16 GB** comfortable. On a weak laptop pick MiniLM at install:
+  about **1.5 GB**. Measured 2026-11-28 on Windows 11 (Neuron worker 1.66 GB
+  with mpnet, 0.64 GB with MiniLM; NeuRAG 0.70 GB; daemon and gateways 0.15 GB).
 - No compiler needed: `pyturso` installs from prebuilt wheels vendored in
   `neuron/vendor/` (`--find-links`), so nothing builds from source.
 
