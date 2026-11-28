@@ -151,7 +151,7 @@ Open the **Gray Matter** shortcut on the desktop, or run `gray-matter gui`.
 | Section | What you do there |
 |---|---|
 | Panoramica | state of the three tools, memory and knowledge counts |
-| Grafi | the memory and the knowledge as an interactive graph; drag between them to create a bridge |
+| Grafi | the memory of every project and the knowledge as one interactive map: each Neuron context in its own colour (the legend switches them on and off; a click on a name shows that context alone), the most-linked concepts of each one outlined and labelled as **Core Concepts**, the open pendings as diamonds. The ⚙ panel tunes the physics (repulsion, border, friction, how close a Core Concept keeps what links to it) and the look (link width and brightness, label size, node size). Drag between the two sides to create a bridge |
 | Comandi operativi | everyday commands, one block per tool |
 | Manutenzione grafo | clean, archive, back up |
 | Manutenzione tool | install, repair, diagnose |

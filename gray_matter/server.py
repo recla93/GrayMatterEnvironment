@@ -668,6 +668,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     flash = ""
     if is_pre and PROACTIVE_BUDGET > 0:
         flash, _c = await _maybe_flash(str(arguments.get("topic", "")), scope=str(arguments.get("_scope") or ""))
+        flash = _unless_shown(flash, result or "")
         flash = f"\n\n{flash}" if flash else ""
     return [TextContent(type="text", text=(result or "(empty)") + kb + flash)]
 
@@ -1466,6 +1467,7 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
     from gray_matter.memhook import BUDGET, PROFILE_BUDGET
     _note_facts(ctx, flashed)
     ctx = _trim_for_hook(ctx or "")
+    flash = _unless_shown(flash, ctx)
     # Episodes -> knowledge: bridges matching the message, or the facts just
     # shown (a promoted fact has its `#id <-> node` bridge). Nothing when none.
     links = ""
@@ -1488,6 +1490,14 @@ async def _hook_recall(prompt: str, session: str, profile: "bool | None" = None,
 # user/habit are never accepted here, whatever Neuron sends: they are personal.
 _FLASH_LINE = re.compile(r"\[(?P<kind>idea|decision|fix|fact)\] .* \((?P<concept>[^()]*)\) "
                          r"#(?P<id>[0-9a-f]{8})\s*$", re.M)
+
+
+def _unless_shown(flash: str, shown: str) -> str:
+    """The flash, or "" when its fact is already in the recall it travels with.
+    Both run in parallel, so the flash cannot exclude what the recall picks: on
+    a live probe (2026-11-27) the flash repeated a fact of the same message."""
+    m = _FACT_ID.findall(flash or "")
+    return "" if m and m[-1] in set(_FACT_ID.findall(shown or "")) else flash
 
 
 async def _maybe_flash(topic: str, flashed: "set | None" = None, scope: str = ""):

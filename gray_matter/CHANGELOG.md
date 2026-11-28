@@ -6,6 +6,10 @@
   so a session of any project got `graymatter`'s dormant facts. All three
   flash paths (memory hook, gateway `pre_turn`, `pulse`) now pass the
   session's project.
+- **A flash never repeats a fact of the recall it travels with.** Recall and
+  flash run in parallel, so the flash cannot exclude what the recall picks;
+  on a live probe it repeated a fact of the same message. It is dropped when
+  its fact is already shown.
 - **The Graphs panel shows every Neuron context, and stays fluid.** It read
   the active context only (1030 of 1591 concepts). Now each context is a
   cluster of its own colour, with a legend to switch contexts on and off

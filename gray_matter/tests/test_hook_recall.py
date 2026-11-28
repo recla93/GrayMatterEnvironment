@@ -469,3 +469,18 @@ def test_the_flash_looks_in_the_sessions_project(srv, monkeypatch):
     asyncio.run(srv._hook_recall("parliamo del runner di mocoder", "s1", cwd="D:/mocoder"))
     assert seen["pre_turn"]["_scope"] == "mocoder"
     assert seen["forgotten"]["_scope"] == "mocoder"
+
+
+def test_a_flash_already_in_the_recall_is_dropped(srv, monkeypatch):
+    """Recall and flash run in parallel: the flash cannot exclude what the
+    recall picks, and on a live probe it repeated a fact of the same message."""
+    real = srv._call_server_async
+
+    async def recall_with_the_flash_fact(server, tool, args):
+        if tool == "pre_turn":
+            return "[neuron] CTX facts: [idea] eventi in stile aspect (around) #0a1b2c3d"
+        return await real(server, tool, args)
+    monkeypatch.setattr(srv, "_call_server_async", recall_with_the_flash_fact)
+    out = asyncio.run(srv._hook_recall("parliamo ancora del flash di GM", "s-dup"))
+    assert "#0a1b2c3d" in out and "⚡ Flash" not in out
+    assert srv._unless_shown("⚡ Flash: [idea] x (c) #11112222", "facts: #0a1b2c3d") != ""

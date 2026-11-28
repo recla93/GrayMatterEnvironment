@@ -19,6 +19,8 @@
 | `NEURON_AUTO_SWITCH` | off | `server.py` | `1` brings back the automatic context switch on a guessed domain (never inside a project session) |
 | `NEURON_INBOX_CONTEXT` | `"inbox"` | `server.py` | Where a session of no project writes; it reads every graph |
 | `NEURON_USER_CONTEXT` | `"user"` | `server.py` | Graph of the habits and facts about the user, read from every context |
+| `NEURON_CROSS_FACT_SIM` | `0.60` | `server.py` | A project's recall adds the closest fact of another project when its cosine alone reaches this; `0` turns it off |
+| `NEURON_OUTDATED_AFTER` | `3` | `server.py` | A `progress` fact with this many newer progress facts on one of its concepts is labelled outdated and goes after the current facts; `0` turns it off |
 | `NEURON_TOPIC_SHIFT_THRESHOLD` | `0.3` | `server.py:135` | Cosine distance threshold for topic-shift detection |
 | `NEURON_TANGENTIAL_EXPIRY_TURNS` | `5` | `models.py:45` | Inactive turns before tangential links are pruned |
 | `NEURON_SALIENCE_DECAY_THRESHOLD` | `5` | `models.py:47` | Inactive turns before salience starts decaying |
@@ -46,6 +48,7 @@
 | `GM_INSTANCE` | (unset) | `ipcauth.py` | Windows: names a second daemon of the same user (its own IPC pipe). Set by `tools/isolated.py`; leave unset otherwise |
 | `GM_PREWARM` | `"1"` if `prewarm` is True | `server.py` | Disable worker pre-warming at startup (`"0"` to skip) |
 | `GM_NEURON_CLIENTS` | (auto-detected) | `executor.py` | Override path to Neuron client assets directory |
+| `GM_GUI_PORT` | `9877` | `webgui.py` | Port of the control center's local page. Fixed, so its settings (physics, graph positions) survive a restart; a second window takes any free port |
 | `GM_GUI_BROWSER` | (unset) | `webgui.py` | If set, open the control center in the system browser instead of its own window |
 | `GM_GUI_NOBROWSER` | (unset) | `webgui.py` | In browser mode, do not open the browser (print the URL only) |
 | `GM_GUI_DEBUG` | (unset) | `webgui.py` | Open the window with developer tools |

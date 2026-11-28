@@ -84,6 +84,22 @@ when you replace it. A fact counts as used when a later fact cites it by `#id`, 
 when the reply reused its distinctive words: Gray Matter's Stop hook reads the turn
 and reports it, no `confirm` call needed. Sharing a concept is not use.
 
+What a recall holds, in a project session:
+
+- the facts of the project's own graph, and the user's facts (habits, who the
+  user is) from the shared `user` graph;
+- at the session start, the open **pendings** of the project first;
+- at most **one fact of another project**, when its cosine alone is at least 0.60
+  (`NEURON_CROSS_FACT_SIM`), at the place of its score and labelled with its
+  project: `(arbor: reward)`. Below that, only a pointer: `other contexts: [arbor] risk (0.57)`;
+- a `progress` fact followed by 3 newer progress facts on one of its concepts is
+  labelled `[progress · outdated]` and goes after the current facts
+  (`NEURON_OUTDATED_AFTER`): the state it describes has moved on. It is never
+  removed.
+
+A session of no project works in the **inbox**, which reads every graph, each fact
+labelled with its context.
+
 ### store_turn
 
 | Parameter | Type | Required | Default | Description |
@@ -101,7 +117,7 @@ and reports it, no `confirm` call needed. Sharing a concept is not use.
 | Field | Required | Description |
 |---|---|---|
 | `text` | yes | One sentence with its why, ideally under 400 characters |
-| `kind` | no (default `fact`) | `progress`, `decision`, `fix`, `fact`, `idea`, `user` (who the user is, what they want), `habit` (how they work), `procedure` (steps of a task, in order, proven by an outcome; recalled by task, never in the profile) |
+| `kind` | no (default `fact`) | `progress`, `decision`, `fix`, `fact`, `idea`, `user` (who the user is, what they want), `habit` (how they work), `procedure` (steps of a task, in order, proven by an outcome; recalled by task, never in the profile), `pending` (something left to do: kept in the `pending` graph with its project, shown first at the project's session start, closed by a later fact that `supersedes` it) |
 | `concepts` | no (default: the turn's) | 1-5 concept **nouns** that index the fact — never verbs or filler |
 | `supersedes` | no | Id of the older fact this one replaces |
 | `evidence` | for `procedure` | The outcome that proved the steps (gate passed, smoke passed, user correction, commit). Kept in the fact's text; without it a procedure is stored as `fact` |
@@ -166,6 +182,7 @@ to the active one).
 | `vector_search` | `keywords`*, `top_n` (8) | Semantic search over the concept embeddings |
 | `forgotten` | `threshold` (5), `top_n` (10), `near`, `facts`, `exclude` | Concepts not touched for N turns; with `near` ranked by similarity; with `facts=true` dormant facts (what a flash shows) |
 | `dismiss` | `keywords`*, `penalty` (3), `trust_penalty` (0.5) | The recalled context was misleading: lower salience and trust |
+| `retire` | `facts`, `concepts`, `restore` (false) | Take facts out of the memory with no replacement (junk, a test residue, a state no longer true), in whatever context they live; `restore` brings them back. `concepts`: nodes with no active fact go to the graveyard with their links dropped (`recall` brings one back). Nothing is deleted. From the CLI: `gray-matter gm-neuron retire '{"facts": ["#id"]}'` |
 | `recall` | `keyword`*, `base_salience` (3) | Bring an archived (graveyard) concept back |
 | `summary` | — | Top keywords, recent links, health |
 | `introspect` | — | Self-model: strongest concepts, growth, weakest domain, loop compliance (JSON) |
