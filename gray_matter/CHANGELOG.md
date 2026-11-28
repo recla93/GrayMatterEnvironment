@@ -12,6 +12,20 @@
     hook saw, which may be another session's. The model is told to pass
     `store_turn(context=<the ctx= of its recall header>)`, and every save
     answers `saved in '<context>'`.
+- **The workers find the embedding model when the client strips the
+  environment.** Claude Desktop starts MCP servers with a reduced environment,
+  without the user's `FASTEMBED_CACHE_PATH`; a daemon it started looked for
+  mpnet in `%TEMP%\fastembed_cache`, re-downloaded 1.1 GB on every call, was
+  killed at the 60 s timeout and left a partial file each time: every recall
+  and save timed out, and the gateway missed the client's 30 s connect window.
+  The worker now sets the cache when the variable is unset: the installers'
+  `%LOCALAPPDATA%\gray-matter\fastembed_cache` if it exists, else a folder of
+  the suite.
+- **The handshake does not wait for the model.** The daemon asks the
+  sub-servers for their tool lists before it pre-warms the model, and keeps
+  them; a gateway's handshake used to queue behind the warm-up (up to 44 s on
+  a cold cache). A `list_tools` that times out now drops its worker, whose
+  pipe reader would otherwise take the next call's answer.
 - **A fact cited in another fact's text is not "already shown".** The hook
   marked every `#id` of a recall as shown for the session, the ones a fact's
   text only cites included: a handoff citing the inbox definition hid it for
