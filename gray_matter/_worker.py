@@ -48,6 +48,21 @@ class _UnlistedToolNotice:
         return not str(record.msg).startswith("Tool '%s' not listed")
 
 
+def model_cache() -> str:
+    """Where fastembed keeps the embedding models when FASTEMBED_CACHE_PATH is unset.
+
+    Its own default is %TEMP%\\fastembed_cache. A daemon started by Claude Desktop
+    did not inherit the user's variable, so on 2026-11-28 every Neuron worker
+    re-downloaded mpnet (1.1 GB) there, was killed at the 60 s call timeout and
+    left one more partial file (46 of them): every pre_turn timed out. An existing
+    %LOCALAPPDATA%\\gray-matter\\fastembed_cache (the installers' download) wins;
+    else a folder of the suite, which Windows does not clean like TEMP."""
+    from gray_matter.paths import _user_base
+    legacy = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
+                          "gray-matter", "fastembed_cache")
+    return legacy if os.path.isdir(legacy) else str(_user_base() / "fastembed_cache")
+
+
 def main() -> None:
     import logging
     logging.getLogger("mcp.server.lowlevel.server").addFilter(_UnlistedToolNotice())
@@ -59,6 +74,7 @@ def main() -> None:
         _pids.record_self(f"worker:{sys.argv[1].split('.')[0]}")
     except Exception:  # noqa: BLE001 — il registro non deve mai bloccare il worker
         pass
+    os.environ.setdefault("FASTEMBED_CACHE_PATH", model_cache())
     mod = importlib.import_module(sys.argv[1])   # e.g. "neuron.server"
     app = mod.app
     reg = getattr(mod, "_g", None)               # graph registry (Neuron); NeuRAG has none
