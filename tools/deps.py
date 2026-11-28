@@ -24,7 +24,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SKIP_DIRS = {".git", "build", "dist", "__pycache__", ".venv", "node_modules", "vendor",
-             ".pytest_cache", "graphify-out"}
+             ".pytest_cache", "graphify-out",
+             ".claude"}   # holds no tracked file; its worktrees are whole older copies of the repo
 TEXT = {".py", ".mjs", ".js", ".ts", ".ps1", ".cmd", ".sh", ".json", ".toml", ".md", ".html", ".txt"}
 # History and decision records may name what was removed: that is their job.
 HISTORY = re.compile(r"(^|/)(work/|docs/design/|EVOLUTION|CHANGELOG|HANDOFF|DESIGN-EVOLUTION)", re.I)
