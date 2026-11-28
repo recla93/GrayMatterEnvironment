@@ -680,6 +680,7 @@ _workers: dict = {}          # server_name -> Popen
 _worker_locks: dict = {}     # server_name -> asyncio.Lock (serialize the shared pipe)
 _worker_lat: dict = {}       # server_name -> {calls, ms_total, last_ms} (tempo NEL tool)
 _prewarmed: set = set()      # servers already warmed (D2), so we warm each once
+_schemas_cache: dict = {}    # server_name -> its tool schemas (_fetch_tool_schemas)
 _neurag_links_built: bool = False  # auto-build links once when links=0 and nodes>1
 
 # Cheap read fired to warm a worker: spawns the subprocess (pays the import) and
@@ -731,6 +732,7 @@ async def _prewarm_workers():
                 if tool is None:
                     _worker_for(s.name)                # unknown server: at least pay the import now
                 else:
+                    await _fetch_tool_schemas(s.name)  # first: a gateway's handshake must not wait the model
                     await _call_server_async(s.name, tool, args)
             except Exception:  # noqa: BLE001
                 _prewarmed.discard(s.name)             # let a later sweep (or lazy path) retry
@@ -953,7 +955,13 @@ async def _call_server_async(server_name: str, tool_name: str, arguments: dict,
 async def _fetch_tool_schemas(server_name: str) -> dict:
     """F12: ask a server's worker for its real tool list (name -> {description,
     inputSchema}) so GM can re-publish accurate pass-through schemas. Best-effort:
-    returns {} on any failure (caller falls back to an empty schema)."""
+    returns {} on any failure (caller falls back to an empty schema).
+
+    Cached per process: the list changes only with a reinstall, which restarts
+    the daemon. Without it a gateway's handshake queued behind the worker's
+    lock while the daemon pre-warmed the model (up to 44 s on a cold cache)."""
+    if server_name in _schemas_cache:
+        return _schemas_cache[server_name]
     shared = await _via_daemon({"action": "schemas", "server": server_name},
                                timeout=IPC_TOOL_TIMEOUT)
     if shared is not None:
@@ -971,6 +979,10 @@ async def _fetch_tool_schemas(server_name: str) -> dict:
         try:
             resp_line = await asyncio.wait_for(loop.run_in_executor(None, _io), timeout=60)
         except Exception:  # noqa: BLE001 — pipe/timeout: leave schemas unknown
+            # Drop the worker as _call_server_async does: the executor thread
+            # is still reading its pipe and would take the NEXT call's answer.
+            _reap_worker(p)
+            _workers.pop(server_name, None)
             return {}
     try:
         resp = json.loads(resp_line)
@@ -978,11 +990,14 @@ async def _fetch_tool_schemas(server_name: str) -> dict:
         return {}
     if not resp.get("ok"):
         return {}
-    return {
+    out = {
         t["name"]: {"description": t.get("description") or "",
                     "inputSchema": t.get("inputSchema") or {"type": "object", "properties": {}}}
         for t in resp.get("tools", []) if t.get("name")
     }
+    if out:
+        _schemas_cache[server_name] = out
+    return out
 
 
 async def _ensure_schemas(server) -> None:
