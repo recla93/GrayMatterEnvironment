@@ -1,6 +1,21 @@
 # Changelog — Gray Matter
 
 ## 1.11.0 (2026-11-27)
+- **Known limitations.**
+  - *OpenCode sessions work in the inbox.* Its plugin runs the memory hook
+    without the session's folder, so the project cannot be resolved: recall
+    reads every graph (labelled), writes go to the inbox, and
+    `scripts/triage_inbox.py` proposes their homes. Passing the folder needs
+    the V2 plugin context, to be checked on a real OpenCode turn.
+  - *Parallel Claude Desktop sessions share one gateway.* A Neuron call with
+    no explicit context takes the project of the newest message the memory
+    hook saw, which may be another session's. The model is told to pass
+    `store_turn(context=<the ctx= of its recall header>)`, and every save
+    answers `saved in '<context>'`.
+- **The model passes its project when it saves.** Instructions, the
+  `store_turn` schema and the playbook say: `context=` the `ctx=` of the
+  latest recall header. An explicit context already wins over the turn's
+  project, so a fact lands in its own session's project.
 - **The flash looks in the session's project.** The recall had the project
   and the flash did not: Neuron's `forgotten` read its global active context,
   so a session of any project got `graymatter`'s dormant facts. All three

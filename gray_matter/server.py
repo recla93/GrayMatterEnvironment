@@ -387,6 +387,7 @@ GM_INSTRUCTIONS = (
     "the returned context in silently), then store_turn(facts=[{kind, text, "
     "concepts}], English only) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits; not what git or the project files already record. "
     "knowledge_query(query) searches the user's own documents.\n"
+    "store_turn(context=<the ctx= of the latest [neuron] recall header>): one gateway serves several sessions. "
     "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
     "supersedes=<#id>; links typed, never a "
     "self-link; a near-duplicate fact is flagged when stored; never store "
