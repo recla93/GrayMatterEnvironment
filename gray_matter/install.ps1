@@ -1024,8 +1024,22 @@ print(set_user_env(NS_EMBED_MODEL=os.environ['GM_EMBED_NAME'], NS_EMBED_DIM=os.e
         Write-Host "  Large models take several minutes - this is NOT frozen."
         $prevBars = $env:HF_HUB_DISABLE_PROGRESS_BARS
         $env:HF_HUB_DISABLE_PROGRESS_BARS = "1"
-        & $Vpy -W "ignore" -c "from neuron.server import _get_embedder
+        # Into the folder the suite's workers read (gray_matter._worker.model_cache):
+        # fastembed's own default is %TEMP%, where a worker would not find it and
+        # would download again on its first call (2026-11-28). NeuRAG's model too,
+        # or its first call downloads it inside the 60 s call timeout.
+        & $Vpy -W "ignore" -c "import os
+from gray_matter._worker import model_cache
+os.environ.setdefault('FASTEMBED_CACHE_PATH', model_cache())
+from neuron.server import _get_embedder
 _get_embedder()
+try:
+    from neurag.embedder import get_embedder
+    get_embedder()
+except ImportError:
+    pass
+except Exception as e:
+    print('NeuRAG model not cached now, its first use downloads it:', type(e).__name__)
 print('EMBED_MODEL_READY')"
         $env:HF_HUB_DISABLE_PROGRESS_BARS = $prevBars
         if ($LASTEXITCODE -eq 0) { Write-Host "  [OK] $($Model.name) cached." }

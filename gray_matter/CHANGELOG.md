@@ -20,7 +20,9 @@
   and save timed out, and the gateway missed the client's 30 s connect window.
   The worker now sets the cache when the variable is unset: the installers'
   `%LOCALAPPDATA%\gray-matter\fastembed_cache` if it exists, else a folder of
-  the suite.
+  the suite. The installers download into that same folder, NeuRAG's model
+  included: fastembed's default is the temp folder, where a worker would not
+  have found them on a new PC.
 - **The handshake does not wait for the model.** The daemon asks the
   sub-servers for their tool lists before it pre-warms the model, and keeps
   them; a gateway's handshake used to queue behind the warm-up (up to 44 s on

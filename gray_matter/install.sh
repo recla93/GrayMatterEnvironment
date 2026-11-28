@@ -535,8 +535,21 @@ print(set_user_env(NS_EMBED_MODEL=os.environ['GM_EMBED_NAME'], NS_EMBED_DIM=os.e
     echo ""
     echo "  Downloading the embedding model ($GM_SIZE, one-time)."
     echo "  Large models take several minutes - this is NOT frozen."
-    if HF_HUB_DISABLE_PROGRESS_BARS=1 "$1" -W ignore -c "from neuron.server import _get_embedder
+    # Into the folder the suite's workers read (gray_matter._worker.model_cache),
+    # not fastembed's default under the temp dir; NeuRAG's model too (same fix
+    # in install.ps1, 2026-11-28).
+    if HF_HUB_DISABLE_PROGRESS_BARS=1 "$1" -W ignore -c "import os
+from gray_matter._worker import model_cache
+os.environ.setdefault('FASTEMBED_CACHE_PATH', model_cache())
+from neuron.server import _get_embedder
 _get_embedder()
+try:
+    from neurag.embedder import get_embedder
+    get_embedder()
+except ImportError:
+    pass
+except Exception as e:
+    print('NeuRAG model not cached now, its first use downloads it:', type(e).__name__)
 print('EMBED_MODEL_READY')" 2>&1 | sed 's/^/    /'; then
         echo "  [OK] $GM_MODEL cached."
     else
